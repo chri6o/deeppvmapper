@@ -240,6 +240,16 @@ echo "Das dauert auf Apple Silicon 30–90 Minuten (x86 wird emuliert). Ausgabe 
 echo "die VM schaltet sich am Ende selbst aus. Mac nicht in den Ruhezustand schicken (caffeinate läuft)."
 echo "Administratorpasswort des Macs wird für den Zugriff auf die SSD gebraucht."
 echo "Beenden im Notfall: Ctrl-A, dann X."
+sudo -v || die "sudo abgelehnt"
+# macOS mounts partitions again by itself; unmount right before the VM starts and check raw access
+diskutil unmountDisk force "/dev/$DISK" >/dev/null 2>&1 || true
+if ! sudo dd if="/dev/r$DISK" of=/dev/null bs=1m count=1 2>"$WORK/dd.err"; then
+  cat "$WORK/dd.err"
+  die "Kein Zugriff auf /dev/r$DISK. macOS blockiert den Rohzugriff auf externe Laufwerke:
+  Systemeinstellungen → Datenschutz & Sicherheit → Festplattenvollzugriff → Terminal (bzw. iTerm) einschalten,
+  Terminal komplett beenden (Cmd-Q), neu öffnen und das Skript erneut starten."
+fi
+diskutil unmountDisk force "/dev/$DISK" >/dev/null 2>&1 || true
 sudo caffeinate -i "$QEMU_BIN" \
   -machine q35 "${ACCEL[@]}" -smp "$NCPU" -m 6144 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
