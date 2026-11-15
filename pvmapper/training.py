@@ -62,6 +62,9 @@ def load_sample(job, cfg) -> list[dict]:
     d = cl.training(bins=p.get("bins") or None, per_stratum=int(p.get("per_stratum", 100)),
                     negatives=int(p.get("negatives", 100)), seed=str(p.get("seed", "1")), **flt)
     feats = d["features"]
+    got = collections.Counter(f["properties"]["label_kind"] for f in feats)
+    job.log(f"PV-Map lieferte {len(feats)} Gebäude für {flt}: "
+            + (", ".join(f"{k} {v}" for k, v in sorted(got.items())) or "keine"))
     if not p.get("use_weak_negatives", True):
         feats = [f for f in feats if f["properties"]["label_kind"] != "neg_weak"]
     if not p.get("use_medium_positives", True):
@@ -492,7 +495,11 @@ def run(job, cfg: dict):
         kinds = collections.Counter(f["properties"]["label_kind"] for f in feats)
         job.log(f"{len(feats)} Gebäude: " + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())))
         if not feats:
-            raise RuntimeError("Die Stichprobe ist leer – Filter prüfen.")
+            raise RuntimeError(
+                "Die Stichprobe ist leer. Ursachen: Region/Gebäudeart ohne Treffer in PV-Map, oder die Optionen "
+                "„nur sichere PV“, „Mindestgröße kWp“ und „schwache Negative“ haben alles herausgefiltert "
+                "(siehe Zeile „PV-Map lieferte …“ oben). Im Reiter Training zeigt „Verfügbare Beispiele anzeigen“, "
+                "was es für die gewählten Filter gibt.")
         job.log("Lade Luftbilder …")
         metas = build_dataset(job, cfg, feats, prof)
         ds_dir = os.path.join(job.dir, "dataset")
