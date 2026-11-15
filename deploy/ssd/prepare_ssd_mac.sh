@@ -207,7 +207,7 @@ autoinstall:
     # boot on another machine: firmware fallback path EFI/BOOT/BOOTX64.EFI (shim) in addition to the NVRAM entry
     - curtin in-target -- sh -c 'echo "grub-efi-amd64-signed grub2/force_efi_extra_removable boolean true" | debconf-set-selections; grub-install --target=x86_64-efi --efi-directory=/boot/efi --uefi-secure-boot --force-extra-removable --no-nvram || true'
     - sh -c 'E=/target/boot/efi/EFI; mkdir -p \$E/BOOT; [ -f \$E/BOOT/BOOTX64.EFI ] || { cp \$E/ubuntu/shimx64.efi \$E/BOOT/BOOTX64.EFI; cp \$E/ubuntu/grubx64.efi \$E/BOOT/; [ -f \$E/ubuntu/mmx64.efi ] && cp \$E/ubuntu/mmx64.efi \$E/BOOT/; }; ls -R \$E'
-    - curtin in-target -- sh -c 'sed -i "s/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=3/; s/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/" /etc/default/grub; update-grub'
+    - curtin in-target -- sh -c 'sed -i "s/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=3/; s/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/; s/^GRUB_CMDLINE_LINUX_DEFAULT=./&usbcore.autosuspend=-1 /" /etc/default/grub; update-grub'
   shutdown: poweroff
 EOF
 printf 'instance-id: pvmapper-ssd\nlocal-hostname: %s\n' "$PC_HOSTNAME" > "$SEED/meta-data"
