@@ -24,6 +24,26 @@ python -m pvmapper web            # → http://127.0.0.1:8765
 
 Das Skript installiert PyTorch für ROCm (die ROCm-Laufzeitbibliotheken sind in den PyTorch-Paketen enthalten) und die übrigen Pakete. Danach lädt es die Modellgewichte (~630 MB) von Hugging Face. Ob die GPU erkannt wurde, zeigt `python -m pvmapper device` und oben rechts die Oberfläche. Wird die RX 7600 XT nicht erkannt, hilft vor dem Start meist `export HSA_OVERRIDE_GFX_VERSION=11.0.0`. GDAL braucht PV-Mapper nicht.
 
+## Eigener PC als PV-Mapper-Server (SSD am Mac vorbereiten)
+
+`deploy/ssd/prepare_ssd_mac.sh` richtet eine externe SSD am Mac als fertiges Boot-Laufwerk ein:
+
+1. **Am Mac:** SSD anschließen, Terminal öffnen.
+   ```bash
+   git clone -b pvmapper-eu https://github.com/chri6o/deeppvmapper && cd deeppvmapper/deploy/ssd
+   cp pvmapper-ssd.conf.example pvmapper-ssd.conf   # optional: Zugangsdaten vorab eintragen
+   ./prepare_ssd_mac.sh
+   ```
+   - Das Skript braucht Homebrew und installiert QEMU, falls es fehlt.
+   - Es lädt Ubuntu Server 24.04 LTS und prüft die Prüfsumme.
+   - Es fragt nach Rechnername, Linux-Passwort, Browser-Passwort, PV-Map-Token, Claude-/OpenAI-Schlüssel und optional WLAN. Fehlende Werte lassen sich später in den Einstellungen nachtragen.
+   - Danach installiert es Ubuntu unbeaufsichtigt in einer virtuellen x86-Maschine direkt auf die SSD. Auf Apple Silicon dauert das 30–90 Minuten, auf einem Intel-Mac etwa 10 Minuten.
+   - Auf der SSD landen: Zugangsdaten, `pvmapper.yml`, Netzwerk (Kabel per DHCP, optional WLAN), SSH mit dem Schlüssel des Macs und Avahi (`pvmapper.local`).
+2. **Am PC:** SSD einbauen, Netzwerkkabel stecken, einschalten. Falls nötig im UEFI (Entf/F2) die SSD als erstes Boot-Laufwerk wählen; der UEFI-Modus muss aktiv sein, Secure Boot darf an bleiben.
+3. **Im Browser (Mac oder anderer Rechner im Netz):** `http://pvmapper.local:8765`. Beim ersten Start zeigt die Seite die Einrichtung (PyTorch für ROCm, PV-Mapper, Modelle; 10–30 Minuten), danach PV-Mapper. Die Einrichtung prüft die Radeon und setzt bei Bedarf `HSA_OVERRIDE_GFX_VERSION=11.0.0`.
+
+Danach: `ssh pvmapper@pvmapper.local`. Aktualisieren mit `sudo pvmapper-update`, Protokolle mit `journalctl -u pvmapper -f`, die Einrichtung steht in `/var/log/pvmapper-firstboot.log`. Mit gesetztem Browser-Passwort fragt die Oberfläche danach; der Benutzername ist egal.
+
 ## Oberfläche
 
 - **Gebäude prüfen:** Gebäudedatei hineinziehen (GeoJSON, CSV mit `lat`/`lon` oder WKT, GeoPackage, Shapefile) oder eine PostGIS-Abfrage eingeben. Dann ID-Feld, Bildquelle und Modell wählen und starten. Für jedes Gebäude ergibt sich: PV ja/nein, PV-Fläche, geschätzte kWp, Größenklasse, Score und ein Vorschaubild.

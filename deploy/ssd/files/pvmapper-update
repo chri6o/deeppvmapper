@@ -1,0 +1,10 @@
+#!/bin/bash
+# Updates PV-Mapper to the newest version of the branch and restarts the service.
+set -euo pipefail
+APP=/opt/pvmapper
+BRANCH="${1:-pvmapper-eu}"
+sudo -u pvmapper git -C "$APP/app" fetch -q origin "$BRANCH"
+sudo -u pvmapper git -C "$APP/app" reset -q --hard "origin/$BRANCH"
+sudo -u pvmapper "$APP/venv/bin/pip" install -q -r "$APP/app/requirements-pvmapper.txt" pyogrio
+sudo systemctl restart pvmapper
+echo "PV-Mapper aktualisiert: $(git -C "$APP/app" log -1 --format='%h %s')"

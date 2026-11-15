@@ -1,0 +1,13 @@
+[Unit]
+Description=PV-Mapper Einrichtung beim ersten Start
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=!/opt/pvmapper/.installed
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/pvmapper-firstboot
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

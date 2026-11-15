@@ -163,3 +163,6 @@ logs/
 
 # pvmapper web UI
 !pvmapper/web/static/*.html
+
+# local SSD setup secrets
+deploy/ssd/pvmapper-ssd.conf

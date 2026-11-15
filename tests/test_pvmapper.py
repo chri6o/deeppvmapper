@@ -320,3 +320,19 @@ def test_annotation_ai_and_training_with_user_masks(tmp_path, monkeypatch):
     rep = json.load(open(os.path.join(tj.dir, "report.json"), encoding="utf-8"))
     assert rep["segmentation_trained"] and rep["n_masks_train"] <= 10
     assert rep["n_train"] + rep["n_val"] <= 39
+
+
+def test_web_password_gate(tmp_path):
+    import base64 as b64
+    from fastapi.testclient import TestClient
+    from pvmapper.web.app import create_app
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), web_password="geheim"), str(cfgp))
+    c = TestClient(create_app(str(cfgp)))
+    assert c.get("/api/sources").status_code == 401
+    bad = {"Authorization": "Basic " + b64.b64encode(b"x:falsch").decode()}
+    good = {"Authorization": "Basic " + b64.b64encode(b"egal:geheim").decode()}
+    assert c.get("/api/sources", headers=bad).status_code == 401
+    r = c.get("/api/sources", headers=good)
+    assert r.status_code == 200 and len(r.json()) >= 20
+    assert c.get("/api/info", headers=good).json()["config"]["web_password"] == config.MASK

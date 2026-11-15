@@ -99,6 +99,25 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     mgr = JobManager(cfg)
     mgr.load_existing()
 
+    @app.middleware("http")
+    async def password_gate(request, call_next):
+        """optional HTTP basic auth for use in the local network (config: web_password; any user name)"""
+        pw = cfg().get("web_password") or ""
+        if pw:
+            import secrets as _s
+            h = request.headers.get("authorization", "")
+            ok = False
+            if h.lower().startswith("basic "):
+                try:
+                    ok = _s.compare_digest(base64.b64decode(h[6:]).decode().split(":", 1)[1], pw)
+                except Exception:                                # noqa: BLE001
+                    ok = False
+            if not ok:
+                from fastapi import Response
+                return Response("Passwort erforderlich", status_code=401,
+                                headers={"WWW-Authenticate": 'Basic realm="PV-Mapper", charset="UTF-8"'})
+        return await call_next(request)
+
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
     @app.get("/", response_class=HTMLResponse)

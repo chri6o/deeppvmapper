@@ -1,0 +1,18 @@
+[Unit]
+Description=PV-Mapper Web-Oberfläche (Port 8765)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=pvmapper
+Group=pvmapper
+SupplementaryGroups=render video
+WorkingDirectory=/opt/pvmapper
+Environment=PYTHONPATH=/opt/pvmapper/app
+EnvironmentFile=-/etc/default/pvmapper
+ExecStart=/opt/pvmapper/venv/bin/python -m pvmapper --config /opt/pvmapper/pvmapper.yml web --host 0.0.0.0 --port 8765
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -40,11 +40,12 @@ DEFAULTS = {
     "openai_api_key": "",             # AI mask suggestions (ChatGPT)
     "openai_model": "gpt-5.1",
     "ai_masks": "reviewed",           # training uses AI masks: reviewed (default) | all | none
+    "web_password": "",               # if set: the web UI asks for this password (any user name)
     "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",
 }
 
 
-SECRET_KEYS = ("pvmap_token", "anthropic_api_key", "openai_api_key")
+SECRET_KEYS = ("pvmap_token", "anthropic_api_key", "openai_api_key", "web_password")
 MASK = "••••••"
 
 

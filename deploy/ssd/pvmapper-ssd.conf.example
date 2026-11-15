@@ -1,0 +1,12 @@
+# Copy to pvmapper-ssd.conf (same folder) and fill in; empty values are asked for interactively.
+# The file contains secrets – keep it local, it is ignored by git.
+PC_HOSTNAME="pvmapper"
+LINUX_PASSWORD=""            # user 'pvmapper' (SSH, sudo)
+WEB_PASSWORD=""              # browser password for the PV-Mapper UI (empty = none)
+PVMAP_URL="https://pv-map.solar"
+PVMAP_TOKEN=""               # PV-Map: Verwaltung → Datenquellen → API-Tokens
+ANTHROPIC_API_KEY=""
+OPENAI_API_KEY=""
+WIFI_SSID=""                 # empty = network cable only
+WIFI_PASSWORD=""
+# SSH_KEY="ssh-ed25519 AAAA… you@mac"   # default: ~/.ssh/id_ed25519.pub of the Mac
