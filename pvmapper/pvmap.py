@@ -50,6 +50,9 @@ class Client:
                 msg = r.json().get("detail")
             except Exception:                                    # noqa: BLE001
                 msg = r.text[:300]
+            if r.status_code == 401 and "basic" in r.headers.get("WWW-Authenticate", "").lower():
+                msg = ("Die PV-Map-Seite verlangt ein Seiten-Passwort (Vorschau-Modus) – der Konnektor-Pfad "
+                       "/api/detect/ muss davon ausgenommen sein (PV-Map infra/Caddyfile).")
             raise PVMapError(f"PV-Map {r.status_code}: {msg}")
         return r.json()
 
