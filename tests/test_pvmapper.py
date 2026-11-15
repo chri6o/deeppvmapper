@@ -238,3 +238,85 @@ def test_training_job_end_to_end(tmp_path, monkeypatch):
     profs = models.custom_profiles(cfg["model_dir"])
     assert "custom:test_tiny" in profs and profs["custom:test_tiny"].cls_threshold == rep["cls_threshold"]
     assert os.path.isfile(os.path.join(cfg["model_dir"], profs["custom:test_tiny"].cls_file))
+
+
+def test_annotation_ai_and_training_with_user_masks(tmp_path, monkeypatch):
+    """prepare-only dataset → masks drawn by a user and suggested by AI (mocked HTTP) → training reuses the dataset"""
+    from pvmapper import annotate, ai_label, training
+    feats = []
+    for i in range(40):
+        lab = i % 2
+        x0 = 13.0 + i * 0.002
+        feats.append({"type": "Feature", "id": f"b{i}", "geometry": box(x0, 52.0, x0 + 0.0002, 52.00015).__geo_interface__,
+                      "properties": {"label": lab, "label_kind": "pos_high" if lab else "neg_high", "sub": "Education",
+                                     "size_bin": "10-30" if lab else "none", "pv_kwp": 20 if lab else None}})
+    lf = tmp_path / "l.geojson"
+    lf.write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
+    rng = np.random.default_rng(1)
+
+    class FakeSrc:
+        id = "fake"
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = rng.integers(70, 110, (win.height, win.width, 3)).astype(np.uint8)
+        if int(round((geom.centroid.x - 13.0) / 0.002)) % 2:
+            h, w = img.shape[:2]
+            img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector",
+                        lambda cfg, pid=None: inference.Detector(fake_profile(), TinyCls(), TinySeg(), "cpu", batch_size=8, overlap=0.0))
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "models"), fetch_workers=2,
+               anthropic_api_key="k", openai_api_key="k")
+    prep = Job(cfg["jobs_dir"], "train", {"labels_file": str(lf), "prepare_only": True})
+    prep.run(lambda j: training.run(j, cfg))
+    assert prep.status == "done" and prep.counters["datensatz"] == 40
+    d = annotate.ds_dir(prep.dir)
+    items = annotate.list_items(d)
+    pos = [m for m in items if m["label"] == 1]
+    assert annotate.stats(items)["positive_without_mask"] == len(pos)
+
+    # user draws on half of the positives (the blue square), corrects one label, skips one image
+    for m in pos[:10]:
+        w, h = annotate.image_size(d, m["name"])
+        annotate.save_annotation(d, m["name"], [[[w / 3, h / 3], [2 * w / 3, h / 3], [2 * w / 3, 2 * h / 3], [w / 3, 2 * h / 3]]])
+    neg = [m for m in items if m["label"] == 0]
+    annotate.save_annotation(d, neg[0]["name"], [], label=1, status="done")
+    annotate.save_annotation(d, neg[1]["name"], None, status="skip")
+    meta = annotate.read_meta(d, pos[0]["name"])
+    assert meta["has_mask"] and meta["mask_source"] == "user" and annotate.usable_mask(meta)
+    assert annotate.effective_label(annotate.read_meta(d, neg[0]["name"])) == 1
+    assert len(annotate.current_polygons(d, pos[0]["name"])) == 1
+
+    # AI suggestion (mocked Anthropic and OpenAI answers): candidates mode picks candidate 1
+    class Resp:
+        def __init__(self, j): self.status_code, self._j, self.text = 200, j, json.dumps(j)
+        def json(self): return self._j
+    answer = json.dumps({"pv_visible": True, "confidence": 0.9, "pv_candidates": [1], "extra_polygons": [], "note": "panels"})
+    def fake_post(url, json=None, headers=None, timeout=None):
+        if "anthropic" in url:
+            assert json["messages"][0]["content"][0]["type"] == "image"
+            return Resp({"content": [{"type": "text", "text": answer}], "usage": {"input_tokens": 900, "output_tokens": 40}})
+        return Resp({"choices": [{"message": {"content": answer}}], "usage": {"prompt_tokens": 800, "completion_tokens": 30}})
+    monkeypatch.setattr(ai_label.requests, "post", fake_post)
+    det = runtime.detector(cfg)
+    r = ai_label.label_item(cfg, d, pos[11]["name"], "openai", "candidates", det, 0.1)
+    assert r["pv_visible"] and len(r["polygons"]) == 1 and r["mode"] == "candidates"
+    aij = Job(cfg["jobs_dir"], "ai_masks", {"dataset": prep.id, "provider": "anthropic", "mode": "candidates", "limit": 5})
+    aij.run(lambda j: ai_label.run(j, cfg))
+    assert aij.status == "done", aij.error
+    # the relabelled negative has no candidates → polygons mode; the mocked answer has none → "no PV per AI"
+    assert aij.counters["maske"] + aij.counters["keine_pv_laut_ki"] == 5 and aij.counters["tokens_in"] == 4500
+    ai_meta = [m for m in annotate.list_items(d) if m.get("mask_source") == "ai"]
+    assert len(ai_meta) == aij.counters["maske"] >= 4 and not annotate.usable_mask(ai_meta[0], "reviewed") and annotate.usable_mask(ai_meta[0], "all")
+
+    # training with the dataset: user masks (10) count, unreviewed AI masks do not; the skipped image is left out
+    tj = Job(cfg["jobs_dir"], "train", {"dataset_from": prep.id, "epochs": 2, "seg_epochs": 1, "min_seg_samples": 3,
+                                         "save_anyway": True, "name": "TEST ds", "lr": 2e-2})
+    tj.run(lambda j: training.run(j, cfg))
+    assert tj.status == "done", tj.error
+    rep = json.load(open(os.path.join(tj.dir, "report.json"), encoding="utf-8"))
+    assert rep["segmentation_trained"] and rep["n_masks_train"] <= 10
+    assert rep["n_train"] + rep["n_val"] <= 39

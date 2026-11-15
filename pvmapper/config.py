@@ -35,8 +35,22 @@ DEFAULTS = {
     "area_cell_px": 2560,             # area mode: image cell edge length in pixels
     "pvmap_url": "https://pv-map.solar",  # PV-Map connector (building lists, training samples)
     "pvmap_token": "",                # API token from PV-Map: Verwaltung → Datenquellen → API-Tokens
+    "anthropic_api_key": "",          # AI mask suggestions (Claude)
+    "anthropic_model": "claude-sonnet-5-5",
+    "openai_api_key": "",             # AI mask suggestions (ChatGPT)
+    "openai_model": "gpt-5.1",
+    "ai_masks": "reviewed",           # training uses AI masks: reviewed (default) | all | none
     "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",
 }
+
+
+SECRET_KEYS = ("pvmap_token", "anthropic_api_key", "openai_api_key")
+MASK = "••••••"
+
+
+def public(cfg: dict) -> dict:
+    """config for the UI: secrets replaced by a placeholder"""
+    return {k: (MASK if k in SECRET_KEYS and v else v) for k, v in cfg.items()}
 
 
 def load(path: str = "pvmapper.yml") -> dict:

@@ -60,6 +60,7 @@ function tab(name) {
   $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== "tab-" + name));
   map.getContainer().style.cursor = name === "probe" ? "crosshair" : "";
   if (name === "jobs") loadJobs();
+  if (name === "masks") { loadDatasets(M.ds); if (M.item) showEditor(true); } else showEditor(false);
 }
 $$("#tabs button").forEach((b) => b.addEventListener("click", () => tab(b.dataset.tab)));
 
@@ -195,14 +196,15 @@ $("#a-start").onclick = async () => {
 };
 
 // ------------------------------------------------------------------ jobs
-const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training" };
+const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training", ai_masks: "KI-Masken" };
 const STATUS = { queued: "wartet", running: "läuft", done: "fertig", failed: "Fehler", cancelled: "abgebrochen" };
 async function loadJobs() {
   S.jobs = await api("/api/jobs");
   $("#job-list").innerHTML = S.jobs.length ? S.jobs.map((j) => {
     const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
     const what = j.kind === "buildings" ? (j.params.input || "").split(/[\\/]/).pop()
-      : j.kind === "train" ? (j.params.name || j.params.cc || "Labels") : (j.params.bbox ? "Rechteck" : "Polygon");
+      : j.kind === "train" ? ((j.params.prepare_only ? "Datensatz " : "") + (j.params.name || j.params.cc || j.params.dataset_from || "Labels"))
+      : j.kind === "ai_masks" ? `${j.params.provider} · ${j.params.dataset}` : (j.params.bbox ? "Rechteck" : "Polygon");
     return `<div class="job ${S.job === j.id ? "sel" : ""}" data-id="${j.id}">
       <div class="top"><span>${KIND[j.kind]} · ${esc(what)}</span><span class="badge ${j.status}">${STATUS[j.status]}</span></div>
       <div class="progress"><div style="width:${pct}%"></div></div>
@@ -227,9 +229,11 @@ async function refreshJob(withResults) {
     [j.eta_s ? dur(j.eta_s) : (j.status === "done" ? "fertig" : "–"), "Restzeit"],
   ];
   if (j.kind === "buildings") stats.push([fmt(c.pv), "mit PV"], [fmt(c.kein_pv), "ohne PV"], [fmt(c.fehler), "ohne Bild"]);
+  else if (j.kind === "ai_masks") stats.push([fmt(c.maske), "Masken"], [fmt(c.keine_pv_laut_ki), "keine PV laut KI"], [fmt(c.fehler), "Fehler"]);
+  else if (j.kind === "train" && j.params.prepare_only) stats.push([fmt(c.datensatz), "Bilder im Datensatz"], [fmt(c.bild_fehlt), "ohne Bild"], ["→ Masken", "nächster Schritt"]);
   else if (j.kind === "train") stats.push([fmt(c.f1_vorher, 2), "F1 vorher"], [fmt(c.f1_nachher, 2), "F1 nachher"], [c.modell ? "gespeichert" : "–", "neues Modell"]);
   else stats.push([fmt(c.zellen_mit_pv), "Kacheln mit PV"], [fmt(c.anlagen), "Anlagen"], [fmt(c.fehler), "Fehler"]);
-  if (j.kind !== "train") stats.push([fmt(c.kwp_sum, 0) + " kWp", "geschätzt gesamt"]);
+  if (!["train", "ai_masks"].includes(j.kind)) stats.push([fmt(c.kwp_sum, 0) + " kWp", "geschätzt gesamt"]);
   $("#jd-stats").innerHTML = stats.map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
   $("#jd-files").innerHTML = j.files.filter((f) => /\.(csv|geojson|json)$/.test(f) && f !== "job.json")
     .map((f) => `<a class="link" href="/api/jobs/${j.id}/files/${f}">${f}</a>`).join(" · ");
@@ -237,8 +241,8 @@ async function refreshJob(withResults) {
   $("#jd-cancel").classList.toggle("hidden", !["running", "queued"].includes(j.status));
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
   $("#jd-status").classList.toggle("hidden", j.kind !== "buildings");
-  $$(".filters").forEach((x) => x.classList.toggle("hidden", j.kind === "train"));
-  if (j.kind === "train") { $("#jd-table").innerHTML = ""; if (withResults || j.status === "done") showReport(j.id); }
+  $$(".filters").forEach((x) => x.classList.toggle("hidden", j.kind === "train" || j.kind === "ai_masks"));
+  if (j.kind === "train" || j.kind === "ai_masks") { $("#jd-table").innerHTML = ""; if (j.kind === "train" && (withResults || j.status === "done")) showReport(j.id); else $("#jd-report").innerHTML = ""; }
   else { $("#jd-report").innerHTML = ""; if (withResults || (j.status !== S.lastStatus && j.status === "done")) loadResults(); }
   S.lastStatus = j.status;
   if (!["running", "queued"].includes(j.status)) { clearInterval(S.poll); loadJobs(); }
@@ -307,7 +311,8 @@ function renderSources() {
 const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap": "patch_overlap", "#s-cls": "cls_threshold", "#s-seg": "seg_threshold",
   "#s-kwp": "kwp_per_m2", "#s-minarea": "min_pv_area_m2", "#s-buffer": "buffer_m", "#s-radius": "point_radius_m",
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
-  "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
+  "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
+  "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
 function renderSettings() {
   const c = S.info.config, d = S.info.device;
   $("#s-device").innerHTML = `PyTorch ${esc(d.torch)} · Gerät <b>${esc(d.device)}</b>` +
@@ -348,3 +353,225 @@ $("#s-download").onclick = async () => {
 function info(sel, html, err = false) { const el = $(sel); el.innerHTML = html; el.classList.remove("hidden"); el.classList.toggle("err", err); }
 
 init().catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<div class="info err">${esc(e.message)}</div>`); });
+
+// ================================================================== datasets & mask editor
+const M = { ds: null, items: [], list: [], idx: -1, item: null, img: null, polys: [], hist: [], cur: [], tool: "poly",
+  sel: -1, view: { s: 1, x: 0, y: 0 }, drag: null, rect: null, label: 1, dirty: false };
+const SRC = { user: "von Hand", ai: "KI", pvmap: "PV-Map", model: "Modell" };
+
+async function loadDatasets(keep) {
+  const ds = await api("/api/datasets"); M.dsList = ds;
+  const sel = $("#m-ds");
+  sel.innerHTML = ds.length ? ds.map((d) => `<option value="${d.id}">${esc(d.name)} · ${d.id} · ${fmt(d.stats.total)} Bilder</option>`).join("")
+    : `<option value="">noch kein Datensatz – im Reiter „Training“ anlegen</option>`;
+  if (keep && ds.some((d) => d.id === keep)) sel.value = keep;
+  if (sel.value) openDataset(sel.value);
+}
+$("#m-ds").onchange = () => openDataset($("#m-ds").value);
+["#m-filter", "#m-sub", "#m-size"].forEach((s) => $(s).onchange = () => renderList());
+
+async function openDataset(id) {
+  M.ds = id; M.dsProfile = ((M.dsList || []).find((d) => d.id === id) || {}).profile;
+  const d = await api(`/api/datasets/${id}/items`);
+  M.items = d.items;
+  const subs = [...new Set(d.items.map((x) => x.sub))].sort(), sizes = [...new Set(d.items.map((x) => x.size_bin))].sort();
+  $("#m-sub").innerHTML = `<option value="">alle Arten</option>` + subs.map((x) => `<option>${esc(x)}</option>`).join("");
+  $("#m-size").innerHTML = `<option value="">alle Größen</option>` + sizes.map((x) => `<option>${esc(x)}</option>`).join("");
+  renderStats(d.stats); renderList();
+}
+function renderStats(s) {
+  $("#m-stats").innerHTML = [[s.total, "Bilder"], [s.positive, "mit PV (Label)"], [s.positive_without_mask, "PV ohne Maske"],
+    [s.masks_user, "Masken von Hand"], [s.masks_ai_unreviewed, "KI ungeprüft"], [s.done, "fertig"]]
+    .map(([b, t]) => `<div class="stat"><b>${fmt(b)}</b><span>${t}</span></div>`).join("");
+}
+function matches(m) {
+  const f = $("#m-filter").value, sub = $("#m-sub").value, size = $("#m-size").value;
+  if (sub && m.sub !== sub) return false;
+  if (size && m.size_bin !== size) return false;
+  const pos = m.effective_label === 1;
+  return f === "all" || (f === "todo" && pos && !m.has_mask && m.status !== "skip")
+    || (f === "ai" && m.mask_source === "ai" && !(m.ai && m.ai.reviewed)) || (f === "mask" && m.has_mask)
+    || (f === "neg" && !pos) || (["open", "done", "skip"].includes(f) && m.status === f);
+}
+function renderList() {
+  M.list = M.items.filter(matches);
+  $("#m-list").innerHTML = `<tr><th>Gebäude</th><th>Label</th><th>Art</th><th>Größe</th><th>Maske</th></tr>` +
+    M.list.map((m, i) => `<tr class="click ${M.item && M.item.name === m.name ? "cur" : ""}" data-i="${i}"><td>${esc(m.id)}${m.val ? ' <span class="tag">Val</span>' : ""}</td>
+      <td>${m.effective_label ? "PV" : "–"}${m.effective_label !== m.label ? ' <span class="tag">korr.</span>' : ""}</td><td>${esc(m.sub)}</td><td>${esc(m.size_bin)}</td>
+      <td>${m.has_mask ? `<span class="tag ${m.mask_source}">${SRC[m.mask_source] || m.mask_source}${m.mask_source === "ai" && !(m.ai && m.ai.reviewed) ? " ?" : ""}</span>` : ""}${m.status === "skip" ? '<span class="tag skip">übersprungen</span>' : m.status === "done" ? " ✓" : ""}</td></tr>`).join("") +
+    (M.list.length ? "" : `<tr><td colspan="5" class="hint">Nichts in diesem Filter.</td></tr>`);
+  $$("#m-list tr.click").forEach((tr) => tr.onclick = () => openItem(+tr.dataset.i));
+}
+
+// ------------------------------------------------------------------ editor
+const cv = $("#e-canvas"), cx = cv.getContext("2d");
+function showEditor(on) { $("#editor").classList.toggle("hidden", !on); if (on) fitCanvas(); }
+async function openItem(i) {
+  if (i < 0 || i >= M.list.length) { $("#e-info").innerHTML = "Ende der Liste."; return; }
+  M.idx = i; const m = M.list[i];
+  const d = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`);
+  M.item = { ...m, ...d.meta, width: d.width, height: d.height, footprint: d.footprint };
+  M.polys = d.polygons; M.hist = []; M.cur = []; M.sel = -1; M.label = d.effective_label; M.dirty = false;
+  $("#e-label").checked = !!M.label;
+  M.img = new Image();
+  M.img.onload = () => { showEditor(true); fitView(); draw(); };
+  M.img.src = `/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/image`;
+  info2(); renderList();
+  const tr = $(`#m-list tr[data-i="${i}"]`); if (tr) tr.scrollIntoView({ block: "nearest" });
+}
+function info2(extra = "") {
+  const m = M.item; if (!m) return;
+  const ai = m.ai ? ` · KI (${esc(m.ai.provider)}/${esc(m.ai.mode)}): ${m.ai.pv_visible ? "PV" : "keine PV"}${m.ai.confidence != null ? ", Sicherheit " + fmt(m.ai.confidence, 2) : ""}${m.ai.reviewed ? ", geprüft" : ", <b>ungeprüft</b>"}${m.ai.note ? " – " + esc(m.ai.note) : ""}` : "";
+  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · Fläche ${fmt(areaM2(), 1)} m²${ai}${extra ? " · " + extra : ""}
+    <span class="hint" style="color:#8f9bb3"> · 1 Polygon · 2 Rechteck · 3 gedreht (Kante + Breite) · Doppelklick/Enter schließt · Entf löscht Auswahl · Mausrad zoomt, Leertaste+Ziehen verschiebt</span>`;
+}
+function areaM2() {
+  const res = (S.info.profiles.find((p) => p.id === (M.dsProfile || S.info.config.profile)) || { resolution_m: 0.1 }).resolution_m;
+  let a = 0; for (const p of M.polys) { let s = 0; for (let i = 0; i < p.length; i++) { const [x1, y1] = p[i], [x2, y2] = p[(i + 1) % p.length]; s += x1 * y2 - x2 * y1; } a += Math.abs(s) / 2; }
+  return a * res * res;
+}
+function fitCanvas() { const r = cv.getBoundingClientRect(); cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio; }
+function fitView() { fitCanvas(); const s = Math.min(cv.width / M.img.width, cv.height / M.img.height) * 0.96; M.view = { s, x: (cv.width - M.img.width * s) / 2, y: (cv.height - M.img.height * s) / 2 }; }
+window.addEventListener("resize", () => { if (!$("#editor").classList.contains("hidden") && M.img) { fitView(); draw(); } });
+const toScreen = ([x, y]) => [M.view.x + x * M.view.s, M.view.y + y * M.view.s];
+function toImg(e) { const r = cv.getBoundingClientRect(); const px = (e.clientX - r.left) * devicePixelRatio, py = (e.clientY - r.top) * devicePixelRatio;
+  return [Math.max(0, Math.min(M.img.width, (px - M.view.x) / M.view.s)), Math.max(0, Math.min(M.img.height, (py - M.view.y) / M.view.s))]; }
+function path(p, close = true) { cx.beginPath(); p.forEach((q, i) => { const [x, y] = toScreen(q); i ? cx.lineTo(x, y) : cx.moveTo(x, y); }); if (close) cx.closePath(); }
+function draw() {
+  if (!M.img) return;
+  cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = "#1b2232"; cx.fillRect(0, 0, cv.width, cv.height);
+  cx.imageSmoothingEnabled = M.view.s < 2;
+  cx.drawImage(M.img, M.view.x, M.view.y, M.img.width * M.view.s, M.img.height * M.view.s);
+  const lw = 2 * devicePixelRatio;
+  cx.lineWidth = lw; cx.strokeStyle = "#ffdc00"; cx.setLineDash([6, 4]); M.item.footprint.forEach((p) => { path(p); cx.stroke(); }); cx.setLineDash([]);
+  const ai = M.item.mask_source === "ai" && !(M.item.ai && M.item.ai.reviewed);
+  M.polys.forEach((p, i) => { path(p); cx.fillStyle = ai ? "rgba(140,90,255,.35)" : "rgba(230,30,60,.35)"; cx.fill(); cx.strokeStyle = i === M.sel ? "#fff" : (ai ? "#a78bfa" : "#ff3b5c"); cx.lineWidth = i === M.sel ? lw * 1.8 : lw; cx.stroke(); });
+  if (M.cur.length) { path(M.cur, false); cx.strokeStyle = "#00e5ff"; cx.lineWidth = lw; cx.stroke(); M.cur.forEach((q) => { const [x, y] = toScreen(q); cx.fillStyle = "#00e5ff"; cx.fillRect(x - 3, y - 3, 6, 6); }); }
+  if (M.rect) { const [a, b] = M.rect; path([a, [b[0], a[1]], b, [a[0], b[1]]]); cx.strokeStyle = "#00e5ff"; cx.stroke(); }
+  if (M.tool === "rrect" && M.cur.length && M.hover) {
+    const pv = M.cur.length === 1 ? [M.cur[0], M.hover] : rrect(M.cur[0], M.cur[1], M.hover);
+    path(pv, M.cur.length === 2); cx.strokeStyle = "#00e5ff"; cx.lineWidth = 2 * devicePixelRatio; cx.stroke();
+  }
+}
+function push() { M.hist.push(JSON.stringify(M.polys)); if (M.hist.length > 50) M.hist.shift(); M.dirty = true; }
+function undo() { if (M.cur.length) { M.cur.pop(); } else if (M.hist.length) { M.polys = JSON.parse(M.hist.pop()); } draw(); info2(); }
+function closePoly() { if (M.cur.length >= 3) { push(); M.polys.push(M.cur.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10])); } M.cur = []; draw(); info2(); }
+function inside(pt, poly) { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j];
+  if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi) c = !c; } return c; }
+
+let space = false;
+cv.addEventListener("mousedown", (e) => {
+  if (!M.img) return;
+  if (space || e.button === 1 || e.button === 2) { M.drag = { x: e.clientX, y: e.clientY, vx: M.view.x, vy: M.view.y }; e.preventDefault(); return; }
+  const p = toImg(e);
+  if (M.tool === "rect") { M.rect = [p, p]; return; }
+  if (M.tool === "rrect") {
+    M.cur.push(p);
+    if (M.cur.length === 3) { const q = rrect(M.cur[0], M.cur[1], M.cur[2]); M.cur = []; push(); M.polys.push(q); info2(); }
+    draw(); return;
+  }
+  if (!M.cur.length) { const hit = M.polys.findIndex((q) => inside(p, q)); if (hit >= 0 && !e.shiftKey) { M.sel = hit; draw(); return; } M.sel = -1; }
+  if (M.cur.length >= 3) { const [fx, fy] = toScreen(M.cur[0]), [sx, sy] = toScreen(p); if (Math.hypot(fx - sx, fy - sy) < 10 * devicePixelRatio) { closePoly(); return; } }
+  M.cur.push(p); draw();
+});
+cv.addEventListener("mousemove", (e) => {
+  if (M.drag) { M.view.x = M.drag.vx + (e.clientX - M.drag.x) * devicePixelRatio; M.view.y = M.drag.vy + (e.clientY - M.drag.y) * devicePixelRatio; draw(); return; }
+  if (M.rect) { M.rect[1] = toImg(e); draw(); }
+  else if (M.tool === "rrect" && M.cur.length) { M.hover = toImg(e); draw(); }
+});
+function rrect(a, b, c) {
+  // rectangle with edge a–b, extended perpendicular to the edge up to the projection of c
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
+  const t = (c[0] - a[0]) * nx + (c[1] - a[1]) * ny;
+  return [a, b, [b[0] + nx * t, b[1] + ny * t], [a[0] + nx * t, a[1] + ny * t]].map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
+}
+window.addEventListener("mouseup", () => {
+  if (M.drag) { M.drag = null; return; }
+  if (M.rect) { const [[x1, y1], [x2, y2]] = M.rect; M.rect = null;
+    if (Math.abs(x2 - x1) > 2 && Math.abs(y2 - y1) > 2) { push(); M.polys.push([[x1, y1], [x2, y1], [x2, y2], [x1, y2]].map(([x, y]) => [Math.round(x), Math.round(y)])); }
+    draw(); info2(); }
+});
+cv.addEventListener("dblclick", (e) => { e.preventDefault(); if (M.cur.length > 3) M.cur.pop(); closePoly(); });
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener("wheel", (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(); const px = (e.clientX - r.left) * devicePixelRatio, py = (e.clientY - r.top) * devicePixelRatio;
+  const f = e.deltaY < 0 ? 1.2 : 1 / 1.2; M.view.x = px - (px - M.view.x) * f; M.view.y = py - (py - M.view.y) * f; M.view.s *= f; draw(); }, { passive: false });
+
+function setTool(t) { M.tool = t; M.cur = []; $$(".etool [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t)); draw(); }
+$$(".etool [data-tool]").forEach((b) => b.onclick = () => setTool(b.dataset.tool));
+$("#e-undo").onclick = undo;
+$("#e-clear").onclick = () => { if (M.polys.length) { push(); M.polys = []; draw(); info2(); } };
+$("#e-label").onchange = () => { M.label = $("#e-label").checked ? 1 : 0; M.dirty = true; };
+$("#e-prev").onclick = () => openItem(M.idx - 1);
+$("#e-next").onclick = () => openItem(M.idx + 1);
+$("#e-save").onclick = () => saveItem("done");
+$("#e-skip").onclick = () => saveItem("skip");
+$("#e-model").onclick = () => suggest(null);
+$("#e-ai").onclick = () => suggest($("#m-provider").value);
+
+async function saveItem(status) {
+  const m = M.item; if (!m) return;
+  if (M.cur.length >= 3) closePoly();
+  try {
+    const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: M.polys, label: M.label, status } });
+    const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
+    const keepList = M.list; renderStats(computeStats()); M.list = keepList;
+    openItem(M.idx + 1);
+  } catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); }
+}
+function computeStats() {
+  const s = { total: M.items.length, positive: 0, positive_without_mask: 0, masks_user: 0, masks_ai_unreviewed: 0, done: 0 };
+  for (const m of M.items) { const pos = m.effective_label === 1; s.positive += pos; if (m.status === "done") s.done++;
+    if (m.has_mask && m.mask_source === "user") s.masks_user++; if (m.has_mask && m.mask_source === "ai" && !(m.ai && m.ai.reviewed)) s.masks_ai_unreviewed++;
+    if (pos && !m.has_mask && m.status !== "skip") s.positive_without_mask++; }
+  return s;
+}
+async function suggest(provider) {
+  const m = M.item; if (!m) return;
+  info2(provider ? "frage KI …" : "Modell rechnet …");
+  try {
+    const d = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/suggest`, { json: provider ? { provider, mode: $("#m-mode").value } : { cls_threshold: 0.3 } });
+    push(); M.polys = d.polygons;
+    draw();
+    info2(provider ? `KI: ${d.pv_visible ? "PV sichtbar" : "keine PV"} (${fmt(d.confidence, 2)}) ${esc(d.note || "")} – prüfen und speichern` : `Modellvorschlag (Score ${fmt(d.max_prob, 2)}) – prüfen und speichern`);
+  } catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); }
+}
+document.addEventListener("keydown", (e) => {
+  if (currentTab() !== "masks" || $("#editor").classList.contains("hidden")) return;
+  if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName) && document.activeElement.type !== "checkbox") return;
+  const k = e.key;
+  if (k === " ") { space = true; e.preventDefault(); return; }
+  if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "z") { undo(); e.preventDefault(); return; }
+  if (k === "Enter") { e.preventDefault(); if (M.cur.length) closePoly(); else saveItem("done"); }
+  else if (k === "Escape") { M.cur = []; M.rect = null; M.sel = -1; draw(); }
+  else if (k === "Delete" || (k === "Backspace" && M.sel >= 0)) { if (M.sel >= 0) { push(); M.polys.splice(M.sel, 1); M.sel = -1; draw(); info2(); } e.preventDefault(); }
+  else if (k === "Backspace") { undo(); e.preventDefault(); }
+  else if (k === "ArrowRight") openItem(M.idx + 1);
+  else if (k === "ArrowLeft") openItem(M.idx - 1);
+  else if (k === "1") setTool("poly");
+  else if (k === "2") setTool("rect");
+  else if (k === "3") setTool("rrect");
+  else if (k.toLowerCase() === "m") suggest(null);
+  else if (k.toLowerCase() === "k") suggest($("#m-provider").value);
+  else if (k.toLowerCase() === "x") saveItem("skip");
+  else if (k.toLowerCase() === "l") { $("#e-label").checked = !$("#e-label").checked; $("#e-label").onchange(); }
+  else if (k.toLowerCase() === "f") { fitView(); draw(); }
+});
+document.addEventListener("keyup", (e) => { if (e.key === " ") space = false; });
+
+$("#m-ai-batch").onclick = async () => {
+  if (!M.ds) return;
+  try { const j = await api("/api/jobs", { json: { kind: "ai_masks", params: { dataset: M.ds, provider: $("#m-provider").value, mode: $("#m-mode").value, limit: +$("#m-limit").value } } });
+    $("#m-msg").innerHTML = `<div class="info">KI-Auftrag ${j.id} gestartet – Fortschritt unter „Aufträge“. Danach Filter „KI ungeprüft“.</div>`; }
+  catch (e) { $("#m-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
+$("#m-train").onclick = async () => {
+  if (!M.ds) return;
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: { dataset_from: M.ds, profile: $("#m-profile").value, epochs: +$("#m-epochs").value,
+      name: $("#m-name").value.trim() || null, ai_masks: $("#m-aiuse").value, min_seg_samples: 20 } } });
+    tab("jobs"); openJob(j.id); }
+  catch (e) { $("#m-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
+$("#t-prepare").onclick = async () => {
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: { ...trainParams(), prepare_only: true } } }); tab("jobs"); openJob(j.id); }
+  catch (e) { $("#t-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};

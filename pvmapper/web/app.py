@@ -19,7 +19,7 @@ from shapely import wkt as shp_wkt
 from shapely.geometry import Point, mapping
 
 from .. import area_mode, building_mode, buildings as bld, config as cfgmod
-from .. import geo, inference, models, runtime, sources
+from .. import ai_label, annotate, geo, inference, models, runtime, sources
 from ..jobs import Job, runner
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -106,6 +106,11 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as f:
             return f.read()
 
+    @app.get("/favicon.ico")
+    def favicon():
+        from fastapi import Response
+        return Response(status_code=204)
+
     # -- settings / info --------------------------------------------------------
 
     @app.get("/api/info")
@@ -117,18 +122,18 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             prof.append({"id": p.id, "label": p.label, "resolution_m": p.resolution_m,
                          "licence": p.licence, "downloaded": have,
                          "cls_threshold": p.cls_threshold, "seg_threshold": p.seg_threshold})
-        return {"device": models.device_info(), "profiles": prof, "config": cfg(),
+        return {"device": models.device_info(), "profiles": prof, "config": cfgmod.public(cfg()),
                 "config_path": os.path.abspath(config_path)}
 
     @app.post("/api/config")
     def set_config(new: dict = Body(...)):
         c = dict(cfg())
         for k, v in new.items():
-            if k in cfgmod.DEFAULTS:
+            if k in cfgmod.DEFAULTS and not (k in cfgmod.SECRET_KEYS and v == cfgmod.MASK):
                 c[k] = v
         cfgmod.save(c, config_path)
         state["cfg"] = cfgmod.load(config_path)
-        return state["cfg"]
+        return cfgmod.public(state["cfg"])
 
     @app.post("/api/models/download")
     def download_models(body: dict = Body(default={})):
@@ -253,14 +258,84 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         with open(path, encoding="utf-8") as f:
             return json.load(f)
 
+    # -- datasets & masks ---------------------------------------------------------------------
+
+    def _ds(jid):
+        d = annotate.ds_dir(_job(jid).dir)
+        if not os.path.isdir(d):
+            raise HTTPException(404, "Dieser Auftrag hat keinen Datensatz")
+        return d
+
+    def _item(jid, name):
+        d = _ds(jid)
+        name = os.path.basename(name)
+        if not os.path.isfile(os.path.join(d, name + ".json")):
+            raise HTTPException(404, "Bild nicht im Datensatz")
+        return d, name
+
+    @app.get("/api/datasets")
+    def datasets():
+        out = []
+        for j in mgr.jobs.values():
+            d = annotate.ds_dir(j.dir)
+            if j.kind == "train" and os.path.isdir(d) and not j.params.get("dataset_from"):
+                items = annotate.list_items(d)
+                if items:
+                    out.append({"id": j.id, "name": j.params.get("name") or j.params.get("cc") or "Labels",
+                                "prepare_only": bool(j.params.get("prepare_only")), "status": j.status,
+                                "profile": j.params.get("profile"), "stats": annotate.stats(items)})
+        return sorted(out, key=lambda x: x["id"], reverse=True)
+
+    @app.get("/api/datasets/{jid}/items")
+    def dataset_items(jid: str):
+        items = annotate.list_items(_ds(jid))
+        keep = ("id", "name", "label", "effective_label", "label_kind", "sub", "size_bin", "pv_kwp", "has_mask",
+                "mask_source", "status", "val", "source", "ai")
+        return {"stats": annotate.stats(items), "items": [{k: m.get(k) for k in keep} for m in items]}
+
+    @app.get("/api/datasets/{jid}/items/{name}")
+    def dataset_item(jid: str, name: str):
+        d, name = _item(jid, name)
+        m = annotate.read_meta(d, name)
+        w, h = annotate.image_size(d, name)
+        return {"meta": m, "width": w, "height": h, "footprint": annotate.footprint_polygons(d, name),
+                "polygons": annotate.current_polygons(d, name), "effective_label": annotate.effective_label(m)}
+
+    @app.get("/api/datasets/{jid}/items/{name}/image")
+    def dataset_image(jid: str, name: str):
+        d, name = _item(jid, name)
+        return FileResponse(os.path.join(d, name + ".jpg"), headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.post("/api/datasets/{jid}/items/{name}")
+    def dataset_save(jid: str, name: str, body: dict = Body(...)):
+        d, name = _item(jid, name)
+        st = body.get("status", "done")
+        if st not in ("open", "done", "skip"):
+            raise HTTPException(400, "status: open, done oder skip")
+        return annotate.save_annotation(d, name, body.get("polygons"), body.get("label"), st, "user")
+
+    @app.post("/api/datasets/{jid}/items/{name}/suggest")
+    def dataset_suggest(jid: str, name: str, body: dict = Body(default={})):
+        d, name = _item(jid, name)
+        src = "ai" if body.get("provider") else "model"
+        det = runtime.detector(cfg(), _job(jid).params.get("profile"))
+        if src == "model":
+            return {"source": "model", **annotate.suggest_from_model(det, d, name, body.get("cls_threshold", 0.3))}
+        try:
+            r = ai_label.label_item(cfg(), d, name, body["provider"], body.get("mode", "candidates"), det,
+                                    det.p.resolution_m)
+        except ai_label.AIError as e:
+            raise HTTPException(400, str(e))
+        return {"source": "ai", **r}
+
     # -- jobs ------------------------------------------------------------------------------
 
     @app.post("/api/jobs")
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area", "train"):
-            raise HTTPException(400, "kind must be buildings, area or train")
+        if kind not in ("buildings", "area", "train", "ai_masks"):
+            raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")
         if kind == "area":

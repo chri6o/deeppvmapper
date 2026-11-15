@@ -63,3 +63,21 @@ pre { background: #0f172a; color: #d6deeb; padding: 8px; border-radius: 6px; fon
 #p-out img { width: 100%; border-radius: 6px; margin-top: 8px; }
 #s-classes input { margin: 0; }
 code { background: #f2f5fa; padding: 0 3px; border-radius: 3px; }
+
+/* mask editor */
+#editor { position: absolute; inset: 0; background: #1b2232; display: flex; flex-direction: column; z-index: 1100; }
+.etool { display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: #0f1524; color: #dfe5f1; flex-wrap: wrap; }
+.etool button { background: #26304a; color: #fff; border: 0; border-radius: 6px; padding: 6px 10px; cursor: pointer; font: inherit; }
+.etool button.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; margin: 0; }
+.etool .seg button.on { background: var(--accent); color: var(--accent-ink); }
+.etool .sp { flex: 1; }
+.etool label.check { color: #dfe5f1; margin: 0 6px; }
+#e-wrap { flex: 1; position: relative; overflow: hidden; }
+#e-canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+.einfo { padding: 6px 12px; color: #c8d0e0; font-size: 12.5px; background: #0f1524; min-height: 30px; }
+.einfo b { color: #fff; }
+.tag { display: inline-block; font-size: 11px; padding: 0 6px; border-radius: 8px; background: #eef1f6; margin-left: 4px; }
+.tag.ai { background: #e6e1ff; } .tag.user { background: #e3f4e5; } .tag.pvmap { background: #e1f0ff; } .tag.skip { background: #eee; }
+tr.cur { background: #fff4cc !important; }
+kbd { border: 1px solid #ccc; border-radius: 3px; padding: 0 4px; font-size: 11px; background: #fafafa; }
+.filters2 select { width: auto; margin-right: 6px; }

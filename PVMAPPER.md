@@ -47,6 +47,29 @@ PV-Mapper holt aus PV-Map **Gebäudelisten** und **Trainingsbeispiele**. In PV-M
   6. Gespeichert wird das neue Modell nur, wenn es auf der Validierung mindestens so gut ist wie das Ausgangsmodell, und zwar als Profil `custom:<name>`. Der Bericht vergleicht vorher und nachher nach Art, Größe und Label.
 - Statt PV-Map geht auch eine eigene GeoJSON mit `properties.label` (0/1).
 
+## Masken zeichnen und KI-Vorschläge
+
+**Datensatz anlegen:** Im Reiter „Training“ den Knopf „Nur Datensatz anlegen“ drücken. Die Software lädt Stichprobe und Luftbilder und trainiert noch nicht.
+
+**Reiter „Masken“:** links der Datensatz mit Kennzahlen und Filtern (PV ohne Maske, KI ungeprüft, offen, fertig, übersprungen, Art, Größe), rechts der Editor. Klick auf eine Zeile öffnet das Bild, Gebäudeumriss gelb gestrichelt.
+
+| Taste | Funktion |
+|---|---|
+| `1` / `2` / `3` | Polygon / Rechteck / gedrehtes Rechteck (zwei Klicks für eine Kante, dritter für die Breite) |
+| Doppelklick, `Enter` | Polygon schließen; `Enter` ohne offenes Polygon: speichern und weiter |
+| `M` / `K` | Vorschlag des Modells / der KI übernehmen (danach korrigieren) |
+| `Entf`, `Strg+Z` | ausgewählte Fläche löschen, rückgängig |
+| `L`, `X` | Label „PV vorhanden“ umschalten (korrigiert das Register-Label), Bild überspringen |
+| `←` / `→`, Mausrad, Leertaste+Ziehen | blättern, zoomen, verschieben; `F` = einpassen |
+
+Masken landen als `dataset/<id>.mask.png`, die Herkunft steht in der zugehörigen JSON-Datei (von Hand, KI, PV-Map-Ebene). Danach „Training mit diesem Datensatz“ starten. Schon ab 20 Masken wird auch die Segmentierung nachtrainiert.
+
+**KI (Claude/ChatGPT):** Einen API-Schlüssel und das Modell in den Einstellungen eintragen. Es gibt zwei Modi:
+- **KI prüft Modellvorschläge (Standard):** Das eigene Modell schlägt Flächen mit niedriger Schwelle vor. Sie werden nummeriert eingezeichnet, und die KI sagt, welche Nummern PV sind; fehlende Flächen darf sie ergänzen. Die Umrisse bleiben pixelgenau, die Entscheidung trifft ein unabhängiges Modell.
+- **KI zeichnet selbst:** Die KI liefert die Polygone direkt. Das ist gröber und nur für Fälle gedacht, in denen das Modell nichts findet.
+
+Einzeln geht das per Taste `K`, für viele Bilder über „KI-Masken für viele Bilder“ (als eigener Auftrag, mit Tokenzählung). KI-Masken sind **ungeprüft**, bis du sie im Editor speicherst. Das Training nutzt standardmäßig nur geprüfte, die Bewertung immer nur Register- und Meldungs-Labels. API-Schlüssel stehen im Klartext in `pvmapper.yml`; die Oberfläche zeigt sie nicht an.
+
 ## Kommandozeile
 
 ```bash

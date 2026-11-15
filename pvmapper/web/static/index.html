@@ -16,6 +16,7 @@
     <button data-tab="area">Fläche auswerten</button>
     <button data-tab="jobs">Aufträge</button>
     <button data-tab="train">Training</button>
+    <button data-tab="masks">Masken</button>
     <button data-tab="probe">Probe</button>
     <button data-tab="sources">Bildquellen</button>
     <button data-tab="settings">Einstellungen</button>
@@ -115,8 +116,44 @@
     </div>
     <label class="check"><input type="checkbox" id="t-weak" checked> „keine PV bekannt“ als schwache Negative nutzen</label>
     <details><summary>… oder eigene Labels (GeoJSON mit <code>label</code> 0/1)</summary><label>Pfad<input id="t-file" placeholder="/daten/labels.geojson"></label></details>
-    <div class="row"><button id="t-strata" class="secondary">Verfügbare Beispiele anzeigen</button><button id="t-start" class="primary">Training starten</button></div>
+    <div class="row"><button id="t-strata" class="secondary">Verfügbare Beispiele anzeigen</button><button id="t-prepare" class="secondary">Nur Datensatz anlegen (zum Maskieren)</button><button id="t-start" class="primary">Training starten</button></div>
     <div id="t-out"></div>
+  </div>
+
+  <!-- ===================================================== Masken -->
+  <div class="tab hidden" id="tab-masks">
+    <h2>Trainingsdatensatz und Masken</h2>
+    <p class="hint">Modulflächen einzeichnen oder Vorschläge prüfen. Das Bild öffnet sich rechts; mit <kbd>→</kbd> geht es zum nächsten.</p>
+    <label>Datensatz<select id="m-ds"></select></label>
+    <div id="m-stats" class="stats"></div>
+    <div class="row filters2">
+      <select id="m-filter">
+        <option value="todo">PV ohne Maske</option><option value="ai">KI ungeprüft</option><option value="open">offen</option>
+        <option value="done">fertig</option><option value="skip">übersprungen</option><option value="mask">mit Maske</option>
+        <option value="neg">keine PV (Label)</option><option value="all">alle</option></select>
+      <select id="m-sub"><option value="">alle Arten</option></select>
+      <select id="m-size"><option value="">alle Größen</option></select>
+    </div>
+    <div class="tablewrap" style="max-height:340px"><table id="m-list"></table></div>
+    <details><summary>KI-Masken für viele Bilder</summary>
+      <div class="grid2">
+        <label>Anbieter<select id="m-provider"><option value="anthropic">Claude</option><option value="openai">ChatGPT</option></select></label>
+        <label>Modus<select id="m-mode"><option value="candidates">KI prüft Modellvorschläge (genauer)</option><option value="polygons">KI zeichnet selbst</option></select></label>
+        <label>höchstens<input id="m-limit" type="number" value="50"></label>
+      </div>
+      <button id="m-ai-batch" class="secondary">KI-Vorschläge erzeugen</button>
+      <p class="hint">KI-Masken gelten als <b>ungeprüft</b>, bis du sie hier gespeichert hast. Das Training nutzt standardmäßig nur geprüfte.</p>
+    </details>
+    <details><summary>Training mit diesem Datensatz</summary>
+      <div class="grid2">
+        <label>Ausgangsmodell<select id="m-profile" class="profile-select"></select></label>
+        <label>Epochen<input id="m-epochs" type="number" value="6"></label>
+        <label>Name des neuen Modells<input id="m-name"></label>
+        <label>KI-Masken verwenden<select id="m-aiuse"><option value="reviewed">nur geprüfte</option><option value="all">alle</option><option value="none">keine</option></select></label>
+      </div>
+      <button id="m-train" class="primary">Training starten</button>
+    </details>
+    <div id="m-msg"></div>
   </div>
 
   <!-- ===================================================== Probe -->
@@ -162,6 +199,10 @@
       <label>Kachelgröße Flächenmodus (px)<input id="s-cell" type="number"></label>
       <label>PV-Map-Adresse<input id="s-pmurl" placeholder="https://pv-map.solar"></label>
       <label>PV-Map-API-Token<input id="s-pmtoken" type="password" placeholder="pvm_…"></label>
+      <label>Anthropic-API-Schlüssel (Claude)<input id="s-anthkey" type="password" placeholder="sk-ant-…"></label>
+      <label>Claude-Modell<input id="s-anthmodel" placeholder="claude-sonnet-5-5"></label>
+      <label>OpenAI-API-Schlüssel (ChatGPT)<input id="s-oaikey" type="password" placeholder="sk-…"></label>
+      <label>ChatGPT-Modell<input id="s-oaimodel" placeholder="gpt-5.1"></label>
     </div>
     <h3>Größenklassen</h3>
     <p class="hint">Obergrenze in kWp (exklusiv). Leere Obergrenze = offen.</p>
@@ -177,6 +218,23 @@
 
 <section id="mapwrap">
   <div id="map"></div>
+  <div id="editor" class="hidden">
+    <div class="etool">
+      <div class="seg"><button data-tool="poly" class="on" title="Polygon (1)">⬠ Polygon</button><button data-tool="rect" title="Rechteck (2)">▭ Rechteck</button><button data-tool="rrect" title="Gedrehtes Rechteck (3): Kante mit zwei Klicks, dritter Klick für die Breite">◇ Gedreht</button></div>
+      <button id="e-model" title="Modellvorschlag (M)">Modell</button>
+      <button id="e-ai" title="KI-Vorschlag (K)">KI</button>
+      <button id="e-undo" title="Rückgängig (Strg+Z)">↶</button>
+      <button id="e-clear" title="Alle Flächen löschen">Leeren</button>
+      <span class="sp"></span>
+      <label class="check" title="Label umschalten (L)"><input type="checkbox" id="e-label"> PV vorhanden</label>
+      <button id="e-prev" title="Zurück (←)">←</button>
+      <button id="e-skip" title="Überspringen (X)">Überspringen</button>
+      <button id="e-save" class="primary" title="Speichern und weiter (Enter)">Speichern ↵</button>
+      <button id="e-next" title="Weiter ohne Speichern (→)">→</button>
+    </div>
+    <div id="e-wrap"><canvas id="e-canvas"></canvas></div>
+    <div id="e-info" class="einfo"></div>
+  </div>
   <div id="chipview" class="hidden"><button id="chipclose">×</button><img id="chipimg" alt=""><div id="chipcap"></div></div>
 </section>
 </main>

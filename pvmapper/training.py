@@ -36,7 +36,7 @@ from PIL import Image, ImageDraw
 from shapely.geometry import shape
 
 from . import config as cfgmod
-from . import geo, inference, models, runtime, sources
+from . import annotate, geo, inference, models, runtime, sources
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +121,8 @@ def build_dataset(job, cfg, feats, prof) -> list[dict]:
                 has_mask = True
         meta = {"id": bid, "name": name, "label": int(pr.get("label", 0)), "label_kind": pr.get("label_kind"),
                 "sub": pr.get("sub") or "?", "size_bin": pr.get("size_bin") or "?", "pv_kwp": pr.get("pv_kwp"),
-                "source": src.id, "has_mask": has_mask, "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy,
+                "source": src.id, "has_mask": has_mask, "mask_source": "pvmap" if has_mask else None,
+                "status": "open", "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy,
                                                                      win.width, win.height],
                 "val": is_val(bid, float(job.params.get("val_share", 0.25)))}
         with open(meta_path, "w", encoding="utf-8") as f:
@@ -366,24 +367,46 @@ def run(job, cfg: dict):
     random.seed(int(p.get("seed", 1)) if str(p.get("seed", 1)).isdigit() else 1)
     torch.manual_seed(1)
     base_id = p.get("profile") or cfg["profile"]
-    job.log(f"Lade Stichprobe ({'Datei' if p.get('labels_file') else 'PV-Map'}) …")
-    feats = load_sample(job, cfg)
-    kinds = collections.Counter(f["properties"]["label_kind"] for f in feats)
-    job.log(f"{len(feats)} Gebäude: " + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())))
-    if not feats:
-        raise RuntimeError("Die Stichprobe ist leer – Filter prüfen.")
-
     det = runtime.detector(cfg, base_id)
     prof = det.p
+    if p.get("dataset_from"):                                     # reuse a dataset (with masks drawn by users / AI)
+        from .jobs import Job
+        src = Job.load(cfg["jobs_dir"], p["dataset_from"])
+        ds_dir = annotate.ds_dir(src.dir)
+        ai_mode = p.get("ai_masks", "reviewed")
+        metas = []
+        for m in annotate.list_items(ds_dir):
+            if m.get("status") == "skip":
+                continue
+            m = dict(m, label=annotate.effective_label(m))
+            m["has_mask"] = annotate.usable_mask(m, ai_mode)
+            metas.append(m)
+        kinds = collections.Counter(m["label_kind"] for m in metas)
+        job.log(f"Datensatz aus Auftrag {src.id}: {len(metas)} Gebäude, "
+                f"{sum(1 for m in metas if m['has_mask'])} mit nutzbarer Maske (KI-Masken: {ai_mode}).")
+    else:
+        job.log(f"Lade Stichprobe ({'Datei' if p.get('labels_file') else 'PV-Map'}) …")
+        feats = load_sample(job, cfg)
+        kinds = collections.Counter(f["properties"]["label_kind"] for f in feats)
+        job.log(f"{len(feats)} Gebäude: " + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())))
+        if not feats:
+            raise RuntimeError("Die Stichprobe ist leer – Filter prüfen.")
+        job.log("Lade Luftbilder …")
+        metas = build_dataset(job, cfg, feats, prof)
+        ds_dir = os.path.join(job.dir, "dataset")
+        if p.get("prepare_only"):
+            job.counters["datensatz"] = len(metas)
+            job.log(f"Datensatz angelegt: {len(metas)} Gebäude, "
+                    f"{sum(1 for m in metas if m.get('has_mask'))} mit PV-Polygonen aus PV-Map. "
+                    "Jetzt im Reiter „Masken“ bearbeiten, danach Training mit diesem Datensatz starten.")
+            return
+
     # fresh copies of the networks: training must not change the cached base model
     import copy
     det = inference.Detector(prof, copy.deepcopy(det.cls), copy.deepcopy(det.seg), det.device,
                              cls_threshold=det.cls_threshold, seg_threshold=det.seg_threshold,
                              batch_size=det.batch_size, overlap=det.overlap)
 
-    job.log("Lade Luftbilder …")
-    metas = build_dataset(job, cfg, feats, prof)
-    ds_dir = os.path.join(job.dir, "dataset")
     val = [m for m in metas if m["val"]]
     train = [m for m in metas if not m["val"]]
     if len(val) < 10 or len({m["label"] for m in train}) < 2:

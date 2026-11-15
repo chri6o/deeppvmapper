@@ -137,6 +137,8 @@ def runner(kind: str):
         from .area_mode import run
     elif kind == "train":
         from .training import run
+    elif kind == "ai_masks":
+        from .ai_label import run
     else:
         raise ValueError(f"unknown job kind {kind}")
     return run
