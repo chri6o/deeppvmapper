@@ -39,7 +39,8 @@ DEFAULTS = {
     "anthropic_model": "claude-sonnet-5-5",
     "openai_api_key": "",             # AI mask suggestions (ChatGPT)
     "openai_model": "gpt-5.1",
-    "ai_masks": "reviewed",           # training uses AI masks: reviewed (default) | all | none
+    "ai_masks": "reviewed",
+    "ai_prompt_hint": "",             # extra instruction appended to the AI prompt (e.g. regional roof types)           # training uses AI masks: reviewed (default) | all | none
     "web_password": "",               # if set: the web UI asks for this password (any user name)
     "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",
 }

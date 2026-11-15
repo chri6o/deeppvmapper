@@ -313,7 +313,7 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwp": "kwp_per_m2", "#s-minarea": "min_pv_area_m2", "#s-buffer": "buffer_m", "#s-radius": "point_radius_m",
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
-  "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
+  "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
 function renderSettings() {
   const c = S.info.config, d = S.info.device;
   $("#s-device").innerHTML = `PyTorch ${esc(d.torch)} · Gerät <b>${esc(d.device)}</b>` +
