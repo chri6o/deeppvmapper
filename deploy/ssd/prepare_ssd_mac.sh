@@ -138,17 +138,13 @@ yaml_q() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/
   echo "      match: {name: \"en*\"}"
   echo "      dhcp4: true"
   echo "      optional: true"
-  if [ -n "${WIFI_SSID:-}" ]; then
-    echo "  wifis:"
-    echo "    alle-wlan:"
-    echo "      match: {name: \"wl*\"}"
-    echo "      dhcp4: true"
-    echo "      optional: true"
-    echo "      access-points:"
-    echo "        $(yaml_q "$WIFI_SSID"):"
-    echo "          password: $(yaml_q "${WIFI_PASSWORD:-}")"
-  fi
 } > "$TMP/netplan.yaml"
+# Wi-Fi: netplan needs the real interface name for wpa_supplicant (no 'match'), which is only known on the PC.
+# The credentials go to /etc/pvmapper/wifi; pvmapper-wifi.service writes the netplan file at every boot.
+{
+  echo "SSID=$(printf '%q' "${WIFI_SSID:-}")"
+  echo "PASSWORD=$(printf '%q' "${WIFI_PASSWORD:-}")"
+} > "$TMP/wifi"
 
 printf 'pvmapper:%s\n' "$LINUX_PASSWORD" > "$TMP/chpasswd"
 
@@ -156,6 +152,9 @@ F="$HERE/files"
 B_CONF="$(b64 "$TMP/pvmapper.yml")"
 B_NET="$(b64 "$TMP/netplan.yaml")"
 B_PW="$(b64 "$TMP/chpasswd")"
+B_WIFI="$(b64 "$TMP/wifi")"
+B_WSH="$(b64 "$F/pvmapper-wifi.sh")"
+B_WSV="$(b64 "$F/pvmapper-wifi.service")"
 B_FB="$(b64 "$F/pvmapper-firstboot.sh")"
 B_FBS="$(b64 "$F/pvmapper-firstboot.service")"
 B_SVC="$(b64 "$F/pvmapper.service")"
@@ -201,13 +200,19 @@ autoinstall:
     - rm -f /target/etc/netplan/*.yaml
     - echo $B_NET | base64 -d > /target/etc/netplan/90-pvmapper.yaml
     - chmod 600 /target/etc/netplan/90-pvmapper.yaml
+    - mkdir -p /target/etc/pvmapper
+    - echo $B_WIFI | base64 -d > /target/etc/pvmapper/wifi
+    - chmod 600 /target/etc/pvmapper/wifi
+    - echo $B_WSH | base64 -d > /target/usr/local/sbin/pvmapper-wifi
+    - chmod 755 /target/usr/local/sbin/pvmapper-wifi
+    - echo $B_WSV | base64 -d > /target/etc/systemd/system/pvmapper-wifi.service
     - echo $B_FB | base64 -d > /target/usr/local/sbin/pvmapper-firstboot
     - chmod 755 /target/usr/local/sbin/pvmapper-firstboot
     - echo $B_UPD | base64 -d > /target/usr/local/bin/pvmapper-update
     - chmod 755 /target/usr/local/bin/pvmapper-update
     - echo $B_FBS | base64 -d > /target/etc/systemd/system/pvmapper-firstboot.service
     - echo $B_SVC | base64 -d > /target/etc/systemd/system/pvmapper.service
-    - curtin in-target -- systemctl enable pvmapper-firstboot.service avahi-daemon.service
+    - curtin in-target -- systemctl enable pvmapper-firstboot.service avahi-daemon.service pvmapper-wifi.service
     - curtin in-target -- sh -c 'id pvmapper || useradd -m -s /bin/bash -G sudo pvmapper'
     - curtin in-target -- usermod -aG sudo,render,video pvmapper
     - echo $B_PW | base64 -d | chroot /target chpasswd
