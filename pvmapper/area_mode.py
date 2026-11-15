@@ -26,7 +26,7 @@ from shapely.strtree import STRtree
 
 from . import buildings as bld
 from . import config as cfgmod
-from . import geo, inference, runtime, sources
+from . import geo, inference, postproc, runtime, sources
 
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS cells (id TEXT PRIMARY KEY, status TEXT, source TEXT, "
@@ -153,6 +153,9 @@ def run(job, cfg: dict):
                 job.log(f"Zelle {cid}: {err[:160]}")
             continue
         r = det.run([(cid, img)])[cid]
+        # no footprints here: only the filters (contrast, dormer rows, rectangles), no colour completion
+        mask, _ = postproc.clean(img, r.mask, det.p.resolution_m, None, dict(cfg, postproc_complete=False))
+        r.mask = mask
         polys = inference.mask_to_polygons(r.mask, win)
         db.execute("BEGIN")
         db.execute("DELETE FROM polys WHERE cell=?", (cid,))

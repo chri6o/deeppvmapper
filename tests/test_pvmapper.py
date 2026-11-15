@@ -290,12 +290,18 @@ def test_annotation_ai_and_training_with_user_masks(tmp_path, monkeypatch):
     assert meta["has_mask"] and meta["mask_source"] == "user" and annotate.usable_mask(meta)
     assert annotate.effective_label(annotate.read_meta(d, neg[0]["name"])) == 1
     assert len(annotate.current_polygons(d, pos[0]["name"])) == 1
+    # "no PV" marks (a dormer-like square in a corner) on a positive and on a negative image
+    for m in (pos[1], neg[2]):
+        annotate.save_annotation(d, m["name"], None, negatives=[[[2, 2], [30, 2], [30, 30], [2, 30]]])
+    assert annotate.read_meta(d, neg[2]["name"])["has_neg"] and len(annotate.current_polygons(d, neg[2]["name"], "neg")) == 1
+    assert annotate.stats(annotate.list_items(d))["neg_marked"] == 2
 
     # AI suggestion (mocked Anthropic and OpenAI answers): candidates mode picks candidate 1
     class Resp:
         def __init__(self, j): self.status_code, self._j, self.text = 200, j, json.dumps(j)
         def json(self): return self._j
-    answer = json.dumps({"pv_visible": True, "confidence": 0.9, "pv_candidates": [1], "extra_polygons": [], "note": "panels"})
+    answer = json.dumps({"pv_visible": True, "confidence": 0.9, "candidates": {"1": "pv", "2": "dormer"},
+                         "extra_polygons": [], "note": "panels"})
     def fake_post(url, json=None, headers=None, timeout=None):
         if "anthropic" in url:
             assert json["messages"][0]["content"][0]["type"] == "image"
@@ -321,6 +327,8 @@ def test_annotation_ai_and_training_with_user_masks(tmp_path, monkeypatch):
     rep = json.load(open(os.path.join(tj.dir, "report.json"), encoding="utf-8"))
     assert rep["segmentation_trained"] and rep["n_masks_train"] <= 10
     assert rep["n_train"] + rep["n_val"] <= 39
+    assert any("„Kein PV“-Markierungen" in line for line in tj.log_lines)
+
 
 
 def test_web_password_gate(tmp_path):
@@ -383,3 +391,117 @@ def test_positives_only_dataset_gets_negatives_at_training(tmp_path, monkeypatch
     assert calls and calls[0][0] == 0 and calls[0][2] == {"cc": "DE", "sub": "Education"}
     rep = json.load(open(os.path.join(tj.dir, "report.json"), encoding="utf-8"))
     assert rep["n_train"] + rep["n_val"] == 60 and "neg_weak" in rep["sample"]
+
+
+# --------------------------------------------------------------- post-processing and cross-check
+
+def _roof(h=200, w=300, v=150):
+    img = np.full((h, w, 3), v, np.uint8)
+    clip = np.zeros((h, w), bool)
+    clip[10:190, 10:290] = True
+    return img, clip
+
+
+def test_postproc_removes_dormer_row_and_bright_blobs():
+    from pvmapper import postproc
+    img, clip = _roof()
+    mask = np.zeros(img.shape[:2], np.uint8)
+    for i in range(6):                                           # six small, darker, aligned blobs: dormers
+        x = 30 + i * 35
+        img[120:135, x:x + 12] = (110, 115, 125)
+        mask[120:135, x:x + 12] = 1
+    img[30:60, 30:70] = (160, 160, 160)                          # as bright as the roof, not bluer
+    mask[30:60, 30:70] = 1
+    out, info = postproc.clean(img, mask, 0.1, clip)
+    assert out.sum() == 0
+    reasons = {r for r, _ in info["removed"]}
+    assert "Reihe gleichartiger Dachaufbauten" in reasons and "kein Kontrast zum Dach" in reasons
+
+
+def test_postproc_completes_module_row_and_finds_lookalike():
+    from pvmapper import postproc
+    img, clip = _roof()
+    img[40:70, 30:200] = (40, 55, 90)                            # long module row
+    img[120:150, 60:130] = (40, 55, 90)                          # second field, missed by the model
+    img[50:60, 120:140] = (200, 205, 210)                        # glare inside the row
+    mask = np.zeros(img.shape[:2], np.uint8)
+    mask[40:70, 30:90] = 1                                       # model found only the left part
+    out, info = postproc.clean(img, mask, 0.1, clip)
+    assert out[40:70, 30:200].mean() > 0.95                      # row completed, glare hole filled
+    assert out[120:150, 60:130].mean() > 0.9                     # look-alike field added
+    assert out[:, 220:].sum() == 0 and info["added_m2"] > 30
+
+
+def test_postproc_keeps_field_on_roof_of_same_colour():
+    from pvmapper import postproc
+    img, clip = _roof(v=60)                                      # dark roof: no colour completion
+    img[40:70, 30:90] = (45, 50, 80)
+    mask = np.zeros(img.shape[:2], np.uint8)
+    mask[40:70, 30:90] = 1
+    out, _ = postproc.clean(img, mask, 0.1, clip)
+    assert abs(int(out.sum()) - 1800) < 300
+
+
+def test_fuse_with_second_image():
+    from pvmapper import postproc
+    a = np.zeros((100, 100), np.uint8)
+    a[10:30, 10:40] = 1                                          # field seen in both images
+    a[60:80, 60:80] = 1                                          # only in the first (shadow artefact)
+    b = np.zeros_like(a)
+    b[10:30, 10:70] = 1                                          # second image sees the whole row
+    out, st = postproc.fuse(a, b, 0.1)
+    assert st == "teilweise" and out[10:30, 10:70].all() and not out[60:80, 60:80].any()
+    out, st = postproc.fuse(a, np.zeros_like(a), 0.1)
+    assert st == "nur_aktuell" and out.sum() == a.sum()
+    assert postproc.fuse(a, None, 0.1)[1] == "ohne"
+
+
+def test_fetch_second_skips_identical_and_blank(monkeypatch):
+    cat = sources.Catalog()
+    src = cat.get("de-nw")
+    assert src.alt and all(cat.get(a).crs == src.crs for a in src.alt)
+    win = geo.window_around(box(7.1, 50.73, 7.1005, 50.7303), src.crs, 0.1, 3, 64)
+    prim = np.full((win.height, win.width, 3), 100, np.uint8)
+    answers = {src.alt[0]: prim.copy(), src.alt[1]: np.full_like(prim, 255), src.alt[2]: np.full_like(prim, 130)}
+    monkeypatch.setattr(sources.Source, "fetch", lambda self, w: answers[self.id])
+    img, s2 = sources.fetch_second(cat, src, win, prim)
+    assert s2.id == src.alt[2] and img.mean() == 130
+
+
+def test_building_job_with_cross_check(tmp_path, monkeypatch):
+    cx, cy = 13.40, 52.52
+    b1 = box(cx, cy, cx + 0.0003, cy + 0.0002)
+    inp = tmp_path / "in.geojson"
+    inp.write_text(json.dumps({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": b1.__geo_interface__, "properties": {"id": "x"}}]}))
+
+    class FakeSrc:
+        id = "fake"
+        alt = ["fake-old"]
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 90, np.uint8)
+        h, w = img.shape[:2]
+        img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    class Old:
+        id = "fake-old"
+
+    def fake_second(cat, src, win, prim):
+        img = prim.copy()
+        img[:, : img.shape[1] // 2] = 90                         # older image: left half of the field not built yet
+        return img, Old()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(sources, "fetch_second", fake_second)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), fetch_workers=1)
+    job = Job(cfg["jobs_dir"], "buildings", {"input": str(inp), "save_chips": "positive"})
+    job.run(lambda j: building_mode.run(j, cfg))
+    assert job.status == "done", job.error
+    assert job.counters["pv"] == 1 and job.counters["pruefung_bestaetigt"] == 1
+    import sqlite3
+    row = sqlite3.connect(os.path.join(job.dir, "results.sqlite")).execute('SELECT "check", source2 FROM results').fetchone()
+    assert row == ("bestaetigt", "fake-old")

@@ -41,13 +41,20 @@ PROVIDERS = {
 RULES = """What counts as PV: the MODULE FIELDS themselves – dark blue/black rectangular panels with a fine grid
 of cells, arranged in rows or blocks, often with thin gaps between rows. Mark ONLY these module surfaces.
 
-Do NOT mark: the roof outline or the whole roof, roof edges, the building footprint (YELLOW line), parapets,
-skylights, windows, roof hatches, ventilation units, gravel or dark bitumen roofing, shadows, green roofs,
-solar thermal tubes, cars or anything on the ground.
+Do NOT mark (common confusions – check each region against this list):
+- DORMERS: small gabled or flat structures on pitched roofs, usually several in a regular row, each with a lit and
+  a shaded side and a window; their dark roof surfaces look like panels but are NOT PV
+- roof windows / skylights / light domes / glass strips: single small dark or reflective rectangles, often in a
+  regular grid on flat roofs, usually ≤ 1.5 m wide
+- solar thermal collectors (few large panels with visible tubes or a different, more uniform surface)
+- the roof outline or the whole roof, roof edges, the building footprint (YELLOW line), parapets, roof hatches,
+  ventilation units, chimneys, gravel or dark bitumen/slate roofing, shadows, green roofs, cars, the ground
+- anything outside the YELLOW footprint
 
 A PV field usually covers only PART of a roof. A polygon that follows the roof or footprint outline is wrong.
 Draw tight polygons around each contiguous block of modules (one polygon per block; a rotated rectangle with
-4 corners is ideal for a regular block)."""
+4 corners is ideal for a regular block). Include the WHOLE block: panels in bright sunlight, with glare or in
+partial shade belong to the block, and so do the narrow gaps between the panels of a row."""
 
 PROMPT_CANDIDATES = """You see an orthophoto (aerial image, north up) of one building. Image size: {w}×{h} pixels,
 about {res} m per pixel. The building footprint is outlined in YELLOW. Candidate regions proposed by a detector
@@ -55,13 +62,13 @@ are outlined in CYAN and numbered.
 {expect}
 """ + RULES + """
 
-Task: list the numbers of candidates that lie ON PV modules and cover mostly modules. Reject candidates that
-cover the whole roof, roof edges or other objects. If PV modules are visible that no good candidate covers,
-add tight polygons around those modules in "extra_polygons" (pixel coordinates of this image, x right,
-y down). {hint}
+Task: classify EVERY numbered candidate as one of: "pv", "dormer", "skylight", "solar_thermal", "roof",
+"shadow", "other". Only "pv" candidates are kept. If PV modules are visible that no "pv" candidate covers
+(or only partly), add tight polygons around those whole blocks in "extra_polygons" (pixel coordinates of this
+image, x right, y down). {hint}
 
 Answer ONLY with JSON:
-{{"pv_visible": true|false, "confidence": 0.0-1.0, "pv_candidates": [numbers], "extra_polygons": [[[x,y],...],...], "note": "short"}}"""
+{{"pv_visible": true|false, "confidence": 0.0-1.0, "candidates": {{"1": "pv", "2": "dormer", ...}}, "extra_polygons": [[[x,y],...],...], "note": "short"}}"""
 
 PROMPT_POLYGONS = """You see an orthophoto (aerial image, north up) of one building. Image size: {w}×{h} pixels,
 about {res} m per pixel. The building footprint is outlined in YELLOW. A light grid with labels every 100 px
@@ -70,10 +77,11 @@ helps with coordinates (x to the right, y downwards, origin top-left).
 """ + RULES + """
 
 Task: return tight polygons around every block of PV modules on the outlined building, in pixel coordinates of
-this image. {hint}
+this image. Before answering, check every polygon against the list above (dormers and skylights are the most
+common mistakes) and label it; only "pv" polygons are used. {hint}
 
 Answer ONLY with JSON:
-{{"pv_visible": true|false, "confidence": 0.0-1.0, "polygons": [[[x,y],...],...], "note": "short"}}"""
+{{"pv_visible": true|false, "confidence": 0.0-1.0, "polygons": [{{"kind": "pv"|"dormer"|"skylight"|"solar_thermal"|"other", "points": [[x,y],...]}}, ...], "note": "short"}}"""
 
 
 class AIError(RuntimeError):
@@ -210,6 +218,18 @@ def _clean_polys(polys, scale, w, h, min_pts=3, off=(0, 0)):
     return out
 
 
+def _pv_only(polys):
+    """polygons may come as [[x,y],…] or {"kind": …, "points": [[x,y],…]}; keep PV only"""
+    out = []
+    for p in polys or []:
+        if isinstance(p, dict):
+            if str(p.get("kind", "pv")).lower() == "pv":
+                out.append(p.get("points") or [])
+        else:
+            out.append(p)
+    return out
+
+
 def _expect_text(meta, res_m, scale, kwp_per_m2):
     kwp = (meta or {}).get("pv_kwp")
     if not kwp:
@@ -235,7 +255,9 @@ def refine_to_modules(img: np.ndarray, polys: list, expect_px: float | None = No
         if m.sum() < 30:
             continue
         med = float(np.median(V[m]))
-        cand = (V < med * 0.85) & (blue > 4) & m
+        medb = float(np.median(blue[m]))
+        # darker than the polygon's median, or clearly bluer (modules in sunlight / with glare)
+        cand = (((V < med * 0.85) & (blue > 4)) | (blue > medb + 10)) & m
         cand = cv2.morphologyEx(cand.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
         cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
         share = cand.sum() / m.sum()
@@ -244,6 +266,27 @@ def refine_to_modules(img: np.ndarray, polys: list, expect_px: float | None = No
             ok = 0.4 * expect_px <= cand.sum() <= 2.5 * expect_px
         out += annotate.mask_to_px_polygons(cand, min_area=40, eps=1.5) if ok else [p]
     return out
+
+
+def _postprocess(img, polys, fp, res_m, expect_px, cfg):
+    """same rules as for the detector (postproc.py): footprint clip, dormer rows, contrast, completion of rows,
+    rectangles. Falls back to the AI polygons if the result is empty or implausible."""
+    if not polys or not (cfg or {}).get("postproc", True):
+        return polys
+    from . import postproc
+    h, w = img.shape[:2]
+    m = annotate.polygons_to_mask(polys, w, h)
+    clip = None
+    if fp:
+        clip = cv2.dilate(annotate.polygons_to_mask(fp, w, h),
+                          np.ones((2 * int(1.5 / res_m) + 1,) * 2, np.uint8)).astype(bool)
+    out, _ = postproc.clean(img, m, res_m, clip, cfg)
+    a = int(out.sum())
+    if a == 0:
+        return polys
+    if expect_px and not (0.3 * expect_px <= a <= 3 * expect_px) and abs(a - expect_px) > abs(int(m.sum()) - expect_px):
+        return polys                                     # further from the register size than before
+    return annotate.mask_to_px_polygons(out, min_area=40, eps=1.5)
 
 
 def _area_px(polys, w, h):
@@ -276,7 +319,9 @@ def label_item(cfg: dict, d: str, name: str, provider: str, mode: str = "candida
         ans, usage = ask(provider, key, model, PROMPT_CANDIDATES.format(
             w=int(w * scale), h=int(h * scale), res=round(resolution_m / scale, 3), expect=expect, hint=hint), jpeg)
         picked = []
-        for n in ans.get("pv_candidates") or []:
+        kinds = ans.get("candidates") if isinstance(ans.get("candidates"), dict) else {}
+        nums = [k for k, v in kinds.items() if str(v).lower() == "pv"] or ans.get("pv_candidates") or []
+        for n in nums:
             try:
                 i = int(n) - 1
             except (TypeError, ValueError):
@@ -291,9 +336,10 @@ def label_item(cfg: dict, d: str, name: str, provider: str, mode: str = "candida
         exp_px = exp_m2 / resolution_m ** 2 if exp_m2 else None
         ans, usage = ask(provider, key, model, PROMPT_POLYGONS.format(
             w=int(w * scale), h=int(h * scale), res=round(resolution_m / scale, 3), expect=expect, hint=hint), jpeg)
-        polys = refine_to_modules(img, _clean_polys(ans.get("polygons"), scale, w, h, off=off), exp_px)
+        polys = refine_to_modules(img, _clean_polys(_pv_only(ans.get("polygons")), scale, w, h, off=off), exp_px)
     if not ans.get("pv_visible"):
         polys = []
+    polys = _postprocess(img, polys, fp, resolution_m, exp_px, cfg)
     # plausibility: a mask covering (nearly) the whole footprint is a roof outline, not modules
     area = _area_px(polys, w, h)
     flag = None

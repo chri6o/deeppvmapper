@@ -5,6 +5,8 @@ A dataset is the `dataset/` folder of a training job (or of a "prepare only" job
   <name>.jpg        aerial image at the model resolution (footprint + buffer)
   <name>.fp.png     footprint mask
   <name>.mask.png   PV mask (optional) — from a PV-Map layer, drawn by a user, or suggested by AI
+  <name>.neg.png    "no PV" mask (optional) — confusers marked by a user (dormers, skylights, solar thermal …);
+                    training weights these pixels higher and uses them as hard negative patches
   <name>.json       meta: id, label, label_kind, sub, size_bin, pv_kwp, has_mask, mask_source,
                     status (open | done | skip), label_override, ai {provider, model, reviewed, …}
 
@@ -67,12 +69,13 @@ def effective_label(m) -> int:
 
 
 def stats(items) -> dict:
-    s = {"total": len(items), "open": 0, "done": 0, "skip": 0, "masks": 0, "masks_user": 0, "masks_ai": 0,
+    s = {"total": len(items), "neg_marked": 0, "open": 0, "done": 0, "skip": 0, "masks": 0, "masks_user": 0, "masks_ai": 0,
          "masks_ai_unreviewed": 0, "positive": 0, "positive_without_mask": 0}
     for m in items:
         s[m.get("status", "open")] = s.get(m.get("status", "open"), 0) + 1
         pos = effective_label(m) == 1
         s["positive"] += pos
+        s["neg_marked"] += bool(m.get("has_neg"))
         if m.get("has_mask"):
             s["masks"] += 1
             src = m.get("mask_source")
@@ -123,16 +126,27 @@ def footprint_polygons(d, name) -> list:
     return mask_to_px_polygons(fp, min_area=4, eps=1.0)
 
 
-def current_polygons(d, name) -> list:
-    p = os.path.join(d, name + ".mask.png")
+def current_polygons(d, name, kind: str = "mask") -> list:
+    p = os.path.join(d, f"{name}.{kind}.png")
     if not os.path.isfile(p):
         return []
     return mask_to_px_polygons(np.asarray(Image.open(p)) > 0)
 
 
-def save_annotation(d, name, polygons=None, label=None, status="done", source="user", ai=None) -> dict:
-    """Stores a mask (polygons; empty list removes it), an optional label correction and the status."""
+def save_annotation(d, name, polygons=None, label=None, status="done", source="user", ai=None,
+                    negatives=None) -> dict:
+    """Stores a mask (polygons; empty list removes it), optional 'no PV' regions, an optional label correction
+    and the status."""
     meta = read_meta(d, name)
+    if negatives is not None:
+        w, h = image_size(d, name)
+        n = polygons_to_mask(negatives, w, h)
+        path = os.path.join(d, name + ".neg.png")
+        if n.any():
+            Image.fromarray(n * 255).save(path)
+        elif os.path.isfile(path):
+            os.remove(path)
+        meta["has_neg"] = bool(n.any())
     if polygons is not None:
         w, h = image_size(d, name)
         m = polygons_to_mask(polygons, w, h)
@@ -182,3 +196,8 @@ def suggest_from_model(det, d, name, cls_threshold: float | None = None) -> dict
     finally:
         det.cls_threshold = old
     return {"polygons": mask_to_px_polygons(r.mask), "max_prob": round(r.max_prob, 3)}
+
+
+def neg_mask(d, name):
+    p = os.path.join(d, name + ".neg.png")
+    return (np.asarray(Image.open(p)) > 0) if os.path.isfile(p) else None

@@ -318,7 +318,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         m = annotate.read_meta(d, name)
         w, h = annotate.image_size(d, name)
         return {"meta": m, "width": w, "height": h, "footprint": annotate.footprint_polygons(d, name),
-                "polygons": annotate.current_polygons(d, name), "effective_label": annotate.effective_label(m)}
+                "polygons": annotate.current_polygons(d, name), "negatives": annotate.current_polygons(d, name, "neg"),
+                "effective_label": annotate.effective_label(m)}
 
     @app.get("/api/datasets/{jid}/items/{name}/image")
     def dataset_image(jid: str, name: str):
@@ -331,7 +332,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         st = body.get("status", "done")
         if st not in ("open", "done", "skip"):
             raise HTTPException(400, "status: open, done oder skip")
-        return annotate.save_annotation(d, name, body.get("polygons"), body.get("label"), st, "user")
+        return annotate.save_annotation(d, name, body.get("polygons"), body.get("label"), st, "user",
+                                        negatives=body.get("negatives"))
 
     @app.post("/api/datasets/{jid}/items/{name}/suggest")
     def dataset_suggest(jid: str, name: str, body: dict = Body(default={})):
@@ -447,14 +449,17 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             args.append(size_class)
         sql_where = (" WHERE " + " AND ".join(where)) if where else ""
         total = con.execute("SELECT count(*) FROM results" + sql_where, args).fetchone()[0]
+        from .. import building_mode
+        building_mode.ensure_columns(con)
         cur = con.execute(
             "SELECT id,status,pv_area_m2,kwp_est,size_class,in_range,max_prob,footprint_m2,source,lon,lat,"
-            "error,chip,footprint_wkt,pv_wkt FROM results" + sql_where +
+            'error,chip,footprint_wkt,pv_wkt,"check",source2,removed FROM results' + sql_where +
             " ORDER BY kwp_est DESC, rowid LIMIT ? OFFSET ?", args + [limit, offset])
         rows, feats = [], []
         for r in cur:
             d = dict(zip(["id", "status", "pv_area_m2", "kwp_est", "size_class", "in_range", "max_prob",
                           "footprint_m2", "source", "lon", "lat", "error", "chip"], r[:13]))
+            d.update(check=r[15], source2=r[16], removed=json.loads(r[17]) if r[17] else [])
             rows.append(d)
             if r[13]:
                 feats.append({"type": "Feature", "geometry": mapping(shp_wkt.loads(r[13])),

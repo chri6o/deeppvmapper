@@ -39,8 +39,12 @@ DEFAULTS = {
     "anthropic_model": "claude-sonnet-5-5",
     "openai_api_key": "",             # AI mask suggestions (ChatGPT)
     "openai_model": "gpt-5.1",
-    "ai_masks": "reviewed",
-    "ai_prompt_hint": "",             # extra instruction appended to the AI prompt (e.g. regional roof types)           # training uses AI masks: reviewed (default) | all | none
+    "ai_masks": "reviewed",           # training uses AI masks: reviewed (default) | all | none
+    "ai_prompt_hint": "",             # extra instruction appended to the AI prompt (e.g. regional roof types)
+    "seg_tta": True,                  # average segmentation over flipped images
+    "neighbor_factor": 0.5,           # in images with PV also segment patches scoring ≥ this × threshold
+    "cross_check": True,              # second aerial image (other year) as cross-check, where the source has one
+    "postproc": True,                 # mask post-processing (see pvmapper/postproc.py; postproc_* thresholds)
     "web_password": "",               # if set: the web UI asks for this password (any user name)
     "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",
 }

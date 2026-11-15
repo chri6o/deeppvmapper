@@ -47,7 +47,8 @@ class ImageResult:
 class Detector:
     def __init__(self, profile: Profile, cls_model, seg_model, device: str,
                  cls_threshold: float | None = None, seg_threshold: float | None = None,
-                 batch_size: int = 32, overlap: float = 0.25):
+                 batch_size: int = 32, overlap: float = 0.25, tta: bool = True,
+                 neighbor_factor: float = 0.5):
         self.p = profile
         self.cls = cls_model
         self.seg = seg_model
@@ -56,6 +57,8 @@ class Detector:
         self.seg_threshold = profile.seg_threshold if seg_threshold is None else seg_threshold
         self.batch_size = batch_size
         self.overlap = overlap
+        self.tta = tta                      # average segmentation over flips (less dependent on light direction)
+        self.neighbor_factor = neighbor_factor  # in images with PV, also segment patches scoring ≥ factor×threshold
         self.mean = torch.tensor(profile.norm_mean, device=device).view(1, 3, 1, 1)
         self.std = torch.tensor(profile.norm_std, device=device).view(1, 3, 1, 1)
 
@@ -95,8 +98,14 @@ class Detector:
 
     @torch.no_grad()
     def _segment(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.seg((x - self.mean) / self.std)["out"][:, 0]
-        return torch.sigmoid(out) >= self.seg_threshold
+        xn = (x - self.mean) / self.std
+        prob = torch.sigmoid(self.seg(xn)["out"][:, 0])
+        if self.tta:
+            # flips change where shadows and glare fall relative to the network's receptive field
+            prob = prob + torch.sigmoid(self.seg(xn.flip(-1))["out"][:, 0]).flip(-1)
+            prob = prob + torch.sigmoid(self.seg(xn.flip(-2))["out"][:, 0]).flip(-2)
+            prob = prob / 3
+        return prob >= self.seg_threshold
 
     # ------------------------------------------------------------------
 
@@ -118,24 +127,28 @@ class Detector:
                 patches.append(img[y:y + size, x:x + size])
 
         bs = self.batch_size
-        for b in range(0, len(patches), bs):
-            chunk = patches[b:b + bs]
-            meta = index[b:b + bs]
-            x = self._to_tensor(chunk)
+        probs = np.zeros(len(patches), np.float32)
+        for b in range(0, len(patches), bs):                     # pass 1: classify all patches
+            x = self._to_tensor(patches[b:b + bs])
             n = x.shape[0]
-            probs = self._classify(self._pad(x, bs)).float().cpu().numpy()[:n]
-            for (key, *_), p in zip(meta, probs):
+            probs[b:b + n] = self._classify(self._pad(x, bs)).float().cpu().numpy()[:n]
+        for (key, *_), p in zip(index, probs):
+            r = results[key]
+            r.max_prob = max(r.max_prob, float(p))
+        # pass 2: segment positive patches; in images with a positive patch also the borderline ones, so a
+        # module field reaching into a weaker neighbouring patch is segmented completely
+        low = self.cls_threshold * self.neighbor_factor if self.neighbor_factor else self.cls_threshold
+        sel = [i for i, (key, *_) in enumerate(index)
+               if probs[i] >= self.cls_threshold
+               or (probs[i] >= low and results[key].max_prob >= self.cls_threshold)]
+        for b in range(0, len(sel), bs):
+            ids = sel[b:b + bs]
+            x = self._to_tensor([patches[i] for i in ids])
+            masks = self._segment(self._pad(x, self._bucket(len(ids), bs))).cpu().numpy()[:len(ids)]
+            for i, m in zip(ids, masks):
+                key, px, py, h, w = index[i]
                 r = results[key]
-                r.max_prob = max(r.max_prob, float(p))
-            pos = np.where(probs >= self.cls_threshold)[0]
-            if len(pos) == 0:
-                continue
-            xp = x[torch.as_tensor(pos, device=x.device)]
-            masks = self._segment(self._pad(xp, self._bucket(len(pos), bs))).cpu().numpy()[:len(pos)]
-            for j, m in zip(pos, masks):
-                key, px, py, h, w = meta[j]
-                r = results[key]
-                r.n_positive += 1
+                r.n_positive += int(probs[i] >= self.cls_threshold)
                 hh, ww = min(size, h - py), min(size, w - px)
                 if hh <= 0 or ww <= 0:
                     continue

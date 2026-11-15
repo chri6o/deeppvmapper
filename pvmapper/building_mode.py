@@ -22,7 +22,7 @@ from shapely.ops import unary_union
 
 from . import buildings as bld
 from . import config as cfgmod
-from . import geo, inference, runtime, sources
+from . import geo, inference, postproc, runtime, sources
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS results (
@@ -33,7 +33,16 @@ CREATE TABLE IF NOT EXISTS results (
 )"""
 
 COLUMNS = ["id", "status", "has_pv", "pv_area_m2", "kwp_est", "size_class", "in_range",
-           "max_prob", "n_installations", "footprint_m2", "source", "lon", "lat", "error", "chip"]
+           "max_prob", "n_installations", "footprint_m2", "source", "lon", "lat", "error", "chip",
+           "check", "source2", "removed"]
+EXTRA = [("check", "TEXT"), ("source2", "TEXT"), ("removed", "TEXT")]     # added after the first release
+
+
+def ensure_columns(db):
+    have = {r[1] for r in db.execute("PRAGMA table_info(results)")}
+    for col, typ in EXTRA:
+        if have and col not in have:
+            db.execute(f'ALTER TABLE results ADD COLUMN "{col}" {typ}')
 
 
 def _footprint(b: bld.Building, cfg) -> tuple:
@@ -92,6 +101,7 @@ def run(job, cfg: dict):
     from .jobs import open_db
     db = open_db(os.path.join(job.dir, "results.sqlite"))
     db.execute(SCHEMA)
+    ensure_columns(db)
     done = {r[0] for r in db.execute("SELECT id FROM results WHERE status != 'fehler'")}
     db.execute("DELETE FROM results WHERE status = 'fehler'")
 
@@ -108,13 +118,21 @@ def run(job, cfg: dict):
     SENTINEL = object()
     buffer_m = float(cfg["buffer_m"])
 
+    cross = bool(p.get("cross_check", cfg.get("cross_check", True)))
+    pp_cfg = dict(cfg, **{k: p[k] for k in postproc.DEFAULTS if k in p})
+    job.log("Nachbearbeitung: " + ("an" if pp_cfg.get("postproc", True) else "aus")
+            + ", Gegenprobe mit zweitem Luftbild: " + ("an (wo vorhanden)" if cross else "aus"))
+
     def fetch(b):
         search, fp = _footprint(b, cfg)
         try:
             img, win, src = sources.fetch_for_geometry(
                 cat, search, prof.resolution_m, buffer_m if fp is not None else 0.0,
                 src_filter, min_px=prof.patch_px)
-            return b, search, fp, img, win, src, None
+            img2 = src2 = None
+            if cross and getattr(src, "alt", None):
+                img2, src2 = sources.fetch_second(cat, src, win, img)
+            return b, search, fp, img, win, (src, img2, src2), None
         except Exception as e:                                   # noqa: BLE001
             return b, search, fp, None, None, None, str(e)[:500]
 
@@ -140,8 +158,9 @@ def run(job, cfg: dict):
     t = threading.Thread(target=producer, daemon=True)
     t.start()
 
-    insert = ("INSERT OR REPLACE INTO results VALUES (" + ",".join("?" * 18) + ")")
     keys = COLUMNS + ["props", "footprint_wkt", "pv_wkt"]
+    insert = ("INSERT OR REPLACE INTO results (" + ",".join(f'"{k}"' for k in keys) + ") VALUES ("
+              + ",".join("?" * len(keys)) + ")")
     group, group_patches = [], 0
     target_patches = max(det.batch_size * 2, 16)
 
@@ -149,16 +168,27 @@ def run(job, cfg: dict):
         nonlocal group, group_patches
         if not group:
             return
-        res = det.run([(i, item[3]) for i, item in enumerate(group)])
+        items = [(i, item[3]) for i, item in enumerate(group)]
+        items += [((i, 2), item[5][1]) for i, item in enumerate(group) if item[5][1] is not None]
+        res = det.run(items)
         rows = []
-        for i, (b, search, fp, img, win, src, _) in enumerate(group):
+        for i, (b, search, fp, img, win, (src, img2, src2), _) in enumerate(group):
             r = res[i]
-            polys = inference.mask_to_polygons(r.mask, win)
+            clip = runtime.clip_mask(fp, win, img.shape) if fp is not None else None
+            mask, info = postproc.clean(img, r.mask, prof.resolution_m, clip, pp_cfg)
+            check = "ohne"
+            if img2 is not None:
+                mask2, _ = postproc.clean(img2, res[(i, 2)].mask, prof.resolution_m, clip, pp_cfg)
+                mask, check = postproc.fuse(mask, mask2, prof.resolution_m)
+            polys = inference.mask_to_polygons(mask, win)
             row = _summarise(b, polys, fp, search, win, src, r.max_prob, cfg)
+            row.update(check=check, source2=src2.id if src2 is not None else None,
+                       removed=json.dumps(info["removed"][:20], ensure_ascii=False) if info["removed"] else None)
+            job.counters["pruefung_" + check] += 1
             if chips_mode == "all" or (chips_mode == "positive" and row["has_pv"]):
                 name = runtime.safe_name(b.id) + ".jpg"
-                runtime.render_chip(img, r.mask, win, fp if fp is not None else search).save(
-                    os.path.join(chip_dir, name), quality=82)
+                runtime.render_chip(img, mask, win, fp if fp is not None else search,
+                                    second=img2).save(os.path.join(chip_dir, name), quality=82)
                 row["chip"] = name
             rows.append(tuple(row[k] for k in keys))
             job.counters[row["status"]] += 1
@@ -177,7 +207,7 @@ def run(job, cfg: dict):
         if err:
             c = search.centroid
             db.execute(insert, (b.id, "fehler", 0, None, None, "", 0, None, None, None, None,
-                                round(c.x, 7), round(c.y, 7), err, None,
+                                round(c.x, 7), round(c.y, 7), err, None, None, None, None,
                                 json.dumps(b.props, ensure_ascii=False),
                                 fp.wkt if fp is not None else None, None))
             job.counters["fehler"] += 1

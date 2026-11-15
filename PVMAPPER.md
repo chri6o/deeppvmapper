@@ -90,6 +90,32 @@ Masken landen als `dataset/<id>.mask.png`, die Herkunft steht in der zugehörige
 
 Einzeln geht das per Taste `K`, für viele Bilder über „KI-Masken für viele Bilder“ (als eigener Auftrag, mit Tokenzählung). KI-Masken sind **ungeprüft**, bis du sie im Editor speicherst. Das Training nutzt standardmäßig nur geprüfte, die Bewertung immer nur Register- und Meldungs-Labels. API-Schlüssel stehen im Klartext in `pvmapper.yml`; die Oberfläche zeigt sie nicht an.
 
+## Erkennungsqualität: Nachbearbeitung, Gegenprobe, Verwechsler
+
+Die Modelle markieren ohne Nachtraining oft Gauben, Dachfenster oder helle Dachelemente als PV und erfassen
+Modulreihen mit Reflexen oder Schatten nur teilweise. Drei Bausteine verbessern das (Einstellungen, alle an):
+
+- **Nachbearbeitung** (`pvmapper/postproc.py`): nur Flächen innerhalb des Gebäudeumrisses (+1,5 m) zählen.
+  Verworfen werden Flächen ohne Kontrast zum Dach (nicht dunkler und nicht blauer als die Umgebung) und Reihen
+  kleiner, gleichartiger Flecken ohne größeres Feld (Gauben, Lichtkuppeln). Erkannte Felder werden entlang
+  gleichfarbiger Pixel ergänzt, gleichfarbige rechteckige Felder auf demselben Dach (ab 4 m²) hinzugenommen,
+  Löcher durch Reflexe gefüllt und fast rechteckige Felder begradigt. Die Ergänzung greift nur, wenn sich die
+  Module farblich klar vom Dach abheben. Im Steckbrief steht unter „Verworfen“, was entfernt wurde.
+  Schwellen: `postproc_*` in `pvmapper.yml`.
+- **Gegenprobe mit zweitem Luftbild**: wo die Quelle ältere Jahrgänge hat (NRW 2022–2024, NL 2023–2025),
+  wird dasselbe Fenster aus einem anderen Jahrgang geladen und ebenfalls ausgewertet. Felder, die dort nicht
+  auftauchen, fallen weg (Schatten, Reflexe); Felder, die dort vollständiger zu sehen sind, werden ergänzt.
+  Zeigt das zweite Bild gar keine PV, bleibt das Ergebnis (evtl. neue Anlage) – Status „im Vergleichsbild keine
+  PV“. Die Vorschau zeigt rechts das Vergleichsbild. Kostet etwa die doppelte Ladezeit.
+- **Segmentierung mit gespiegelten Bildern** und Segmentierung auch der schwächeren Nachbar-Ausschnitte in
+  Bildern mit PV (`neighbor_factor`): vollständigere Reihen.
+
+Für das Training gibt es im Masken-Editor die Ebene **„Kein PV“** (Taste N): Gauben, Dachfenster, Solarthermie
+markieren. Das Training nutzt diese Stellen als harte Gegenbeispiele (Klassifikator) und gewichtet sie in der
+Segmentierung dreifach; Bilder nur mit „Kein PV“-Markierung werden ebenfalls verwendet. Zusätzlich variiert das
+Training Helligkeit, Gamma, Schattenbänder und Reflexe. Die KI-Masken prüfen jede Fläche gegen eine Liste
+typischer Verwechsler und durchlaufen dieselbe Nachbearbeitung.
+
 ## Kommandozeile
 
 ```bash

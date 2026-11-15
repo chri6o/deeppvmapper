@@ -1,4 +1,6 @@
 // PV-Mapper web UI — plain JS, Leaflet for the map.
+const CHECK_TXT = { bestaetigt: "bestätigt", teilweise: "teilweise bestätigt", nicht_bestaetigt: "nicht bestätigt – verworfen",
+  nur_aktuell: "im Vergleichsbild keine PV (evtl. neue Anlage)", nur_zweitbild: "nur im Vergleichsbild", keine_pv: "keine PV" };
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const fmt = (n, d = 0) => (n == null ? "–" : Number(n).toLocaleString("de-DE", { maximumFractionDigits: d, minimumFractionDigits: d }));
@@ -281,7 +283,9 @@ function showBuilding(id) {
   map.setView([r.lat, r.lon], 19);
   if (r.chip) {
     $("#chipimg").src = `/api/jobs/${S.job}/chips/${encodeURIComponent(r.chip)}`;
-    $("#chipcap").innerHTML = `<b>${esc(r.id)}</b> · ${r.status} · ${fmt(r.pv_area_m2, 1)} m² · ≈ ${fmt(r.kwp_est, 1)} kWp · Klasse ${r.size_class || "–"} · Score ${fmt(r.max_prob, 2)} · ${r.source}`;
+    $("#chipcap").innerHTML = `<b>${esc(r.id)}</b> · ${r.status} · ${fmt(r.pv_area_m2, 1)} m² · ≈ ${fmt(r.kwp_est, 1)} kWp · Klasse ${r.size_class || "–"} · Score ${fmt(r.max_prob, 2)} · ${r.source}` +
+      (r.check && r.check !== "ohne" ? `<br>Gegenprobe ${esc(r.source2 || "")}: ${esc(CHECK_TXT[r.check] || r.check)}` : "") +
+      (r.removed && r.removed.length ? `<br><span class="muted">Verworfen: ${r.removed.map((x) => `${esc(x[0])} ${fmt(x[1], 1)} m²`).join(", ")}</span>` : "");
     $("#chipview").classList.remove("hidden");
   }
 }
@@ -314,12 +318,14 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
   "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
+const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-tta": "seg_tta" };
 function renderSettings() {
   const c = S.info.config, d = S.info.device;
   $("#s-device").innerHTML = `PyTorch ${esc(d.torch)} · Gerät <b>${esc(d.device)}</b>` +
     (d.gpu ? ` · ${esc(d.gpu)} (${d.backend.toUpperCase()}, ${d.vram_gb} GB)` : " · keine GPU erkannt – läuft auf der CPU (langsam)") +
     `<br><span class="hint">Konfiguration: ${esc(S.info.config_path)}</span>`;
   for (const [sel, k] of Object.entries(SET)) $(sel).value = c[k] ?? "";
+  for (const [sel, k] of Object.entries(SET_BOOL)) $(sel).value = c[k] === false ? "false" : "true";
   renderClasses(c.size_classes || []);
 }
 function renderClasses(list) {
@@ -340,6 +346,9 @@ $("#s-save").onclick = async () => {
     const v = $(sel).value.trim(), num = $(sel).type === "number";
     body[k] = v === "" ? null : num ? Number(v) : v;
   }
+  for (const [sel, k] of Object.entries(SET_BOOL)) {
+    body[k] = $(sel).value === "true";
+  }
   const cls = readClasses().sort((a, b) => (a.max ?? Infinity) - (b.max ?? Infinity));
   body.size_classes = cls;
   try { await api("/api/config", { json: body }); S.info = await api("/api/info"); renderSettings(); $("#s-msg").innerHTML = `<div class="info">Gespeichert.</div>`; }
@@ -356,7 +365,8 @@ function info(sel, html, err = false) { const el = $(sel); el.innerHTML = html; 
 init().catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<div class="info err">${esc(e.message)}</div>`); });
 
 // ================================================================== datasets & mask editor
-const M = { ds: null, items: [], list: [], idx: -1, item: null, img: null, polys: [], hist: [], cur: [], tool: "poly",
+// M.polys is always the layer being edited; M.other the other one (layer "pv" or "neg" = confusers such as dormers)
+const M = { ds: null, items: [], list: [], idx: -1, item: null, img: null, polys: [], other: [], layer: "pv", hist: [], cur: [], tool: "poly",
   sel: -1, view: { s: 1, x: 0, y: 0 }, drag: null, rect: null, label: 1, dirty: false };
 const SRC = { user: "von Hand", ai: "KI", pvmap: "PV-Map", model: "Modell" };
 
@@ -382,7 +392,7 @@ async function openDataset(id) {
 }
 function renderStats(s) {
   $("#m-stats").innerHTML = [[s.total, "Bilder"], [s.positive, "mit PV (Label)"], [s.positive_without_mask, "PV ohne Maske"],
-    [s.masks_user, "Masken von Hand"], [s.masks_ai_unreviewed, "KI ungeprüft"], [s.done, "fertig"]]
+    [s.masks_user, "Masken von Hand"], [s.masks_ai_unreviewed, "KI ungeprüft"], [s.neg_marked || 0, "mit „Kein PV“-Markierung"], [s.done, "fertig"]]
     .map(([b, t]) => `<div class="stat"><b>${fmt(b)}</b><span>${t}</span></div>`).join("");
 }
 function matches(m) {
@@ -412,7 +422,8 @@ async function openItem(i) {
   M.idx = i; const m = M.list[i];
   const d = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`);
   M.item = { ...m, ...d.meta, width: d.width, height: d.height, footprint: d.footprint };
-  M.polys = d.polygons; M.hist = []; M.cur = []; M.sel = -1; M.label = d.effective_label; M.dirty = false;
+  M.polys = d.polygons; M.other = d.negatives || []; M.layer = "pv"; setLayerButtons();
+  M.hist = []; M.cur = []; M.sel = -1; M.label = d.effective_label; M.dirty = false;
   $("#e-label").checked = !!M.label;
   M.img = new Image();
   M.img.onload = () => { showEditor(true); fitView(); draw(); };
@@ -424,11 +435,11 @@ function info2(extra = "") {
   const m = M.item; if (!m) return;
   const ai = m.ai ? ` · KI (${esc(m.ai.provider)}/${esc(m.ai.mode)}): ${m.ai.pv_visible ? "PV" : "keine PV"}${m.ai.confidence != null ? ", Sicherheit " + fmt(m.ai.confidence, 2) : ""}${m.ai.reviewed ? ", geprüft" : ", <b>ungeprüft</b>"}${m.ai.note ? " – " + esc(m.ai.note) : ""}` : "";
   $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · Fläche ${fmt(areaM2(), 1)} m²${ai}${extra ? " · " + extra : ""}
-    <span class="hint" style="color:#8f9bb3"> · 1 Polygon · 2 Rechteck · 3 gedreht (Kante + Breite) · Doppelklick/Enter schließt · Entf löscht Auswahl · Mausrad zoomt, Leertaste+Ziehen verschiebt</span>`;
+    <span class="hint" style="color:#8f9bb3"> · ${M.layer === "neg" ? "<b>Ebene „Kein PV“</b> (Gauben, Fenster …) · " : ""}N wechselt PV/Kein PV · 1 Polygon · 2 Rechteck · 3 gedreht (Kante + Breite) · Doppelklick/Enter schließt · Entf löscht Auswahl · Mausrad zoomt, Leertaste+Ziehen verschiebt</span>`;
 }
 function areaM2() {
   const res = (S.info.profiles.find((p) => p.id === (M.dsProfile || S.info.config.profile)) || { resolution_m: 0.1 }).resolution_m;
-  let a = 0; for (const p of M.polys) { let s = 0; for (let i = 0; i < p.length; i++) { const [x1, y1] = p[i], [x2, y2] = p[(i + 1) % p.length]; s += x1 * y2 - x2 * y1; } a += Math.abs(s) / 2; }
+  let a = 0; for (const p of pvPolys()) { let s = 0; for (let i = 0; i < p.length; i++) { const [x1, y1] = p[i], [x2, y2] = p[(i + 1) % p.length]; s += x1 * y2 - x2 * y1; } a += Math.abs(s) / 2; }
   return a * res * res;
 }
 function fitCanvas() { const r = cv.getBoundingClientRect(); cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio; }
@@ -446,7 +457,11 @@ function draw() {
   const lw = 2 * devicePixelRatio;
   cx.lineWidth = lw; cx.strokeStyle = "#ffdc00"; cx.setLineDash([6, 4]); M.item.footprint.forEach((p) => { path(p); cx.stroke(); }); cx.setLineDash([]);
   const ai = M.item.mask_source === "ai" && !(M.item.ai && M.item.ai.reviewed);
-  M.polys.forEach((p, i) => { path(p); cx.fillStyle = ai ? "rgba(140,90,255,.35)" : "rgba(230,30,60,.35)"; cx.fill(); cx.strokeStyle = i === M.sel ? "#fff" : (ai ? "#a78bfa" : "#ff3b5c"); cx.lineWidth = i === M.sel ? lw * 1.8 : lw; cx.stroke(); });
+  const negs = M.layer === "neg" ? M.polys : M.other, pvs = M.layer === "pv" ? M.polys : M.other;
+  negs.forEach((p, i) => { path(p); cx.fillStyle = "rgba(0,200,255,.18)"; cx.fill(); cx.setLineDash([4, 3]);
+    cx.strokeStyle = M.layer === "neg" && i === M.sel ? "#fff" : "#38d6ff"; cx.lineWidth = M.layer === "neg" ? lw * 1.4 : lw * 0.8; cx.stroke(); cx.setLineDash([]); });
+  if (M.layer === "neg") { cx.globalAlpha = 0.45; pvs.forEach((p) => { path(p); cx.strokeStyle = "#ff3b5c"; cx.lineWidth = lw; cx.stroke(); }); cx.globalAlpha = 1; }
+  else M.polys.forEach((p, i) => { path(p); cx.fillStyle = ai ? "rgba(140,90,255,.35)" : "rgba(230,30,60,.35)"; cx.fill(); cx.strokeStyle = i === M.sel ? "#fff" : (ai ? "#a78bfa" : "#ff3b5c"); cx.lineWidth = i === M.sel ? lw * 1.8 : lw; cx.stroke(); });
   if (M.cur.length) { path(M.cur, false); cx.strokeStyle = "#00e5ff"; cx.lineWidth = lw; cx.stroke(); M.cur.forEach((q) => { const [x, y] = toScreen(q); cx.fillStyle = "#00e5ff"; cx.fillRect(x - 3, y - 3, 6, 6); }); }
   if (M.rect) { const [a, b] = M.rect; path([a, [b[0], a[1]], b, [a[0], b[1]]]); cx.strokeStyle = "#00e5ff"; cx.stroke(); }
   if (M.tool === "rrect" && M.cur.length && M.hover) {
@@ -454,6 +469,15 @@ function draw() {
     path(pv, M.cur.length === 2); cx.strokeStyle = "#00e5ff"; cx.lineWidth = 2 * devicePixelRatio; cx.stroke();
   }
 }
+function setLayerButtons() { $("#e-layer-pv").classList.toggle("on", M.layer === "pv"); $("#e-layer-neg").classList.toggle("on", M.layer === "neg"); }
+function setLayer(l) {
+  if (l === M.layer) return;
+  if (M.cur.length >= 3) closePoly();
+  [M.polys, M.other] = [M.other, M.polys]; M.layer = l; M.hist = []; M.cur = []; M.sel = -1; setLayerButtons(); draw(); info2();
+}
+$("#e-layer-pv").onclick = () => setLayer("pv");
+$("#e-layer-neg").onclick = () => setLayer("neg");
+const pvPolys = () => M.layer === "pv" ? M.polys : M.other, negPolys = () => M.layer === "neg" ? M.polys : M.other;
 function push() { M.hist.push(JSON.stringify(M.polys)); if (M.hist.length > 50) M.hist.shift(); M.dirty = true; }
 function undo() { if (M.cur.length) { M.cur.pop(); } else if (M.hist.length) { M.polys = JSON.parse(M.hist.pop()); } draw(); info2(); }
 function closePoly() { if (M.cur.length >= 3) { push(); M.polys.push(M.cur.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10])); } M.cur = []; draw(); info2(); }
@@ -513,14 +537,14 @@ async function saveItem(status) {
   const m = M.item; if (!m) return;
   if (M.cur.length >= 3) closePoly();
   try {
-    const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: M.polys, label: M.label, status } });
+    const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), label: M.label, status } });
     const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
     const keepList = M.list; renderStats(computeStats()); M.list = keepList;
     openItem(M.idx + 1);
   } catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); }
 }
 function computeStats() {
-  const s = { total: M.items.length, positive: 0, positive_without_mask: 0, masks_user: 0, masks_ai_unreviewed: 0, done: 0 };
+  const s = { total: M.items.length, neg_marked: M.items.filter((m) => m.has_neg).length, positive: 0, positive_without_mask: 0, masks_user: 0, masks_ai_unreviewed: 0, done: 0 };
   for (const m of M.items) { const pos = m.effective_label === 1; s.positive += pos; if (m.status === "done") s.done++;
     if (m.has_mask && m.mask_source === "user") s.masks_user++; if (m.has_mask && m.mask_source === "ai" && !(m.ai && m.ai.reviewed)) s.masks_ai_unreviewed++;
     if (pos && !m.has_mask && m.status !== "skip") s.positive_without_mask++; }
@@ -531,7 +555,7 @@ async function suggest(provider) {
   info2(provider ? "frage KI …" : "Modell rechnet …");
   try {
     const d = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/suggest`, { json: provider ? { provider, mode: $("#m-mode").value } : { cls_threshold: 0.3 } });
-    push(); M.polys = d.polygons;
+    setLayer("pv"); push(); M.polys = d.polygons;
     draw();
     info2(provider ? `KI: ${d.pv_visible ? "PV sichtbar" : "keine PV"} (${fmt(d.confidence, 2)}) ${esc(d.note || "")} – prüfen und speichern` : `Modellvorschlag (Score ${fmt(d.max_prob, 2)}) – prüfen und speichern`);
   } catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); }
@@ -548,6 +572,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "Backspace") { undo(); e.preventDefault(); }
   else if (k === "ArrowRight") openItem(M.idx + 1);
   else if (k === "ArrowLeft") openItem(M.idx - 1);
+  else if (k.toLowerCase() === "n") setLayer(M.layer === "pv" ? "neg" : "pv");
   else if (k === "1") setTool("poly");
   else if (k === "2") setTool("rect");
   else if (k === "3") setTool("rrect");

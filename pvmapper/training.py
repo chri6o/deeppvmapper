@@ -28,6 +28,7 @@ import random
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
@@ -157,6 +158,13 @@ def load_arrays(ds_dir, meta):
     return img, fp, mask
 
 
+def load_neg(ds_dir, meta):
+    if not meta.get("has_neg"):
+        return None
+    p = os.path.join(meta.get("_dir") or ds_dir, meta["name"] + ".neg.png")
+    return (np.asarray(Image.open(p)) > 0) if os.path.isfile(p) else None
+
+
 # ---------------------------------------------------------------------------
 # 4./8. evaluation
 # ---------------------------------------------------------------------------
@@ -246,8 +254,34 @@ def tune_threshold(metas, scores, min_px):
 # 6. training
 # ---------------------------------------------------------------------------
 
+def _photometric(x: torch.Tensor) -> torch.Tensor:
+    """lighting variation (geometry unchanged, so it can be used for segmentation too): brightness, contrast,
+    gamma, a soft shadow band and occasional glare spots – aerial images differ in sun position, season and
+    camera, and PV fields with glare or shade were the main source of incomplete masks."""
+    n, _, h, w = x.shape
+    b = 1 + (random.random() - 0.5) * 0.4
+    c = 1 + (random.random() - 0.5) * 0.4
+    mean = x.mean(dim=(1, 2, 3), keepdim=True)
+    x = ((x - mean) * c + mean * b).clamp(0, 1)
+    if random.random() < 0.5:
+        x = x.clamp_min(1e-4) ** (2 ** ((random.random() - 0.5) * 0.8))        # gamma 0.76–1.32
+    if random.random() < 0.3:                                                   # shadow band
+        yy = torch.linspace(-1, 1, h, device=x.device).view(1, 1, h, 1)
+        xx = torch.linspace(-1, 1, w, device=x.device).view(1, 1, 1, w)
+        a = random.random() * 3.1416
+        d = (xx * np.cos(a) + yy * np.sin(a)) - (random.random() - 0.5)
+        x = x * (1 - 0.45 * torch.sigmoid(-d * 12))
+    if random.random() < 0.25:                                                  # glare spot
+        yy = torch.arange(h, device=x.device).view(1, 1, h, 1).float()
+        xx = torch.arange(w, device=x.device).view(1, 1, 1, w).float()
+        cy, cx_, r = random.random() * h, random.random() * w, (0.03 + random.random() * 0.08) * w
+        g = torch.exp(-((yy - cy) ** 2 + (xx - cx_) ** 2) / (2 * r * r))
+        x = x + 0.6 * g * (1 - x)
+    return x.clamp(0, 1)
+
+
 def _augment(x: torch.Tensor) -> torch.Tensor:
-    """x: (N,3,H,W) in [0,1] — flips, 90° rotations, brightness/contrast jitter"""
+    """x: (N,3,H,W) in [0,1] — flips, 90° rotations and lighting variation"""
     if random.random() < 0.5:
         x = x.flip(-1)
     if random.random() < 0.5:
@@ -255,10 +289,27 @@ def _augment(x: torch.Tensor) -> torch.Tensor:
     k = random.randint(0, 3)
     if k:
         x = torch.rot90(x, k, (-2, -1))
-    b = 1 + (random.random() - 0.5) * 0.3
-    c = 1 + (random.random() - 0.5) * 0.3
-    mean = x.mean(dim=(1, 2, 3), keepdim=True)
-    return ((x - mean) * c + mean * b).clamp(0, 1)
+    return _photometric(x)
+
+
+def _hard_negative_patches(img, neg, mask, size, k=2):
+    """patches centred on regions marked 'no PV' (dormers, skylights …) that contain no PV pixels"""
+    if neg is None or not neg.any():
+        return []
+    h, w = img.shape[:2]
+    n, lab, st, cen = cv2.connectedComponentsWithStats(neg.astype(np.uint8))
+    order = sorted(range(1, n), key=lambda i: -st[i, 4])[:k]
+    out = []
+    for i in order:
+        cx_, cy = cen[i]
+        x0 = int(min(max(cx_ - size / 2, 0), max(w - size, 0)))
+        y0 = int(min(max(cy - size / 2, 0), max(h - size, 0)))
+        if mask is not None and mask[y0:y0 + size, x0:x0 + size].any():
+            continue
+        p = img[y0:y0 + size, x0:x0 + size]
+        if p.shape[0] == size and p.shape[1] == size:
+            out.append(p)
+    return out
 
 
 def _patches_for(det, img, fp, mask, max_k, size):
@@ -285,7 +336,10 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
     pos = [m for m in train if m["label"] == 1]
     neg = [m for m in train if m["label"] == 0]
     job.log(f"Training Klassifikator: {len(pos)} positiv, {len(neg)} negativ, {epochs} Epochen")
-    cache = {}
+    cache, hard = {}, {}
+    n_hard = sum(1 for m in train if m.get("has_neg"))
+    if n_hard:
+        job.log(f"{n_hard} Gebäude mit „Kein PV“-Markierungen (Gauben, Fenster …) – als harte Gegenbeispiele")
     for ep in range(epochs):
         model.train()
         for mod in model.modules():                               # keep BatchNorm statistics of the base model
@@ -300,6 +354,8 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
                 img, fp, mask = load_arrays(ds_dir, m)
                 cache[m["id"]] = np.stack([img[y:y + size, x:x + size]
                                            for x, y in _patches_for(det, img, fp, mask, max_patches, size)])
+                hp = _hard_negative_patches(img, load_neg(ds_dir, m), mask, size)
+                hard[m["id"]] = np.stack(hp) if hp else None
             x = det._to_tensor(list(cache[m["id"]]))
             x = _augment(x)
             if x.shape[-1] != det.p.cls_input_px:
@@ -314,6 +370,14 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
             # balance classes
             wgt *= (len(train) / (2 * max(1, len(pos)))) if m["label"] == 1 else (len(train) / (2 * max(1, len(neg))))
             loss = F.binary_cross_entropy_with_logits(z, y) * wgt
+            if hard.get(m["id"]) is not None:                    # marked confusers must score "no PV"
+                xh = _augment(det._to_tensor(list(hard[m["id"]])))
+                if xh.shape[-1] != det.p.cls_input_px:
+                    xh = F.interpolate(xh, size=(det.p.cls_input_px,) * 2, mode="bilinear", align_corners=False)
+                lh = model((xh - det.mean) / det.std)
+                lh = lh[0] if isinstance(lh, tuple) else lh
+                zh = lh[:, 1] - lh[:, 0] if det.p.cls_outputs == 2 else lh[:, 0]
+                loss = loss + 1.5 * F.binary_cross_entropy_with_logits(zh.max(), torch.zeros((), device=zh.device))
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -326,8 +390,10 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
         prm.requires_grad = False
 
 
-def train_segmenter(job, det, ds_dir, train, epochs, lr):
-    with_mask = [m for m in train if m.get("has_mask")]
+def train_segmenter(job, det, ds_dir, train, epochs, lr, neg_weight: float = 3.0):
+    """Fine-tunes the segmentation head on drawn/AI/PV-Map masks. Pixels marked 'no PV' (dormers, skylights …)
+    get `neg_weight`; images with only 'no PV' marks (no PV mask) are trained on those pixels alone."""
+    with_mask = [m for m in train if m.get("has_mask") or m.get("has_neg")]
     model = det.seg
     size = det.p.patch_px
     for name, prm in model.named_parameters():
@@ -344,15 +410,27 @@ def train_segmenter(job, det, ds_dir, train, epochs, lr):
         for m in with_mask:
             job.check_cancel()
             img, fp, mask = load_arrays(ds_dir, m)
-            for x0, y0 in _patches_for(det, img, fp, mask, 2, size):
+            neg = load_neg(ds_dir, m)
+            known = mask is not None
+            if mask is None:
+                mask = np.zeros(img.shape[:2], bool)
+            wmap = np.full(img.shape[:2], 1.0 if known else 0.0, np.float32)
+            if neg is not None:
+                wmap[neg & ~mask] = neg_weight
+            spots = _patches_for(det, img, fp, mask if known else neg, 2, size)
+            for x0, y0 in spots:
+                if not wmap[y0:y0 + size, x0:x0 + size].any():
+                    continue
                 xi = det._to_tensor([img[y0:y0 + size, x0:x0 + size]])
                 yi = torch.from_numpy(mask[y0:y0 + size, x0:x0 + size].astype(np.float32))[None, None].to(xi.device)
+                wi = torch.from_numpy(wmap[y0:y0 + size, x0:x0 + size])[None, None].to(xi.device)
                 if random.random() < 0.5:
-                    xi, yi = xi.flip(-1), yi.flip(-1)
+                    xi, yi, wi = xi.flip(-1), yi.flip(-1), wi.flip(-1)
                 if random.random() < 0.5:
-                    xi, yi = xi.flip(-2), yi.flip(-2)
+                    xi, yi, wi = xi.flip(-2), yi.flip(-2), wi.flip(-2)
+                xi = _photometric(xi)
                 out = model((xi - det.mean) / det.std)["out"]
-                loss = F.binary_cross_entropy_with_logits(out, yi)
+                loss = (F.binary_cross_entropy_with_logits(out, yi, reduction="none") * wi).sum() / wi.sum().clamp_min(1)
                 opt.zero_grad()
                 loss.backward()
                 opt.step()

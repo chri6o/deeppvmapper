@@ -78,6 +78,7 @@ class Source:
     enabled: bool = True
     extra_params: dict = field(default_factory=dict)
     notes: str = ""
+    alt: list = field(default_factory=list)   # other flights/years of the same area, for the cross-check
 
     def __post_init__(self):
         self._sem = threading.Semaphore(max(1, int(self.concurrency)))
@@ -243,7 +244,7 @@ class Catalog:
 
     def as_dicts(self):
         keys = ("id", "name", "country", "region", "type", "native_resolution_m", "license",
-                "attribution", "bbox", "priority", "enabled", "notes")
+                "attribution", "bbox", "priority", "enabled", "notes", "alt")
         return [{k: getattr(s, k) for k in keys} for s in self.sources.values()]
 
 
@@ -274,3 +275,24 @@ def fetch_for_geometry(catalog: Catalog, geom_wgs84, resolution_m: float, buffer
             return img, win, src
         errors.append(f"{src.id}: no coverage (blank image)")
     raise SourceError("; ".join(errors))
+
+
+def fetch_second(catalog: Catalog, src: Source, win: geo.Window, primary: np.ndarray,
+                 max_blank: float = 0.5, min_diff: float = 6.0):
+    """Second image of the same window from another flight/year (`alt` of the source), for the cross-check.
+    Skips blank answers and images identical to the primary one (the 'current' layer often equals the latest
+    year). Returns (rgb, source) or (None, None)."""
+    for sid in src.alt or []:
+        alt = catalog.sources.get(sid)
+        if alt is None or not alt.enabled or alt.crs != win.crs:
+            continue
+        try:
+            img = alt.fetch(win)
+        except Exception:                                        # noqa: BLE001
+            continue
+        if img.shape != primary.shape or blank_fraction(img) > max_blank:
+            continue
+        if float(np.abs(img.astype(np.int16) - primary.astype(np.int16)).mean()) < min_diff:
+            continue
+        return img, alt
+    return None, None

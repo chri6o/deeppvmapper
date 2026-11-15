@@ -31,6 +31,52 @@ sources:
     license: dl-de/zero-2.0
     attribution: "© Geobasis NRW"
     priority: 10
+    alt: [de-nw-2024, de-nw-2023, de-nw-2022]
+
+  de-nw-2024:
+    name: "DE · Nordrhein-Westfalen · DOP 2024 (Geobasis NRW, historisch)"
+    country: DE
+    region: Nordrhein-Westfalen
+    type: wms
+    url: https://www.wms.nrw.de/geobasis/wms_nw_hist_dop
+    layers: nw_hist_dop_2024
+    crs: EPSG:25832
+    native_resolution_m: 0.1
+    bbox: [5.86, 50.32, 9.46, 52.53]
+    license: dl-de/zero-2.0
+    attribution: "© Geobasis NRW"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe; deckt je Jahrgang nur einen Teil des Landes ab"
+
+  de-nw-2023:
+    name: "DE · Nordrhein-Westfalen · DOP 2023 (Geobasis NRW, historisch)"
+    country: DE
+    region: Nordrhein-Westfalen
+    type: wms
+    url: https://www.wms.nrw.de/geobasis/wms_nw_hist_dop
+    layers: nw_hist_dop_2023
+    crs: EPSG:25832
+    native_resolution_m: 0.1
+    bbox: [5.86, 50.32, 9.46, 52.53]
+    license: dl-de/zero-2.0
+    attribution: "© Geobasis NRW"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe; deckt je Jahrgang nur einen Teil des Landes ab"
+
+  de-nw-2022:
+    name: "DE · Nordrhein-Westfalen · DOP 2022 (Geobasis NRW, historisch)"
+    country: DE
+    region: Nordrhein-Westfalen
+    type: wms
+    url: https://www.wms.nrw.de/geobasis/wms_nw_hist_dop
+    layers: nw_hist_dop_2022
+    crs: EPSG:25832
+    native_resolution_m: 0.1
+    bbox: [5.86, 50.32, 9.46, 52.53]
+    license: dl-de/zero-2.0
+    attribution: "© Geobasis NRW"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe; deckt je Jahrgang nur einen Teil des Landes ab"
 
   de-bb:
     name: "DE · Berlin/Brandenburg · DOP20c (LGB)"
@@ -257,6 +303,52 @@ sources:
     license: CC BY 4.0
     attribution: "© Beeldmateriaal Nederland / PDOK"
     priority: 10
+    alt: [nl-pdok-hr-2025, nl-pdok-hr-2024, nl-pdok-hr-2023]
+
+  nl-pdok-hr-2025:
+    name: "NL · PDOK Luchtfoto 2025 HR (8 cm)"
+    country: NL
+    region: Nederland
+    type: wms
+    url: https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0
+    layers: 2025_orthoHR
+    crs: EPSG:28992
+    native_resolution_m: 0.08
+    bbox: [3.17, 50.75, 7.23, 53.56]
+    license: CC BY 4.0
+    attribution: "© Beeldmateriaal Nederland / PDOK"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe"
+
+  nl-pdok-hr-2024:
+    name: "NL · PDOK Luchtfoto 2024 HR (8 cm)"
+    country: NL
+    region: Nederland
+    type: wms
+    url: https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0
+    layers: 2024_orthoHR
+    crs: EPSG:28992
+    native_resolution_m: 0.08
+    bbox: [3.17, 50.75, 7.23, 53.56]
+    license: CC BY 4.0
+    attribution: "© Beeldmateriaal Nederland / PDOK"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe"
+
+  nl-pdok-hr-2023:
+    name: "NL · PDOK Luchtfoto 2023 HR (8 cm)"
+    country: NL
+    region: Nederland
+    type: wms
+    url: https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0
+    layers: 2023_orthoHR
+    crs: EPSG:28992
+    native_resolution_m: 0.08
+    bbox: [3.17, 50.75, 7.23, 53.56]
+    license: CC BY 4.0
+    attribution: "© Beeldmateriaal Nederland / PDOK"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe"
 
   nl-pdok-25:
     name: "NL · PDOK Luchtfoto actueel 25 cm"
