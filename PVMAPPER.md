@@ -26,7 +26,7 @@ Das Skript installiert PyTorch für ROCm (die ROCm-Laufzeitbibliotheken sind in 
 
 ## Eigener PC als PV-Mapper-Server (SSD am Mac vorbereiten)
 
-`deploy/ssd/prepare_ssd_mac.sh` richtet eine externe SSD am Mac als fertiges Boot-Laufwerk ein:
+`deploy/ssd/prepare_ssd_mac.sh` richtet eine externe SSD am Mac als fertiges Boot-Laufwerk ein. Empfohlen ist `./prepare_ssd_mac.sh --usb-stick`: Das Skript schreibt einen Ubuntu-Installationsstick und legt die Konfiguration auf die SSD. Am PC vom Stick starten, einmal `yes` tippen, und der PC installiert in 10–20 Minuten selbst auf die SSD. Das braucht Stick, Monitor und Tastatur. Ohne Option installiert das Skript in einer virtuellen Maschine auf dem Mac; auf Apple Silicon ist das sehr langsam.
 
 1. **Am Mac:** SSD anschließen, Terminal öffnen.
    ```bash

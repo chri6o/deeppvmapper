@@ -11,7 +11,9 @@
 #      die Modelle (10–30 Min.); den Fortschritt zeigt  http://pvmapper.local:8765  im Browser.
 #
 # Aufruf (im Terminal auf dem Mac, SSD angeschlossen):
-#   cd deploy/ssd && ./prepare_ssd_mac.sh
+#   cd deploy/ssd && ./prepare_ssd_mac.sh               Installation in einer VM auf dem Mac (langsam auf Apple Silicon)
+#   cd deploy/ssd && ./prepare_ssd_mac.sh --usb-stick   empfohlen: Installations-Stick erzeugen, der PC installiert
+#                                                       selbst auf die SSD (schnell; braucht Stick, Monitor, Tastatur)
 # Optional vorab Zugangsdaten in  pvmapper-ssd.conf  eintragen (Vorlage: pvmapper-ssd.conf.example),
 # sonst fragt das Skript nach.
 #
@@ -32,18 +34,22 @@ b64()  { base64 < "$1" | tr -d '\n'; }
 b64s() { printf '%s' "$1" | base64 | tr -d '\n'; }
 
 RENDER_ONLY="${PVMAPPER_SSD_RENDER_ONLY:-}"     # tests: only write the seed files, no download/disk/VM
+MODE=vm                                          # vm: install in QEMU on the Mac | stick: USB installer stick for the PC
+[ "${1:-}" = "--usb-stick" ] && MODE=stick
 [ -n "$RENDER_ONLY" ] || [ "$(uname)" = "Darwin" ] || die "Dieses Skript ist für macOS."
 
 if [ -z "$RENDER_ONLY" ]; then
 # ----------------------------------------------------------------------------- 1. Werkzeuge
 say "Prüfe Werkzeuge"
 command -v brew >/dev/null || die "Homebrew fehlt. Installation: https://brew.sh – danach Skript erneut starten."
+if [ "$MODE" = vm ]; then
 command -v qemu-system-x86_64 >/dev/null || { echo "Installiere QEMU (brew install qemu) …"; brew install qemu; }
 QEMU_SHARE="$(brew --prefix qemu)/share/qemu"
 OVMF_CODE="$QEMU_SHARE/edk2-x86_64-code.fd"
 OVMF_VARS_TEMPLATE="$QEMU_SHARE/edk2-i386-vars.fd"
 [ -f "$OVMF_CODE" ] || die "UEFI-Firmware nicht gefunden: $OVMF_CODE"
 QEMU_BIN="$(command -v qemu-system-x86_64)"
+fi
 fi
 
 # ----------------------------------------------------------------------------- 2. Zugangsdaten
@@ -93,12 +99,14 @@ if [ ! -f "$ISO" ] || [ "$(shasum -a 256 "$ISO" | cut -d' ' -f1)" != "$SUM" ]; t
 fi
 echo "OK: $ISO_NAME"
 
+if [ "$MODE" = vm ]; then
 say "Hole Kernel und Initrd aus dem ISO"
 KDIR="$WORK/kernel"; rm -rf "$KDIR"; mkdir -p "$KDIR"
 KERNEL_PATH="$(tar -tf "$ISO" | grep -E '^(\./)?casper/(hwe-)?vmlinuz$' | sort | head -1)"
 INITRD_PATH="${KERNEL_PATH/vmlinuz/initrd}"
 [ -n "$KERNEL_PATH" ] || die "Kernel im ISO nicht gefunden"
 tar -xf "$ISO" -C "$KDIR" "$KERNEL_PATH" "$INITRD_PATH" || die "Kernel/Initrd nicht entpackbar"
+fi
 fi
 
 # ----------------------------------------------------------------------------- 4. Autoinstall-Konfiguration
@@ -172,7 +180,7 @@ autoinstall:
     ethernets:
       vmnet: {match: {name: "en*"}, dhcp4: true}
   storage:
-    layout: {name: direct}
+    layout: {name: direct, match: {size: largest}}
   identity:
     hostname: $PC_HOSTNAME
     username: pvmapper
@@ -216,6 +224,63 @@ if [ -n "$RENDER_ONLY" ]; then echo "Seed geschrieben: $SEED"; rm -rf "$TMP"; ex
 rm -f "$WORK/seed.iso"
 hdiutil makehybrid -quiet -iso -joliet -default-volume-name cidata -o "$WORK/seed.iso" "$SEED" || die "seed.iso nicht erstellbar"
 
+pick_disk() {      # pick_disk VAR "Frage"
+  local d
+  read -r -p "$2 (z. B. disk4): " d
+  d="${d#/dev/}"
+  [[ "$d" =~ ^disk[0-9]+$ ]] || die "Ungültige Angabe: $d"
+  diskutil info "/dev/$d" | grep -E "Device / Media Name|Disk Size|Protocol" || die "Laufwerk $d nicht gefunden"
+  if diskutil info "/dev/$d" | grep -qE "Internal: +Yes"; then die "/dev/$d ist ein internes Laufwerk – abgebrochen."; fi
+  eval "$1=\$d"
+}
+
+if [ "$MODE" = stick ]; then
+# ----------------------------------------------------------------------------- 5b. Installations-Stick + SSD mit Konfiguration
+say "Externe Laufwerke"
+diskutil list external physical || true
+echo
+pick_disk STICK "Welches Laufwerk ist der USB-STICK (wird zum Ubuntu-Installer, ab 4 GB)?"
+echo
+pick_disk DISK "Welches Laufwerk ist die SSD (Ziel; erhält vorerst nur die Konfiguration)?"
+[ "$STICK" != "$DISK" ] || die "Stick und SSD müssen verschiedene Laufwerke sein."
+echo
+echo "ACHTUNG: Alle Daten auf /dev/$STICK (Stick) und /dev/$DISK (SSD) werden gelöscht."
+read -r -p "Zum Fortfahren LÖSCHEN eintippen: " OK
+[ "$OK" = "LÖSCHEN" ] || [ "$OK" = "LOESCHEN" ] || die "abgebrochen"
+sudo -v || die "sudo abgelehnt"
+
+say "Schreibe Ubuntu auf den Stick (/dev/$STICK)"
+diskutil unmountDisk force "/dev/$STICK" >/dev/null 2>&1 || true
+sudo dd if="$ISO" of="/dev/r$STICK" bs=4m status=progress 2>/dev/null || sudo dd if="$ISO" of="/dev/r$STICK" bs=4m \
+  || die "Schreiben auf den Stick fehlgeschlagen (Festplattenvollzugriff für Terminal erteilt?)"
+sync
+diskutil eject "/dev/$STICK" >/dev/null 2>&1 || true
+
+say "Lege die Konfiguration auf die SSD (/dev/$DISK, Volume CIDATA)"
+diskutil eraseDisk FAT32 CIDATA GPT "/dev/$DISK" >/dev/null || die "SSD konnte nicht formatiert werden"
+VOL="/Volumes/CIDATA"
+for i in 1 2 3 4 5; do [ -d "$VOL" ] && break; sleep 1; done
+[ -d "$VOL" ] || die "Volume CIDATA nicht eingebunden"
+cp "$SEED/user-data" "$SEED/meta-data" "$VOL/" || die "Konfiguration nicht kopierbar"
+sync
+diskutil eject "/dev/$DISK" >/dev/null 2>&1 || true
+rm -rf "$TMP"
+say "Fertig – jetzt am PC"
+cat <<EOT
+
+  1. Stick UND SSD an den PC stecken (USB 3, hinten), Netzwerkkabel, Monitor und Tastatur anschließen.
+     Weitere eingebaute Festplatten im PC vorher abklemmen – installiert wird auf das größte Laufwerk.
+  2. Einschalten und im Boot-Menü (F11 MSI/ASRock, F8 ASUS, F12 Gigabyte) den STICK wählen
+     ("UEFI: …"), dann "Try or Install Ubuntu Server".
+  3. Nach 1–2 Minuten fragt der Installer:  Continue with autoinstall? (yes|no)  →  yes  + Enter
+     Danach läuft alles allein (ca. 10–20 Minuten); der PC schaltet sich am Ende aus.
+  4. Stick abziehen, PC einschalten – er startet von der SSD.
+  5. Am Mac:  http://$PC_HOSTNAME.local:8765  (zuerst Einrichtungsseite, 10–30 Min., dann PV-Mapper)
+
+EOT
+exit 0
+fi
+
 # ----------------------------------------------------------------------------- 5. SSD auswählen
 say "Externe Laufwerke"
 diskutil list external physical || true
@@ -254,7 +319,7 @@ sudo caffeinate -i "$QEMU_BIN" \
   -machine q35 "${ACCEL[@]}" -smp "$NCPU" -m 6144 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,file="$WORK/ovmf-vars.fd" \
-  -drive file="/dev/r$DISK",format=raw,if=virtio \
+  -drive file="/dev/$DISK",format=raw,if=virtio,cache=writethrough \
   -drive file="$ISO",media=cdrom,readonly=on \
   -drive file="$WORK/seed.iso",media=cdrom,readonly=on \
   -kernel "$KDIR/$KERNEL_PATH" -initrd "$KDIR/$INITRD_PATH" \
