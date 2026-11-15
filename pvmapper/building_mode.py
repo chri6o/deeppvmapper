@@ -61,7 +61,8 @@ def _summarise(b, polys, footprint, search, win, src, prob, cfg):
     merged = unary_union(kept) if kept else None
     area = merged.area if merged is not None else 0.0
     parts = [] if merged is None else list(getattr(merged, "geoms", [merged]))
-    n_inst = len(unary_union([p.buffer(1.0) for p in parts]).geoms) if len(parts) > 1 else len(parts)
+    # unary_union returns a single Polygon when the buffered parts touch
+    n_inst = len(getattr(u := unary_union([p.buffer(1.0) for p in parts]), "geoms", [u])) if len(parts) > 1 else len(parts)
     has_pv = area >= float(cfg["min_pv_area_m2"])
     kwp = round(area * float(cfg["kwp_per_m2"]), 1) if has_pv else 0.0
     return {
