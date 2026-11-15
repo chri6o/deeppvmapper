@@ -92,6 +92,11 @@
         <select id="jd-status"><option value="">alle</option><option value="pv" selected>mit PV</option><option value="kein_pv">ohne PV</option><option value="fehler">Fehler</option></select>
         <select id="jd-class"><option value="">alle Größen</option></select>
         <button id="jd-reload" class="secondary">Aktualisieren</button>
+        <span class="sp"></span>
+        <span id="jd-selinfo" class="hint"></span>
+        <button id="jd-selrand" class="secondary" title="Zufällige Auswahl aus der angezeigten Liste">Zufällig wählen</button>
+        <input id="jd-seln" type="number" value="40" min="1" style="width:5em" title="Anzahl">
+        <button id="jd-todataset" class="primary" title="Ausgewählte Gebäude als Trainingsdatensatz anlegen und im Reiter „Masken“ prüfen">Als Trainingsdatensatz →</button>
       </div>
       <div id="jd-report"></div>
       <div class="tablewrap"><table id="jd-table"></table></div>
@@ -139,7 +144,7 @@
     <div id="m-stats" class="stats"></div>
     <div class="row filters2">
       <select id="m-filter">
-        <option value="todo">PV ohne Maske</option><option value="ai">KI ungeprüft</option><option value="open">offen</option>
+        <option value="todo">PV ohne Maske</option><option value="det">Erkennung ungeprüft</option><option value="ai">KI ungeprüft</option><option value="open">offen</option>
         <option value="done">fertig</option><option value="skip">übersprungen</option><option value="mask">mit Maske</option>
         <option value="neg">keine PV (Label)</option><option value="all">alle</option></select>
       <select id="m-sub"><option value="">alle Arten</option></select>

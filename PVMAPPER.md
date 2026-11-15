@@ -117,6 +117,15 @@ Segmentierung dreifach; Bilder nur mit „Kein PV“-Markierung werden ebenfalls
 Training Helligkeit, Gamma, Schattenbänder und Reflexe. Die KI-Masken prüfen jede Fläche gegen eine Liste
 typischer Verwechsler und durchlaufen dieselbe Nachbearbeitung.
 
+### Erkennungen als Trainingsbeispiele
+
+In den Ergebnissen von „Gebäude prüfen“ lassen sich Gebäude anhaken (oder „Zufällig wählen“, z. B. 40) und mit
+**„Als Trainingsdatensatz →“** übernehmen. Die Luftbilder werden geladen, die erkannten PV-Flächen sind als
+Vorschlag eingezeichnet (Quelle „Erkennung ?“). Im Reiter **Masken** (Filter „Erkennung ungeprüft“) jede Maske
+korrigieren und mit Enter speichern; Fehltreffer mit „PV vorhanden“ (L) zum Gegenbeispiel machen und Gauben o. Ä.
+auf der Ebene „Kein PV“ markieren. Ins Training gehen nur gespeicherte (geprüfte) Bilder; Gegenbeispiele lädt das
+Training bei Bedarf aus PV-Map nach.
+
 ## Kommandozeile
 
 ```bash

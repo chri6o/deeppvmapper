@@ -359,6 +359,13 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")
+        if kind == "train" and params.get("from_job"):
+            src = _job(params["from_job"])
+            if src.kind != "buildings":
+                raise HTTPException(400, "Nur Ergebnisse von „Gebäude prüfen“ lassen sich übernehmen.")
+            params.setdefault("profile", src.params.get("profile"))
+            params.setdefault("sources", src.params.get("sources"))
+            params["prepare_only"] = True
         if kind == "area":
             try:
                 params["estimate"] = area_mode.estimate(params, cfg())

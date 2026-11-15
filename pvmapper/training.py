@@ -56,6 +56,8 @@ def load_sample(job, cfg) -> list[dict]:
             pr.setdefault("size_bin", "?")
             pr.setdefault("sub", pr.get("sub") or "?")
         return feats
+    if p.get("from_job"):
+        return _from_check_job(job, cfg)
     from . import pvmap
     cl = pvmap.Client.from_config(cfg)
     flt = {k: p.get(k) for k in pvmap.FILTER_KEYS if p.get(k)}
@@ -73,6 +75,39 @@ def load_sample(job, cfg) -> list[dict]:
         lo = float(p["min_kwp"])
         feats = [f for f in feats if f["properties"]["label_kind"].startswith("neg")
                  or (f["properties"].get("pv_kwp") or 0) >= lo]
+    return feats
+
+
+def _from_check_job(job, cfg) -> list[dict]:
+    """buildings selected in the results of a 'check buildings' job → dataset items to review in the mask editor.
+    The detected PV polygons are a *suggestion* (mask_source 'model', not used for training until a user saves the
+    image); detected PV = label 1 (label_kind det_pv), no PV = label 0 (det_none). The user corrects the label
+    for false positives; training uses these items only once they are marked done."""
+    import sqlite3
+    from .jobs import Job
+    src = Job.load(cfg["jobs_dir"], job.params["from_job"])
+    ids = [str(i) for i in job.params.get("ids") or []]
+    con = sqlite3.connect(os.path.join(src.dir, "results.sqlite"))
+    q = "SELECT id,status,kwp_est,size_class,props,footprint_wkt,pv_wkt,lon,lat FROM results WHERE status != 'fehler'"
+    rows = con.execute(q).fetchall()
+    con.close()
+    if ids:
+        want = set(ids)
+        rows = [r for r in rows if str(r[0]) in want]
+    from shapely import wkt as shp_wkt
+    from shapely.geometry import Point, mapping
+    feats = []
+    for bid, status, kwp, size_class, props, fp_wkt, pv_wkt, lon, lat in rows:
+        pr = json.loads(props or "{}")
+        geom = mapping(shp_wkt.loads(fp_wkt)) if fp_wkt else mapping(Point(lon, lat))
+        pos = status == "pv"
+        feats.append({"type": "Feature", "id": bid, "geometry": geom, "properties": {
+            "id": bid, "label": int(pos), "label_kind": "det_pv" if pos else "det_none",
+            "sub": pr.get("sub") or "?", "size_bin": size_class or ("none" if not pos else "?"),
+            "pv_kwp": pr.get("pv_kwp"), "kwp_detected": kwp,
+            "pv_geometry": mapping(shp_wkt.loads(pv_wkt)) if pv_wkt else None, "mask_source": "model"}})
+    job.log(f"{len(feats)} Gebäude aus Prüfauftrag {src.id} übernommen "
+            f"({sum(f['properties']['label'] for f in feats)} mit erkannter PV).")
     return feats
 
 
@@ -129,7 +164,9 @@ def build_dataset(job, cfg, feats, prof) -> list[dict]:
                 has_mask = True
         meta = {"id": bid, "name": name, "label": int(pr.get("label", 0)), "label_kind": pr.get("label_kind"),
                 "sub": pr.get("sub") or "?", "size_bin": pr.get("size_bin") or "?", "pv_kwp": pr.get("pv_kwp"),
-                "source": src.id, "has_mask": has_mask, "mask_source": "pvmap" if has_mask else None,
+                "source": src.id, "has_mask": has_mask,
+                "mask_source": (pr.get("mask_source") or "pvmap") if has_mask else None,
+                "kwp_detected": pr.get("kwp_detected"),
                 "status": "open", "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy,
                                                                      win.width, win.height],
                 "val": is_val(bid, float(job.params.get("val_share", 0.25)))}
@@ -221,7 +258,7 @@ def metrics(metas, pred, px_area_m2):
         return {"n": len(rows), "tp": tp, "fp": fp, "fn": fn, "tn": tn,
                 "precision": _r(prec), "recall": _r(rec), "f1": _r(f1)}
     rows = [(m, pred[m["id"]]) for m in metas if m["id"] in pred]
-    strong = [r for r in rows if r[0]["label_kind"] in ("pos_high", "neg_high", "pos_medium")]
+    strong = [r for r in rows if r[0]["label_kind"] in ("pos_high", "neg_high", "pos_medium", "det_pv", "det_none")]
     out = {"alle": block(rows), "nur_sichere_labels": block(strong), "nach_label": {}, "nach_art": {}, "nach_groesse": {}}
     for key, fn in (("nach_label", lambda m: m["label_kind"]), ("nach_art", lambda m: m["sub"]),
                     ("nach_groesse", lambda m: m["size_bin"])):
@@ -463,8 +500,12 @@ def run(job, cfg: dict):
         ds_dir = annotate.ds_dir(src.dir)
         ai_mode = p.get("ai_masks", "reviewed")
         metas = []
+        n_unreviewed = 0
         for m in annotate.list_items(ds_dir):
             if m.get("status") == "skip":
+                continue
+            if str(m.get("label_kind") or "").startswith("det_") and m.get("status") != "done":
+                n_unreviewed += 1                                # detector output must be checked by a person
                 continue
             m = dict(m, label=annotate.effective_label(m))
             m["has_mask"] = annotate.usable_mask(m, ai_mode)
@@ -486,6 +527,11 @@ def run(job, cfg: dict):
             for m in neg_metas:
                 m["_dir"] = own
             metas += neg_metas
+        if n_unreviewed:
+            job.log(f"{n_unreviewed} übernommene Erkennungen noch nicht geprüft – bleiben außen vor "
+                    "(im Masken-Editor speichern = geprüft).")
+        if not any(m["label"] == 1 for m in metas):
+            raise RuntimeError("Keine geprüften PV-Beispiele im Datensatz – erst im Reiter „Masken“ prüfen und speichern.")
         kinds = collections.Counter(m["label_kind"] for m in metas)
         job.log(f"Datensatz aus Auftrag {src.id}: {len(metas)} Gebäude, "
                 f"{sum(1 for m in metas if m['has_mask'])} mit nutzbarer Maske (KI-Masken: {ai_mode}).")
@@ -506,7 +552,8 @@ def run(job, cfg: dict):
         if p.get("prepare_only"):
             job.counters["datensatz"] = len(metas)
             job.log(f"Datensatz angelegt: {len(metas)} Gebäude, "
-                    f"{sum(1 for m in metas if m.get('has_mask'))} mit PV-Polygonen aus PV-Map. "
+                    f"{sum(1 for m in metas if m.get('has_mask'))} mit PV-Polygonen"
+                    f"{' (Vorschlag der Erkennung)' if p.get('from_job') else ' aus PV-Map'}. "
                     "Jetzt im Reiter „Masken“ bearbeiten, danach Training mit diesem Datensatz starten.")
             return
 

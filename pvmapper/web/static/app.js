@@ -140,7 +140,7 @@ function trainParams() {
     labels_file: $("#t-file").value.trim() || null, use_medium_positives: !$("#t-secure").checked,
     min_kwp: +$("#t-minkwp").value || null };
 }
-const LBL = { pos_high: "PV sicher", pos_medium: "PV wahrscheinlich", neg_high: "keine PV (gemeldet)", neg_weak: "keine PV bekannt" };
+const LBL = { det_pv: "erkannt: PV (geprüft)", det_none: "erkannt: keine PV (geprüft)", pos_high: "PV sicher", pos_medium: "PV wahrscheinlich", neg_high: "keine PV (gemeldet)", neg_weak: "keine PV bekannt" };
 $("#t-strata").onclick = async () => {
   $("#t-out").innerHTML = `<div class="info">Frage PV-Map ab …</div>`;
   try {
@@ -245,6 +245,7 @@ async function refreshJob(withResults) {
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
   $("#jd-status").classList.toggle("hidden", j.kind !== "buildings");
   $$(".filters").forEach((x) => x.classList.toggle("hidden", j.kind === "train" || j.kind === "ai_masks"));
+  ["#jd-selrand", "#jd-seln", "#jd-todataset", "#jd-selinfo"].forEach((q) => $(q).classList.toggle("hidden", j.kind !== "buildings"));
   if (j.kind === "train" || j.kind === "ai_masks") { $("#jd-table").innerHTML = ""; if (j.kind === "train" && (withResults || j.status === "done")) showReport(j.id); else $("#jd-report").innerHTML = ""; }
   else { $("#jd-report").innerHTML = ""; if (withResults || (j.status !== S.lastStatus && j.status === "done")) loadResults(); }
   S.lastStatus = j.status;
@@ -292,11 +293,29 @@ async function loadResults() {
     return;
   }
   S.rows = Object.fromEntries(d.rows.map((r) => [r.id, r]));
-  t.innerHTML = `<tr><th>ID</th><th>Status</th><th>PV m²</th><th>kWp</th><th>Klasse</th><th>Score</th><th>Quelle</th></tr>` +
-    d.rows.map((r) => `<tr class="click" data-id="${esc(r.id)}"><td>${esc(r.id)}</td><td>${r.status}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td>${r.size_class || ""}</td><td class="num">${fmt(r.max_prob, 2)}</td><td>${r.source || esc((r.error || "").slice(0, 40))}</td></tr>`).join("") +
-    (d.total > d.rows.length ? `<tr><td colspan="7" class="hint">${fmt(d.rows.length)} von ${fmt(d.total)} angezeigt – vollständige Liste in buildings.csv</td></tr>` : "");
-  $$("#jd-table tr.click").forEach((tr) => tr.onclick = () => showBuilding(tr.dataset.id));
+  S.sel = S.selJob === S.job ? (S.sel || new Set()) : new Set(); S.selJob = S.job;
+  t.innerHTML = `<tr><th><input type="checkbox" id="jd-selall" title="alle angezeigten"></th><th>ID</th><th>Status</th><th>PV m²</th><th>kWp</th><th>Klasse</th><th>Score</th><th>Quelle</th></tr>` +
+    d.rows.map((r) => `<tr class="click" data-id="${esc(r.id)}"><td><input type="checkbox" class="jd-sel" data-id="${esc(r.id)}" ${S.sel.has(r.id) ? "checked" : ""}></td><td>${esc(r.id)}</td><td>${r.status}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td>${r.size_class || ""}</td><td class="num">${fmt(r.max_prob, 2)}</td><td>${r.source || esc((r.error || "").slice(0, 40))}</td></tr>`).join("") +
+    (d.total > d.rows.length ? `<tr><td colspan="8" class="hint">${fmt(d.rows.length)} von ${fmt(d.total)} angezeigt – vollständige Liste in buildings.csv</td></tr>` : "");
+  $$("#jd-table tr.click").forEach((tr) => tr.onclick = (e) => { if (!e.target.classList.contains("jd-sel")) showBuilding(tr.dataset.id); });
+  $$("#jd-table .jd-sel").forEach((cb) => cb.onchange = () => { cb.checked ? S.sel.add(cb.dataset.id) : S.sel.delete(cb.dataset.id); selInfo(); });
+  $("#jd-selall").onchange = (e) => { $$("#jd-table .jd-sel").forEach((cb) => { cb.checked = e.target.checked; cb.onchange(); }); };
+  selInfo();
 }
+function selInfo() { $("#jd-selinfo").textContent = S.sel && S.sel.size ? `${S.sel.size} ausgewählt` : ""; }
+$("#jd-selrand").onclick = () => {
+  const cbs = $$("#jd-table .jd-sel"), n = Math.min(+$("#jd-seln").value || 40, cbs.length);
+  cbs.forEach((cb) => { cb.checked = false; }); S.sel = new Set();
+  for (const cb of [...cbs].sort(() => Math.random() - 0.5).slice(0, n)) { cb.checked = true; S.sel.add(cb.dataset.id); }
+  selInfo();
+};
+$("#jd-todataset").onclick = async () => {
+  if (!S.sel || !S.sel.size) { alert("Erst Gebäude auswählen (Häkchen oder „Zufällig wählen“)."); return; }
+  const name = prompt("Name des Datensatzes", `Prüfung ${S.job} – ${S.sel.size} Gebäude`); if (name === null) return;
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: { from_job: S.job, ids: [...S.sel], name } } });
+    S.sel = new Set(); openJob(j.id); loadJobs(); }
+  catch (e) { alert(e.message); }
+};
 function showBuilding(id) {
   const r = S.rows && S.rows[id];
   if (!r) return;
@@ -388,7 +407,7 @@ init().catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<div class
 // M.polys is always the layer being edited; M.other the other one (layer "pv" or "neg" = confusers such as dormers)
 const M = { ds: null, items: [], list: [], idx: -1, item: null, img: null, polys: [], other: [], layer: "pv", hist: [], cur: [], tool: "poly",
   sel: -1, view: { s: 1, x: 0, y: 0 }, drag: null, rect: null, label: 1, dirty: false };
-const SRC = { user: "von Hand", ai: "KI", pvmap: "PV-Map", model: "Modell" };
+const SRC = { user: "von Hand", ai: "KI", pvmap: "PV-Map", model: "Erkennung ?" };
 
 async function loadDatasets(keep) {
   const ds = await api("/api/datasets"); M.dsList = ds;
@@ -408,6 +427,7 @@ async function openDataset(id) {
   const subs = [...new Set(d.items.map((x) => x.sub))].sort(), sizes = [...new Set(d.items.map((x) => x.size_bin))].sort();
   $("#m-sub").innerHTML = `<option value="">alle Arten</option>` + subs.map((x) => `<option>${esc(x)}</option>`).join("");
   $("#m-size").innerHTML = `<option value="">alle Größen</option>` + sizes.map((x) => `<option>${esc(x)}</option>`).join("");
+  if (d.items.some((x) => String(x.label_kind || "").startsWith("det_") && x.status === "open")) $("#m-filter").value = "det";
   renderStats(d.stats); renderList();
 }
 function renderStats(s) {
@@ -420,7 +440,8 @@ function matches(m) {
   if (sub && m.sub !== sub) return false;
   if (size && m.size_bin !== size) return false;
   const pos = m.effective_label === 1;
-  return f === "all" || (f === "todo" && pos && !m.has_mask && m.status !== "skip")
+  const isDet = String(m.label_kind || "").startsWith("det_");
+  return f === "all" || (f === "todo" && pos && !m.has_mask && m.status !== "skip") || (f === "det" && isDet && m.status === "open")
     || (f === "ai" && m.mask_source === "ai" && !(m.ai && m.ai.reviewed)) || (f === "mask" && m.has_mask)
     || (f === "neg" && !pos) || (["open", "done", "skip"].includes(f) && m.status === f);
 }

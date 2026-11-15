@@ -535,3 +535,63 @@ def test_delete_old_training_data(tmp_path):
     assert len(r["deleted"]) == 2 and not any(os.path.isdir(os.path.join(jobs, i)) for i in made)
     assert [j["id"] for j in c.get("/api/jobs").json()] == [keep.id]
     assert c.delete(f"/api/jobs/{keep.id}").status_code == 200 and not os.path.isdir(keep.dir)
+
+
+def test_check_results_to_dataset_review_and_train(tmp_path, monkeypatch):
+    """'check buildings' results → selected buildings become a dataset (detector masks as suggestions) →
+    only reviewed items count in training"""
+    from pvmapper import annotate, training
+    torch.manual_seed(0)
+    feats = []
+    for i in range(12):
+        x0 = 13.0 + i * 0.002
+        feats.append({"type": "Feature", "geometry": box(x0, 52.0, x0 + 0.0003, 52.0002).__geo_interface__,
+                      "properties": {"id": f"TEST{i}", "sub": "Education"}})
+    inp = tmp_path / "in.geojson"
+    inp.write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
+    rng = np.random.default_rng(2)
+
+    class FakeSrc:
+        id = "fake"
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = rng.integers(80, 100, (win.height, win.width, 3)).astype(np.uint8)
+        if int(round((geom.centroid.x - 13.0) / 0.002)) % 2 == 0:
+            h, w = img.shape[:2]
+            img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "models"), fetch_workers=2)
+    chk = Job(cfg["jobs_dir"], "buildings", {"input": str(inp), "save_chips": "none"})
+    chk.run(lambda j: building_mode.run(j, cfg))
+    assert chk.status == "done" and chk.counters["pv"] == 6
+
+    pick = ["TEST0", "TEST2", "TEST4", "TEST1"]                   # three detections with PV, one without
+    prep = Job(cfg["jobs_dir"], "train", {"from_job": chk.id, "ids": pick, "prepare_only": True})
+    prep.run(lambda j: training.run(j, cfg))
+    assert prep.status == "done", prep.error
+    d = annotate.ds_dir(prep.dir)
+    items = {m["id"]: m for m in annotate.list_items(d)}
+    assert set(items) == set(pick)
+    m0 = items["TEST0"]
+    assert m0["label_kind"] == "det_pv" and m0["has_mask"] and m0["mask_source"] == "model"
+    assert not annotate.usable_mask(m0) and items["TEST1"]["label"] == 0
+
+    # review: TEST0 accepted (saved), TEST2 was a false positive (label flipped), TEST4 left open
+    annotate.save_annotation(d, "TEST0", annotate.current_polygons(d, "TEST0"))
+    annotate.save_annotation(d, "TEST2", [], label=0, negatives=[[[5, 5], [40, 5], [40, 40], [5, 40]]])
+    m0 = annotate.read_meta(d, "TEST0")
+    assert m0["mask_source"] == "user" and annotate.usable_mask(m0)
+
+    monkeypatch.setattr(runtime, "detector",
+                        lambda cfg, pid=None: inference.Detector(fake_profile(), TinyCls(), TinySeg(), "cpu", batch_size=8, overlap=0.0))
+    monkeypatch.setattr(training, "load_sample", lambda job, cfg: [])
+    tj = Job(cfg["jobs_dir"], "train", {"dataset_from": prep.id, "epochs": 1, "auto_negatives": False,
+                                         "save_anyway": True, "name": "TEST det", "val_share": 0.0})
+    tj.run(lambda j: training.run(j, cfg))
+    # only the two reviewed images count (TEST1 and TEST4 are still open) – too few to train, which is the point
+    assert any("2 übernommene Erkennungen noch nicht geprüft" in line for line in tj.log_lines)
+    assert tj.status == "failed" and "Training 2" in tj.error
