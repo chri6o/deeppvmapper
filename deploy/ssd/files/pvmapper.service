@@ -9,6 +9,9 @@ Group=pvmapper
 SupplementaryGroups=render video
 WorkingDirectory=/opt/pvmapper
 Environment=PYTHONPATH=/opt/pvmapper/app
+# AMD ROCm: heuristic kernel choice instead of an exhaustive search per shape; only errors in the log
+Environment=MIOPEN_FIND_MODE=FAST
+Environment=MIOPEN_LOG_LEVEL=3
 EnvironmentFile=-/etc/default/pvmapper
 ExecStart=/opt/pvmapper/venv/bin/python -m pvmapper --config /opt/pvmapper/pvmapper.yml web --host 0.0.0.0 --port 8765
 Restart=on-failure

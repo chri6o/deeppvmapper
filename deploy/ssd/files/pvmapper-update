@@ -6,5 +6,10 @@ BRANCH="${1:-pvmapper-eu}"
 sudo -u pvmapper git -C "$APP/app" fetch -q origin "$BRANCH"
 sudo -u pvmapper git -C "$APP/app" reset -q --hard "origin/$BRANCH"
 sudo -u pvmapper "$APP/venv/bin/pip" install -q -r "$APP/app/requirements-pvmapper.txt" pyogrio
+# keep the systemd unit in sync with the repository
+if ! cmp -s "$APP/app/deploy/ssd/files/pvmapper.service" /etc/systemd/system/pvmapper.service; then
+  sudo cp "$APP/app/deploy/ssd/files/pvmapper.service" /etc/systemd/system/pvmapper.service
+  sudo systemctl daemon-reload
+fi
 sudo systemctl restart pvmapper
 echo "PV-Mapper aktualisiert: $(git -C "$APP/app" log -1 --format='%h %s')"

@@ -170,8 +170,10 @@ def score_buildings(det: inference.Detector, ds_dir, metas):
         probs, pix = [], []
         for b in range(0, len(patches), det.batch_size):
             x = det._to_tensor(patches[b:b + det.batch_size])
-            probs += det._classify(x).float().cpu().tolist()
-            segs = det._segment(x).cpu().numpy()
+            n = x.shape[0]
+            xp = det._pad(x, det._bucket(n, det.batch_size))
+            probs += det._classify(xp).float().cpu().tolist()[:n]
+            segs = det._segment(xp).cpu().numpy()[:n]
             for (px, py), sm in zip(grid[b:b + det.batch_size], segs):
                 hit = np.zeros((h, w), bool)
                 hit[py:py + size, px:px + size] = sm[:min(size, h - py), :min(size, w - px)]

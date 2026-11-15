@@ -66,6 +66,21 @@ class Detector:
         x = x.permute(0, 3, 1, 2).float().div_(255.0)
         return x
 
+    @staticmethod
+    def _pad(x: torch.Tensor, n: int) -> torch.Tensor:
+        """Pads a batch to n items. Constant batch shapes matter on AMD ROCm: MIOpen searches and compiles
+        kernels per input shape, so every new batch size would cost seconds to minutes."""
+        if x.shape[0] >= n:
+            return x
+        return torch.cat([x, x.new_zeros((n - x.shape[0],) + tuple(x.shape[1:]))])
+
+    @staticmethod
+    def _bucket(k: int, cap: int) -> int:
+        b = 1
+        while b < k:
+            b *= 2
+        return min(b, max(cap, k))
+
     @torch.no_grad()
     def _classify(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-1] != self.p.cls_input_px:
@@ -107,14 +122,16 @@ class Detector:
             chunk = patches[b:b + bs]
             meta = index[b:b + bs]
             x = self._to_tensor(chunk)
-            probs = self._classify(x).float().cpu().numpy()
+            n = x.shape[0]
+            probs = self._classify(self._pad(x, bs)).float().cpu().numpy()[:n]
             for (key, *_), p in zip(meta, probs):
                 r = results[key]
                 r.max_prob = max(r.max_prob, float(p))
             pos = np.where(probs >= self.cls_threshold)[0]
             if len(pos) == 0:
                 continue
-            masks = self._segment(x[torch.as_tensor(pos, device=x.device)]).cpu().numpy()
+            xp = x[torch.as_tensor(pos, device=x.device)]
+            masks = self._segment(self._pad(xp, self._bucket(len(pos), bs))).cpu().numpy()[:len(pos)]
             for j, m in zip(pos, masks):
                 key, px, py, h, w = meta[j]
                 r = results[key]
