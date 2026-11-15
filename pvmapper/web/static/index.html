@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PV-Mapper</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">PV-Mapper <span class="sub">Solaranlagen in Luftbildern erkennen</span></div>
+  <nav id="tabs">
+    <button data-tab="buildings" class="active">Gebäude prüfen</button>
+    <button data-tab="area">Fläche auswerten</button>
+    <button data-tab="jobs">Aufträge</button>
+    <button data-tab="train">Training</button>
+    <button data-tab="probe">Probe</button>
+    <button data-tab="sources">Bildquellen</button>
+    <button data-tab="settings">Einstellungen</button>
+  </nav>
+  <div id="device" class="device">…</div>
+</header>
+
+<main>
+<section id="panel">
+
+  <!-- ===================================================== Gebäude -->
+  <div class="tab" id="tab-buildings">
+    <h2>Gebäudeliste auf PV prüfen</h2>
+    <p class="hint">Für jedes Gebäude wird das passende offene Luftbild geladen und analysiert. Formate: GeoJSON, CSV (lat/lon oder WKT), GeoPackage, Shapefile oder eine PostGIS-Abfrage.</p>
+    <div id="drop" class="drop">Datei hierher ziehen oder <label class="link">auswählen<input type="file" id="file" hidden></label></div>
+    <details>
+      <summary>… oder Pfad / PostGIS-Datenbank</summary>
+      <label>Pfad oder <code>postgresql://user:pw@host/db</code><input id="b-path" placeholder="/daten/gebaeude.gpkg"></label>
+      <label>SQL (nur PostGIS; Spalten <code>id</code> und <code>wkt</code>/<code>geom</code> in WGS84)
+        <textarea id="b-sql" rows="3" placeholder="SELECT osm_id AS id, ST_AsText(ST_Transform(way,4326)) AS wkt, name FROM planet_osm_polygon WHERE amenity IN ('school','townhall')"></textarea></label>
+      <button id="b-inspect" class="secondary">Einlesen</button>
+    </details>
+    <details id="pm-box" open>
+      <summary>… oder aus PV-Map laden</summary>
+      <div class="grid2">
+        <label>Land<select id="pm-cc"><option>DE</option><option>NL</option><option>AT</option><option>FR</option><option>BE</option><option>PL</option><option>IT</option><option>ES</option></select></label>
+        <label>Region (NUTS3 oder LAU, Komma)<input id="pm-region" placeholder="DE300 oder DE_11000000"></label>
+        <label>Gebäudeart<select id="pm-sub"><option value="">alle</option><option value="Education">Bildung</option><option value="Health">Gesundheit</option><option value="Offices">Verwaltung</option><option value="Sport">Sport</option><option value="Other">Sonstige</option></select></label>
+        <label>PV laut PV-Map<select id="pm-pv"><option value="any">alle</option><option value="none">ohne bekannte PV</option><option value="known">mit bekannter PV (Abgleich)</option></select></label>
+      </div>
+      <button id="pm-load" class="secondary">Gebäude abfragen</button>
+    </details>
+    <div id="b-info" class="info hidden"></div>
+    <div class="grid2">
+      <label>ID-Feld<select id="b-id"><option value="">automatisch</option></select></label>
+      <label>Bildquelle<select id="b-source" class="source-select"></select></label>
+      <label>Modell<select id="b-profile" class="profile-select"></select></label>
+      <label>Vorschaubilder<select id="b-chips"><option value="positive">nur Treffer</option><option value="all">alle</option><option value="none">keine</option></select></label>
+    </div>
+    <button id="b-start" class="primary" disabled>Prüfung starten</button>
+  </div>
+
+  <!-- ===================================================== Fläche -->
+  <div class="tab hidden" id="tab-area">
+    <h2>Fläche flächendeckend auswerten</h2>
+    <p class="hint">Rechteck oder Polygon in der Karte zeichnen (Werkzeuge oben links). Das Gebiet wird in Kacheln zerlegt und vollständig analysiert.</p>
+    <label>Begrenzung (W S O N, WGS84)<input id="a-bbox" placeholder="13.30 52.45 13.36 52.48"></label>
+    <div id="a-est" class="info hidden"></div>
+    <div class="grid2">
+      <label>Bildquelle<select id="a-source" class="source-select"></select></label>
+      <label>Modell<select id="a-profile" class="profile-select"></select></label>
+    </div>
+    <label>Gebäudelayer zum Abgleich (optional, Pfad)<input id="a-buildings" placeholder="/daten/gebaeude.gpkg"></label>
+    <label class="check"><input type="checkbox" id="a-only" checked> nur Anlagen auf Gebäuden behalten</label>
+    <button id="a-start" class="primary">Auswertung starten</button>
+  </div>
+
+  <!-- ===================================================== Jobs -->
+  <div class="tab hidden" id="tab-jobs">
+    <h2>Aufträge</h2>
+    <div id="job-list"></div>
+    <div id="job-detail" class="hidden">
+      <h3 id="jd-title"></h3>
+      <div class="progress"><div id="jd-bar"></div></div>
+      <div id="jd-stats" class="stats"></div>
+      <div class="row">
+        <button id="jd-cancel" class="secondary">Abbrechen</button>
+        <button id="jd-resume" class="secondary">Fortsetzen</button>
+        <span id="jd-files"></span>
+      </div>
+      <div class="row filters">
+        <select id="jd-status"><option value="">alle</option><option value="pv" selected>mit PV</option><option value="kein_pv">ohne PV</option><option value="fehler">Fehler</option></select>
+        <select id="jd-class"><option value="">alle Größen</option></select>
+        <button id="jd-reload" class="secondary">Aktualisieren</button>
+      </div>
+      <div id="jd-report"></div>
+      <div class="tablewrap"><table id="jd-table"></table></div>
+      <details><summary>Protokoll</summary><pre id="jd-log"></pre></details>
+    </div>
+  </div>
+
+  <!-- ===================================================== Training -->
+  <div class="tab hidden" id="tab-train">
+    <h2>Modell mit Bestands-PV trainieren</h2>
+    <p class="hint">PV-Map liefert Gebäude mit bekannter PV (Register, Meldungen, Erkennungsebenen) und ohne PV – geschichtet nach Gebäudeart und Anlagengröße. Ein Viertel bleibt zur Bewertung zurück; gespeichert wird das neue Modell nur, wenn es dort besser abschneidet.</p>
+    <div class="grid2">
+      <label>Land<select id="t-cc"><option>DE</option><option>NL</option><option>AT</option><option>FR</option><option>BE</option></select></label>
+      <label>Region (NUTS3/LAU, optional)<input id="t-region" placeholder="ganzes Land"></label>
+      <label>Gebäudeart<select id="t-sub"><option value="">alle</option><option value="Education">Bildung</option><option value="Health">Gesundheit</option><option value="Offices">Verwaltung</option><option value="Sport">Sport</option><option value="Other">Sonstige</option></select></label>
+      <label>Größenklassen (kWp-Grenzen)<input id="t-bins" value="10,30,100,750"></label>
+      <label>Positive je Schicht<input id="t-per" type="number" value="100"></label>
+      <label>Negative je Schicht<input id="t-neg" type="number" value="100"></label>
+      <label>Ausgangsmodell<select id="t-profile" class="profile-select"></select></label>
+      <label>Epochen<input id="t-epochs" type="number" value="6"></label>
+      <label>Name des neuen Modells<input id="t-name" placeholder="z. B. de-schulen"></label>
+      <label>Bildquelle<select id="t-source" class="source-select"></select></label>
+    </div>
+    <label class="check"><input type="checkbox" id="t-weak" checked> „keine PV bekannt“ als schwache Negative nutzen</label>
+    <details><summary>… oder eigene Labels (GeoJSON mit <code>label</code> 0/1)</summary><label>Pfad<input id="t-file" placeholder="/daten/labels.geojson"></label></details>
+    <div class="row"><button id="t-strata" class="secondary">Verfügbare Beispiele anzeigen</button><button id="t-start" class="primary">Training starten</button></div>
+    <div id="t-out"></div>
+  </div>
+
+  <!-- ===================================================== Probe -->
+  <div class="tab hidden" id="tab-probe">
+    <h2>Probe an einem Ort</h2>
+    <p class="hint">In die Karte klicken: Luftbild wird geladen und analysiert. Gut, um Quellen und Modelle je Land zu vergleichen.</p>
+    <div class="grid2">
+      <label>Bildquelle<select id="p-source" class="source-select"></select></label>
+      <label>Modell<select id="p-profile" class="profile-select"></select></label>
+      <label>Radius (m)<input id="p-radius" type="number" value="40" min="10" max="200"></label>
+    </div>
+    <div id="p-out"></div>
+  </div>
+
+  <!-- ===================================================== Quellen -->
+  <div class="tab hidden" id="tab-sources">
+    <h2>Offene Luftbildquellen</h2>
+    <p class="hint">Klick auf eine Quelle zeigt sie als Ebene in der Karte. Eigene Dienste lassen sich über eine zusätzliche YAML-Datei einbinden (Einstellungen).</p>
+    <div class="tablewrap"><table id="src-table"></table></div>
+  </div>
+
+  <!-- ===================================================== Einstellungen -->
+  <div class="tab hidden" id="tab-settings">
+    <h2>Einstellungen</h2>
+    <div id="s-device" class="info"></div>
+    <div class="grid2">
+      <label>Standard-Modell<select id="s-profile" class="profile-select"></select></label>
+      <label>Gerät<select id="s-device-sel"><option>auto</option><option>cuda</option><option>cpu</option><option>mps</option></select></label>
+      <label>Batchgröße (Patches/GPU-Durchlauf)<input id="s-batch" type="number"></label>
+      <label>Überlappung der Ausschnitte (0–0,5)<input id="s-overlap" type="number" step="0.05" min="0" max="0.75"></label>
+      <label>Parallele Bilddownloads<input id="s-fetch" type="number"></label>
+      <label>Klassifikations-Schwelle (leer = Modellstandard)<input id="s-cls" type="number" step="0.01"></label>
+      <label>Segmentierungs-Schwelle (leer = Modellstandard)<input id="s-seg" type="number" step="0.01"></label>
+      <label>kWp je m² Modulfläche<input id="s-kwp" type="number" step="0.01"></label>
+      <label>Mindestfläche PV (m²)<input id="s-minarea" type="number" step="0.5"></label>
+      <label>Puffer um Gebäude (m)<input id="s-buffer" type="number" step="0.5"></label>
+      <label>Suchradius bei Punkten (m)<input id="s-radius" type="number"></label>
+      <label>nur kWp ab<input id="s-kwpmin" type="number" placeholder="kein Minimum"></label>
+      <label>nur kWp bis<input id="s-kwpmax" type="number" placeholder="kein Maximum"></label>
+      <label>Modellordner<input id="s-modeldir"></label>
+      <label>Auftragsordner<input id="s-jobsdir"></label>
+      <label>Zusätzliche Quellen (YAML-Pfad)<input id="s-extra"></label>
+      <label>Kachelgröße Flächenmodus (px)<input id="s-cell" type="number"></label>
+      <label>PV-Map-Adresse<input id="s-pmurl" placeholder="https://pv-map.solar"></label>
+      <label>PV-Map-API-Token<input id="s-pmtoken" type="password" placeholder="pvm_…"></label>
+    </div>
+    <h3>Größenklassen</h3>
+    <p class="hint">Obergrenze in kWp (exklusiv). Leere Obergrenze = offen.</p>
+    <table id="s-classes"></table>
+    <button id="s-addclass" class="secondary">+ Klasse</button>
+    <div class="row">
+      <button id="s-save" class="primary">Speichern</button>
+      <button id="s-download" class="secondary">Modellgewichte laden</button>
+    </div>
+    <div id="s-msg"></div>
+  </div>
+</section>
+
+<section id="mapwrap">
+  <div id="map"></div>
+  <div id="chipview" class="hidden"><button id="chipclose">×</button><img id="chipimg" alt=""><div id="chipcap"></div></div>
+</section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

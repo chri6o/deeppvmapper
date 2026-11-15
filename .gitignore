@@ -160,3 +160,6 @@ models/
 *.pth
 logs/
 .env
+
+# pvmapper web UI
+!pvmapper/web/static/*.html
