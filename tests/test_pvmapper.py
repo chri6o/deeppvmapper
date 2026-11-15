@@ -505,3 +505,33 @@ def test_building_job_with_cross_check(tmp_path, monkeypatch):
     import sqlite3
     row = sqlite3.connect(os.path.join(job.dir, "results.sqlite")).execute('SELECT "check", source2 FROM results').fetchone()
     assert row == ("bestaetigt", "fake-old")
+
+
+def test_delete_old_training_data(tmp_path):
+    from fastapi.testclient import TestClient
+    from pvmapper import annotate
+    from pvmapper.web.app import create_app
+    jobs = tmp_path / "jobs"
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(jobs), model_dir=str(tmp_path / "m")), str(cfgp))
+    made = []
+    for i, hand in enumerate((False, True)):
+        j = Job(str(jobs), "train", {"prepare_only": True, "name": f"TEST{i}"})
+        j.status = "done"
+        j.save()
+        d = annotate.ds_dir(j.dir)
+        os.makedirs(d)
+        meta = {"name": "b", "id": "b", "label": 1, "mask_source": "user" if hand else None, "has_mask": hand}
+        json.dump(meta, open(os.path.join(d, "b.json"), "w"))
+        made.append(j.id)
+    keep = Job(str(jobs), "buildings", {"input": "x"})
+    keep.status = "done"
+    keep.save()
+    c = TestClient(create_app(str(cfgp)))
+    prev = c.get("/api/cleanup").json()
+    hm = {p["id"]: p["hand_masks"] for p in prev}
+    assert hm == {made[0]: 0, made[1]: 1}
+    r = c.post("/api/cleanup", json={"ids": made}).json()
+    assert len(r["deleted"]) == 2 and not any(os.path.isdir(os.path.join(jobs, i)) for i in made)
+    assert [j["id"] for j in c.get("/api/jobs").json()] == [keep.id]
+    assert c.delete(f"/api/jobs/{keep.id}").status_code == 200 and not os.path.isdir(keep.dir)

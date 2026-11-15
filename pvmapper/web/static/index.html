@@ -85,6 +85,7 @@
       <div class="row">
         <button id="jd-cancel" class="secondary">Abbrechen</button>
         <button id="jd-resume" class="secondary">Fortsetzen</button>
+        <button id="jd-delete" class="secondary">Löschen</button>
         <span id="jd-files"></span>
       </div>
       <div class="row filters">
@@ -121,6 +122,13 @@
     <details><summary>… oder eigene Labels (GeoJSON mit <code>label</code> 0/1)</summary><label>Pfad<input id="t-file" placeholder="/daten/labels.geojson"></label></details>
     <div class="row"><button id="t-strata" class="secondary">Verfügbare Beispiele anzeigen</button><button id="t-prepare" class="secondary">Nur Datensatz anlegen (zum Maskieren)</button><button id="t-start" class="primary">Training starten</button></div>
     <div id="t-out"></div>
+    <details id="t-clean"><summary>Alte Trainingsdaten löschen</summary>
+      <p class="hint">Löscht Datensätze und Luftbilder früherer Trainings- und KI-Aufträge. Gespeicherte eigene Modelle bleiben erhalten.
+        Von Hand gezeichnete Masken gehen mit dem Datensatz verloren.</p>
+      <div id="t-clean-list"></div>
+      <div class="row"><button id="t-clean-go" class="secondary">Ausgewählte löschen</button></div>
+      <div id="t-clean-msg"></div>
+    </details>
   </div>
 
   <!-- ===================================================== Masken -->

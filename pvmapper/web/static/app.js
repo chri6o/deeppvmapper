@@ -252,6 +252,26 @@ async function refreshJob(withResults) {
 }
 function dur(s) { const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60); return h ? `${h} h ${m} min` : `${m} min`; }
 $("#jd-cancel").onclick = async () => { await api(`/api/jobs/${S.job}/cancel`, { method: "POST" }); refreshJob(); };
+$("#jd-delete").onclick = async () => {
+  if (!confirm(`Auftrag ${S.job} mit allen Dateien löschen?`)) return;
+  try { const r = await api(`/api/jobs/${S.job}`, { method: "DELETE" }); S.job = null; clearInterval(S.poll); $("#job-detail").classList.add("hidden"); loadJobs();
+    if (r.hand_masks) alert(`Gelöscht (darunter ${r.hand_masks} Bilder mit eigenen Masken).`); }
+  catch (e) { alert(e.message); }
+};
+$("#t-clean").ontoggle = async () => {
+  if (!$("#t-clean").open) return;
+  const l = await api("/api/cleanup");
+  $("#t-clean-list").innerHTML = l.length ? `<table><tr><th></th><th>Auftrag</th><th>Art</th><th>Bilder</th><th>eigene Masken</th></tr>` +
+    l.map((j) => `<tr><td><input type="checkbox" data-id="${j.id}" ${j.hand_masks ? "" : "checked"}></td><td>${esc(j.id)} ${esc(j.name)}</td><td>${j.kind === "train" ? "Training/Datensatz" : "KI-Masken"}</td><td class="num">${fmt(j.images)}</td><td class="num">${j.hand_masks ? "<b>" + fmt(j.hand_masks) + "</b>" : "–"}</td></tr>`).join("") + "</table>"
+    : `<p class="hint">Keine alten Trainingsdaten vorhanden.</p>`;
+};
+$("#t-clean-go").onclick = async () => {
+  const ids = $$("#t-clean-list input:checked").map((x) => x.dataset.id);
+  if (!ids.length || !confirm(`${ids.length} Aufträge mit allen Dateien löschen?`)) return;
+  try { const r = await api("/api/cleanup", { json: { ids } }); $("#t-clean-msg").innerHTML = `<div class="info">${r.deleted.length} gelöscht.</div>`;
+    $("#t-clean").ontoggle(); loadJobs(); if (typeof loadDatasets === "function") loadDatasets(); }
+  catch (e) { $("#t-clean-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
 $("#jd-resume").onclick = async () => { await api(`/api/jobs/${S.job}/resume`, { method: "POST" }); openJob(S.job); loadJobs(); };
 $("#jd-reload").onclick = loadResults;
 $("#jd-status").onchange = loadResults; $("#jd-class").onchange = loadResults;

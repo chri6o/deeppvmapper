@@ -389,6 +389,41 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def get_job(jid: str):
         return _job(jid).as_dict()
 
+    def _delete_job(job: Job) -> dict:
+        import shutil
+        if job.status in ("running", "queued") or mgr.current is job:
+            raise HTTPException(409, "Auftrag läuft noch – erst abbrechen.")
+        hand = 0
+        d = annotate.ds_dir(job.dir)
+        if os.path.isdir(d):
+            hand = sum(1 for m in annotate.list_items(d) if m.get("mask_source") == "user" or m.get("has_neg"))
+        shutil.rmtree(job.dir, ignore_errors=True)
+        mgr.jobs.pop(job.id, None)
+        return {"id": job.id, "kind": job.kind, "hand_masks": hand}
+
+    @app.get("/api/cleanup")
+    def cleanup_preview(kinds: str = "train,ai_masks"):
+        """what 'delete old training data' would remove (trained models in model_dir/custom stay)"""
+        ks = set(kinds.split(","))
+        out = []
+        for j in mgr.jobs.values():
+            if j.kind in ks and j.status not in ("running", "queued"):
+                d = annotate.ds_dir(j.dir)
+                items = annotate.list_items(d) if os.path.isdir(d) else []
+                out.append({"id": j.id, "kind": j.kind, "name": j.params.get("name") or "",
+                            "images": len(items),
+                            "hand_masks": sum(1 for m in items if m.get("mask_source") == "user" or m.get("has_neg"))})
+        return sorted(out, key=lambda x: x["id"])
+
+    @app.post("/api/cleanup")
+    def cleanup(body: dict = Body(...)):
+        ids = body.get("ids") or []
+        return {"deleted": [_delete_job(_job(i)) for i in ids if i in mgr.jobs]}
+
+    @app.delete("/api/jobs/{jid}")
+    def delete_job(jid: str):
+        return _delete_job(_job(jid))
+
     @app.post("/api/jobs/{jid}/cancel")
     def cancel(jid: str):
         _job(jid).cancel()
