@@ -1,0 +1,303 @@
+# Open-data orthophoto services used by pvmapper.
+#
+# Field reference
+#   name                 human-readable label (shown in the web UI)
+#   type                 wms | xyz   (xyz = WMTS/tile template in EPSG:3857, {z}/{x}/{y})
+#   url, layers, crs     WMS endpoint, layer name, request CRS (metric CRS preferred)
+#   native_resolution_m  ground resolution of the imagery behind the service
+#   bbox                 WGS84 [minlon, minlat, maxlon, maxlat] — rough coverage used
+#                        for routing; blank responses fall through to the next source
+#   priority             lower = preferred when several sources cover a point
+#   concurrency          max parallel requests (be polite to public services)
+#   min_interval_s       optional delay between requests
+#   license/attribution  as stated in the service capabilities — verify before publishing
+#
+# Endpoints were checked with live GetCapabilities/GetMap requests in Nov 2026.
+# Add your own services in a separate file and load it with --sources-extra / the UI.
+
+sources:
+
+  # ---------------------------------------------------------------- Germany
+  de-nw:
+    name: "DE · Nordrhein-Westfalen · DOP10 (Geobasis NRW)"
+    country: DE
+    region: Nordrhein-Westfalen
+    type: wms
+    url: https://www.wms.nrw.de/geobasis/wms_nw_dop
+    layers: nw_dop_rgb
+    crs: EPSG:25832
+    native_resolution_m: 0.1
+    bbox: [5.86, 50.32, 9.46, 52.53]
+    license: dl-de/zero-2.0
+    attribution: "© Geobasis NRW"
+    priority: 10
+
+  de-bb:
+    name: "DE · Berlin/Brandenburg · DOP20c (LGB)"
+    country: DE
+    region: Brandenburg
+    type: wms
+    url: https://isk.geobasis-bb.de/mapproxy/dop20c/service/wms
+    layers: bebb_dop20c
+    crs: EPSG:25833
+    native_resolution_m: 0.2
+    bbox: [11.23, 51.31, 14.77, 53.57]
+    license: dl-de/by-2.0
+    attribution: "© GeoBasis-DE/LGB"
+    priority: 20
+
+  de-be:
+    name: "DE · Berlin · DOP 2025 (Geoportal Berlin)"
+    country: DE
+    region: Berlin
+    type: wms
+    url: https://gdi.berlin.de/services/wms/dop_2025_fruehjahr
+    layers: dop_2025
+    crs: EPSG:25833
+    native_resolution_m: 0.1
+    bbox: [13.05, 52.32, 13.77, 52.69]
+    license: dl-de/zero-2.0
+    attribution: "© Geoportal Berlin"
+    priority: 10
+
+  de-by:
+    name: "DE · Bayern · DOP40 (LDBV, Open Data)"
+    country: DE
+    region: Bayern
+    type: wms
+    url: https://geoservices.bayern.de/od/wms/dop/v1/dop40
+    layers: by_dop40c
+    crs: EPSG:25832
+    native_resolution_m: 0.4
+    bbox: [8.96, 47.12, 14.04, 50.63]
+    license: CC BY 4.0
+    attribution: "© Bayerische Vermessungsverwaltung"
+    priority: 30
+    notes: "Only 40 cm open data; the models expect 10–20 cm, expect lower recall."
+
+  de-bw:
+    name: "DE · Baden-Württemberg · DOP20 (LGL)"
+    country: DE
+    region: Baden-Württemberg
+    type: wms
+    url: https://owsproxy.lgl-bw.de/owsproxy/ows/WMS_LGL-BW_ATKIS_DOP_20_C
+    layers: IMAGES_DOP_20_RGB
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [7.50, 47.53, 10.50, 49.80]
+    license: dl-de/by-2.0
+    attribution: "© LGL, www.lgl-bw.de"
+    priority: 20
+
+  de-hb:
+    name: "DE · Bremen · DOP20 2023 (GeoInformation Bremen)"
+    country: DE
+    region: Bremen
+    type: wms
+    url: https://geodienste.bremen.de/wms_dop20_2023
+    layers: DOP20_2023_HB
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [8.46, 53.01, 9.01, 53.23]
+    license: CC BY 4.0
+    attribution: "© Landesamt GeoInformation Bremen"
+    priority: 10
+
+  de-hh:
+    name: "DE · Hamburg · DOP (LGV, unbelaubt)"
+    country: DE
+    region: Hamburg
+    type: wms
+    url: https://geodienste.hamburg.de/wms_dop_zeitreihe_unbelaubt
+    layers: dop_zeitreihe_unbelaubt
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [9.72, 53.39, 10.35, 53.75]
+    license: dl-de/by-2.0
+    attribution: "© Freie und Hansestadt Hamburg, LGV"
+    priority: 10
+
+  de-he:
+    name: "DE · Hessen · DOP20 (HVBG)"
+    country: DE
+    region: Hessen
+    type: wms
+    url: https://www.gds-srv.hessen.de/cgi-bin/lika-services/ogc-free-images.ows
+    layers: he_dop20_rgb
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [7.70, 49.38, 10.27, 51.67]
+    license: dl-de/zero-2.0
+    attribution: "© HVBG"
+    priority: 20
+
+  de-mv:
+    name: "DE · Mecklenburg-Vorpommern · DOP (LAiV)"
+    country: DE
+    region: Mecklenburg-Vorpommern
+    type: wms
+    url: https://www.geodaten-mv.de/dienste/adv_dop
+    layers: mv_dop
+    crs: EPSG:25833
+    native_resolution_m: 0.2
+    bbox: [10.34, 53.04, 14.48, 54.82]
+    license: CC BY 4.0
+    attribution: "© GeoBasis-DE/M-V"
+    priority: 20
+
+  de-ni:
+    name: "DE · Niedersachsen · DOP20 (LGLN)"
+    country: DE
+    region: Niedersachsen
+    type: wms
+    url: https://opendata.lgln.niedersachsen.de/doorman/noauth/dop_wms
+    layers: ni_dop20
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [6.51, 51.15, 11.75, 54.15]
+    license: CC BY 4.0
+    attribution: "© LGLN"
+    priority: 25
+
+  de-rp:
+    name: "DE · Rheinland-Pfalz · DOP20 (LVermGeo)"
+    country: DE
+    region: Rheinland-Pfalz
+    type: wms
+    url: https://geo4.service24.rlp.de/wms/rp_dop20.fcgi
+    layers: rp_dop20
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [6.04, 48.90, 8.62, 51.00]
+    license: dl-de/by-2.0
+    attribution: "© GeoBasis-DE/LVermGeoRP"
+    priority: 20
+
+  de-sl:
+    name: "DE · Saarland · DOP20 2023 (LVGL)"
+    country: DE
+    region: Saarland
+    type: wms
+    url: https://geoportal.saarland.de/freewms/dop2023
+    layers: sl_dop20_rgb
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [6.34, 49.08, 7.44, 49.66]
+    license: dl-de/by-2.0
+    attribution: "© LVGL Saarland"
+    priority: 10
+
+  de-sn:
+    name: "DE · Sachsen · DOP20 (GeoSN)"
+    country: DE
+    region: Sachsen
+    type: wms
+    url: https://geodienste.sachsen.de/wms_geosn_dop-rgb/guest
+    layers: sn_dop_020
+    crs: EPSG:25833
+    native_resolution_m: 0.2
+    bbox: [11.79, 50.15, 15.09, 51.72]
+    license: dl-de/by-2.0
+    attribution: "© GeoSN"
+    priority: 20
+
+  de-st:
+    name: "DE · Sachsen-Anhalt · DOP20 (LVermGeo)"
+    country: DE
+    region: Sachsen-Anhalt
+    type: wms
+    url: https://www.geodatenportal.sachsen-anhalt.de/wss/service/ST_LVermGeo_DOP_WMS_OpenData/guest
+    layers: lsa_lvermgeo_dop20_2
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [10.51, 50.89, 13.32, 53.08]
+    license: dl-de/by-2.0
+    attribution: "© GeoBasis-DE/LVermGeo ST"
+    priority: 20
+
+  de-sh:
+    name: "DE · Schleswig-Holstein · DOP20 (LVermGeo SH)"
+    country: DE
+    region: Schleswig-Holstein
+    type: wms
+    url: https://dienste.gdi-sh.de/WMS_SH_DOP20col_OpenGBD
+    layers: sh_dop20_rgb
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [7.82, 53.30, 11.42, 55.15]
+    license: CC BY 4.0
+    attribution: "© GeoBasis-DE/LVermGeo SH"
+    priority: 20
+
+  de-th:
+    name: "DE · Thüringen · DOP20 (TLBG)"
+    country: DE
+    region: Thüringen
+    type: wms
+    url: https://www.geoproxy.geoportal-th.de/geoproxy/services/DOP20
+    layers: th_dop
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [9.86, 50.15, 12.71, 51.66]
+    license: CC BY 4.0
+    attribution: "© GDI-Th"
+    priority: 20
+
+  # ------------------------------------------------------------ Netherlands
+  nl-pdok-hr:
+    name: "NL · PDOK Luchtfoto actueel HR (8 cm)"
+    country: NL
+    region: Nederland
+    type: wms
+    url: https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0
+    layers: Actueel_orthoHR
+    crs: EPSG:28992
+    native_resolution_m: 0.08
+    bbox: [3.17, 50.75, 7.23, 53.56]
+    license: CC BY 4.0
+    attribution: "© Beeldmateriaal Nederland / PDOK"
+    priority: 10
+
+  nl-pdok-25:
+    name: "NL · PDOK Luchtfoto actueel 25 cm"
+    country: NL
+    region: Nederland
+    type: wms
+    url: https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0
+    layers: Actueel_ortho25
+    crs: EPSG:28992
+    native_resolution_m: 0.25
+    bbox: [3.17, 50.75, 7.23, 53.56]
+    license: CC BY 4.0
+    attribution: "© Beeldmateriaal Nederland / PDOK"
+    priority: 40
+
+  # ---------------------------------------------------------------- Austria
+  at-basemap:
+    name: "AT · basemap.at Orthofoto (≈ 20–30 cm)"
+    country: AT
+    region: Österreich
+    type: xyz
+    url: https://mapsneu.wien.gv.at/basemap/bmaporthofoto30cm/normal/google3857/{z}/{y}/{x}.jpeg
+    crs: EPSG:3857
+    max_zoom: 19
+    native_resolution_m: 0.25
+    bbox: [9.53, 46.37, 17.16, 49.02]
+    license: CC BY 4.0
+    attribution: "Grundkarte: basemap.at"
+    priority: 20
+
+  # ----------------------------------------------------------------- France
+  fr-ign:
+    name: "FR · IGN Géoplateforme Orthophotos HR"
+    country: FR
+    region: France
+    type: wms
+    url: https://data.geopf.fr/wms-r/wms
+    layers: HR.ORTHOIMAGERY.ORTHOPHOTOS
+    crs: EPSG:2154
+    native_resolution_m: 0.2
+    bbox: [-5.2, 41.3, 9.6, 51.1]
+    license: Licence Ouverte Etalab 2.0
+    attribution: "© IGN"
+    priority: 20

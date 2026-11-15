@@ -1,0 +1,62 @@
+"""Settings with defaults; persisted as YAML (pvmapper.yml in the working dir)."""
+
+from __future__ import annotations
+
+import copy
+import os
+
+import yaml
+
+DEFAULTS = {
+    "model_dir": "models",
+    "jobs_dir": "jobs",
+    "profile": "nrw",                 # nrw | ign | google
+    "device": "auto",                 # auto | cuda | cpu | mps
+    "batch_size": 32,                 # patches per GPU batch (16 GB VRAM: 32–64)
+    "cls_threshold": None,            # None = profile default
+    "seg_threshold": None,
+    "patch_overlap": 0.25,            # 0 = no overlap; 0.25–0.5 finds arrays cut by patch borders
+    "fetch_workers": 8,               # parallel imagery downloads
+    "buffer_m": 3.0,                  # margin around building footprints
+    "point_radius_m": 20.0,           # search radius when only a point is given
+    "min_pv_area_m2": 3.0,            # smaller detections are treated as noise
+    "kwp_per_m2": 0.20,               # rough installed capacity per m² of detected module area
+    "kwp_min": None,                  # keep only buildings/installations in this kWp range
+    "kwp_max": None,
+    "size_classes": [                 # by estimated kWp, upper bound exclusive
+        {"name": "S", "label": "bis 30 kWp", "max": 30},
+        {"name": "M", "label": "30–100 kWp", "max": 100},
+        {"name": "L", "label": "100–750 kWp", "max": 750},
+        {"name": "XL", "label": "ab 750 kWp", "max": None},
+    ],
+    "save_chips": "positive",         # none | positive | all — JPEG previews for review
+    "sources": "auto",                # 'auto' or list of source ids / country codes
+    "sources_extra": None,            # path to an additional sources YAML
+    "area_cell_px": 2560,             # area mode: image cell edge length in pixels
+    "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",
+}
+
+
+def load(path: str = "pvmapper.yml") -> dict:
+    cfg = copy.deepcopy(DEFAULTS)
+    if path and os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            cfg.update(yaml.safe_load(f) or {})
+    return cfg
+
+
+def save(cfg: dict, path: str = "pvmapper.yml"):
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
+
+
+def size_class(kwp: float, classes) -> str:
+    for c in classes:
+        if c.get("max") is None or kwp < float(c["max"]):
+            return c["name"]
+    return classes[-1]["name"] if classes else ""
+
+
+def in_kwp_range(kwp: float, cfg: dict) -> bool:
+    lo, hi = cfg.get("kwp_min"), cfg.get("kwp_max")
+    return (lo is None or kwp >= float(lo)) and (hi is None or kwp <= float(hi))

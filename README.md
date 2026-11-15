@@ -8,6 +8,8 @@
 
 Large-scale rooftop PV detection pipeline for France. Classifies IGN aerial tiles with InceptionV3, segments positive patches with FCN/DeepLab, and extracts panel characteristics (surface, tilt, azimuth, installed capacity) via [pypvroof](https://pypi.org/project/pypvroof/).
 
+> **Fork note — PV-Mapper (branch `pvmapper-eu`):** this fork adds `pvmapper/`, an adaptation for Germany, the Netherlands, Austria and France using open WMS/WMTS orthophoto services, building-list and area modes, configurable size classes, AMD ROCm support and a local web UI (`python -m pvmapper web`). See [PVMAPPER.md](PVMAPPER.md). The original France pipeline below is unchanged.
+
 **[🗺️ Official project page](https://deeppvmapper.fr)**  
 Work carried out by [Gabriel Kasmi](https://gabrielkasmi.github.io) as part of his PhD at Mines Paris-PSL (2020–2024).
 

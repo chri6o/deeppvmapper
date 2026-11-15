@@ -1,0 +1,27 @@
+# pvmapper (EU adaptation + web UI)
+#
+# Install PyTorch FIRST, matching your GPU — otherwise pip pulls the CUDA build:
+#   AMD Radeon (ROCm, Linux):  pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+#   NVIDIA (CUDA):             pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   CPU only:                  pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+# then:
+#   pip install -r requirements-pvmapper.txt
+#
+# GDAL is NOT required for pvmapper (only for the original France pipeline).
+
+numpy>=1.24
+pillow>=10
+requests>=2.31
+pyproj>=3.6
+shapely>=2.1
+opencv-python-headless>=4.8
+pyyaml>=6.0
+huggingface_hub>=0.23
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+
+# optional
+# pyogrio>=0.7        # read GeoPackage / Shapefile without GDAL Python bindings
+# psycopg[binary]>=3  # read buildings directly from PostGIS
+# pytest              # run tests/test_pvmapper.py
