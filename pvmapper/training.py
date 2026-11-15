@@ -237,7 +237,7 @@ def load_neg(ds_dir, meta):
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
-def score_buildings(det: inference.Detector, ds_dir, metas):
+def score_buildings(det: inference.Detector, ds_dir, metas, job=None, label: str = ""):
     """Per building: patch probabilities and (for every patch) the segmented PV pixels inside the footprint,
     so any classification threshold can be evaluated afterwards without re-running the models."""
     size = det.p.patch_px
@@ -255,10 +255,15 @@ def score_buildings(det: inference.Detector, ds_dir, metas):
             probs += det._classify(xp).float().cpu().tolist()[:n]
             segs = det._segment(xp).cpu().numpy()[:n]
             for (px, py), sm in zip(grid[b:b + det.batch_size], segs):
-                hit = np.zeros((h, w), bool)
-                hit[py:py + size, px:px + size] = sm[:min(size, h - py), :min(size, w - px)]
-                pix.append(np.flatnonzero(hit & fp))
+                hh, ww = min(size, h - py), min(size, w - px)
+                ys, xs = np.nonzero(sm[:hh, :ww] & fp[py:py + hh, px:px + ww])   # patch-local, no full-size arrays
+                pix.append((ys + py) * w + (xs + px))
         out[m["id"]] = (np.array(probs), pix)
+        if job is not None:
+            job.check_cancel()
+            k = len(out)
+            if k % 25 == 0 or k == len(metas):
+                job.log(f"{label}: {k}/{len(metas)} Gebäude bewertet")
     return out
 
 
@@ -456,8 +461,10 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
         order = train[:]
         random.shuffle(order)
         losses = []
-        for m in order:
+        for k, m in enumerate(order, 1):
             job.check_cancel()
+            if k % 200 == 0:
+                job.log(f"Epoche {ep + 1}/{epochs}: {k}/{len(order)} Gebäude")
             if m["id"] not in cache:
                 img, fp, mask = load_arrays(ds_dir, m)
                 cache[m["id"]] = np.stack([img[y:y + size, x:x + size]
@@ -645,7 +652,7 @@ def run(job, cfg: dict):
     do_seg = n_mask >= int(p.get("min_seg_samples", 30))
     job.total = len(val) * 2 + len(train) + epochs + (seg_epochs if do_seg else 0)
     job.done = 0
-    base_scores = score_buildings(det, ds_dir, val)
+    base_scores = score_buildings(det, ds_dir, val, job, "Ausgangsmodell")
     job.step(len(val))
     base_thr = det.cls_threshold
     base_pred = predict(base_scores, det.cls_threshold, min_px)
@@ -655,7 +662,7 @@ def run(job, cfg: dict):
     drop_t = float(p.get("weak_negative_drop", 0.9))
     weak = [m for m in train if m["label_kind"] == "neg_weak"]
     if weak:
-        ws = score_buildings(det, ds_dir, weak)
+        ws = score_buildings(det, ds_dir, weak, job, "Schwache Negative")
         dropped = {bid for bid, (probs, _) in ws.items() if len(probs) and probs.max() >= drop_t}
         train = [m for m in train if m["id"] not in dropped]
         job.log(f"{len(dropped)} von {len(weak)} schwachen Negativen verworfen (Ausgangsmodell ≥ {drop_t}: "
@@ -672,7 +679,7 @@ def run(job, cfg: dict):
 
     job.log("Bewerte neues Modell …")
     det.cls_threshold = 0.0                                     # score everything, tune afterwards
-    new_scores = score_buildings(det, ds_dir, val)
+    new_scores = score_buildings(det, ds_dir, val, job, "Neues Modell")
     job.step(len(val))
     thr, f1 = tune_threshold(val, new_scores, min_px)
     det.cls_threshold = thr
