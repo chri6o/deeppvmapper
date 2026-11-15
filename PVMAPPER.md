@@ -96,7 +96,8 @@ Die Modelle markieren ohne Nachtraining oft Gauben, Dachfenster oder helle Dache
 Modulreihen mit Reflexen oder Schatten nur teilweise. Drei Bausteine verbessern das (Einstellungen, alle an):
 
 - **Nachbearbeitung** (`pvmapper/postproc.py`): nur Flächen innerhalb des Gebäudeumrisses (+1,5 m) zählen.
-  Verworfen werden Flächen ohne Kontrast zum Dach (nicht dunkler und nicht blauer als die Umgebung) und Reihen
+  Verworfen werden Flächen ohne Kontrast zum Dach (nicht dunkler als die Umgebung; nur kompakte, gleichmäßige,
+  deutlich blauere Flächen dürfen so hell sein), unregelmäßige Flecken (z. B. Schieferdächer, Dachflächen im Licht) und Reihen
   kleiner, gleichartiger Flecken ohne größeres Feld (Gauben, Lichtkuppeln). Erkannte Felder werden entlang
   gleichfarbiger Pixel ergänzt, gleichfarbige rechteckige Felder auf demselben Dach (ab 4 m²) hinzugenommen,
   Löcher durch Reflexe gefüllt und fast rechteckige Felder begradigt. Die Ergänzung greift nur, wenn sich die
