@@ -65,6 +65,10 @@ def load_sample(job, cfg) -> list[dict]:
         feats = [f for f in feats if f["properties"]["label_kind"] != "neg_weak"]
     if not p.get("use_medium_positives", True):
         feats = [f for f in feats if f["properties"]["label_kind"] != "pos_medium"]
+    if p.get("min_kwp"):
+        lo = float(p["min_kwp"])
+        feats = [f for f in feats if f["properties"]["label_kind"].startswith("neg")
+                 or (f["properties"].get("pv_kwp") or 0) >= lo]
     return feats
 
 
@@ -144,6 +148,7 @@ def build_dataset(job, cfg, feats, prof) -> list[dict]:
 
 
 def load_arrays(ds_dir, meta):
+    ds_dir = meta.get("_dir") or ds_dir
     img = np.asarray(Image.open(os.path.join(ds_dir, meta["name"] + ".jpg")).convert("RGB"))
     fp = np.asarray(Image.open(os.path.join(ds_dir, meta["name"] + ".fp.png"))) > 0
     mask = None
@@ -383,6 +388,23 @@ def run(job, cfg: dict):
             m = dict(m, label=annotate.effective_label(m))
             m["has_mask"] = annotate.usable_mask(m, ai_mode)
             metas.append(m)
+        if not any(m["label"] == 0 for m in metas) and p.get("auto_negatives", True):
+            # positives-only dataset (for masking): fetch negatives with the same filters for training
+            from . import pvmap
+            sp = src.params
+            flt = {k: sp.get(k) for k in pvmap.FILTER_KEYS if sp.get(k)}
+            n_neg = int(p.get("negatives") or max(50, len(metas) // 2))
+            job.log(f"Datensatz hat keine Negativbeispiele – lade {n_neg} je Gebäudeart aus PV-Map …")
+            d = pvmap.Client.from_config(cfg).training(per_stratum=0, negatives=n_neg,
+                                                       seed=str(sp.get("seed", "1")), **flt)
+            negf = [f for f in d["features"] if f["properties"]["label"] == 0
+                    and (p.get("use_weak_negatives", sp.get("use_weak_negatives", True))
+                         or f["properties"]["label_kind"] != "neg_weak")]
+            neg_metas = build_dataset(job, cfg, negf, prof)
+            own = os.path.join(job.dir, "dataset")
+            for m in neg_metas:
+                m["_dir"] = own
+            metas += neg_metas
         kinds = collections.Counter(m["label_kind"] for m in metas)
         job.log(f"Datensatz aus Auftrag {src.id}: {len(metas)} Gebäude, "
                 f"{sum(1 for m in metas if m['has_mask'])} mit nutzbarer Maske (KI-Masken: {ai_mode}).")

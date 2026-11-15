@@ -135,7 +135,8 @@ function trainParams() {
   return { cc: $("#t-cc").value, ...regionParams($("#t-region").value), sub: $("#t-sub").value || null, bins,
     per_stratum: +$("#t-per").value, negatives: +$("#t-neg").value, profile: $("#t-profile").value, epochs: +$("#t-epochs").value,
     name: $("#t-name").value.trim() || null, sources: $("#t-source").value, use_weak_negatives: $("#t-weak").checked,
-    labels_file: $("#t-file").value.trim() || null };
+    labels_file: $("#t-file").value.trim() || null, use_medium_positives: !$("#t-secure").checked,
+    min_kwp: +$("#t-minkwp").value || null };
 }
 const LBL = { pos_high: "PV sicher", pos_medium: "PV wahrscheinlich", neg_high: "keine PV (gemeldet)", neg_weak: "keine PV bekannt" };
 $("#t-strata").onclick = async () => {
@@ -572,6 +573,7 @@ $("#m-train").onclick = async () => {
   catch (e) { $("#m-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 $("#t-prepare").onclick = async () => {
-  try { const j = await api("/api/jobs", { json: { kind: "train", params: { ...trainParams(), prepare_only: true } } }); tab("jobs"); openJob(j.id); }
+  const tp = trainParams(); if ($("#t-posonly").checked) tp.negatives = 0;
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: { ...tp, prepare_only: true } } }); tab("jobs"); openJob(j.id); }
   catch (e) { $("#t-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };

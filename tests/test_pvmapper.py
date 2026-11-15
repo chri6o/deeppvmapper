@@ -337,3 +337,49 @@ def test_web_password_gate(tmp_path):
     r = c.get("/api/sources", headers=good)
     assert r.status_code == 200 and len(r.json()) >= 20
     assert c.get("/api/info", headers=good).json()["config"]["web_password"] == config.MASK
+
+
+def test_positives_only_dataset_gets_negatives_at_training(tmp_path, monkeypatch):
+    from pvmapper import pvmap, training
+    torch.manual_seed(0)
+    rng = np.random.default_rng(2)
+
+    def feat(i, lab):
+        x0 = 13.0 + i * 0.002
+        return {"type": "Feature", "id": f"{'p' if lab else 'n'}{i}",
+                "geometry": box(x0, 52.0, x0 + 0.0002, 52.00015).__geo_interface__,
+                "properties": {"label": lab, "label_kind": "pos_high" if lab else "neg_weak", "sub": "Education",
+                               "size_bin": "10-30" if lab else "none", "pv_kwp": 20 if lab else None}}
+    lf = tmp_path / "pos.geojson"
+    lf.write_text(json.dumps({"type": "FeatureCollection", "features": [feat(i, 1) for i in range(0, 60, 2)]}))
+
+    class FakeSrc:
+        id = "fake"
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = rng.integers(70, 110, (win.height, win.width, 3)).astype(np.uint8)
+        if int(round((geom.centroid.x - 13.0) / 0.002)) % 2 == 0:
+            h, w = img.shape[:2]
+            img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    calls = []
+    def fake_training(self, bins=None, per_stratum=100, negatives=100, seed="1", **flt):
+        calls.append((per_stratum, negatives, flt))
+        return {"features": [feat(i, 0) for i in range(1, 61, 2)]}
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(pvmap.Client, "training", fake_training)
+    monkeypatch.setattr(runtime, "detector",
+                        lambda cfg, pid=None: inference.Detector(fake_profile(), TinyCls(), TinySeg(), "cpu", batch_size=8, overlap=0.0))
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "models"), fetch_workers=2)
+    prep = Job(cfg["jobs_dir"], "train", {"labels_file": str(lf), "prepare_only": True, "cc": "DE", "sub": "Education"})
+    prep.run(lambda j: training.run(j, cfg))
+    assert prep.status == "done" and prep.counters["datensatz"] == 30
+    tj = Job(cfg["jobs_dir"], "train", {"dataset_from": prep.id, "epochs": 2, "save_anyway": True, "name": "TEST pos", "lr": 2e-2})
+    tj.run(lambda j: training.run(j, cfg))
+    assert tj.status == "done", tj.error
+    assert calls and calls[0][0] == 0 and calls[0][2] == {"cc": "DE", "sub": "Education"}
+    rep = json.load(open(os.path.join(tj.dir, "report.json"), encoding="utf-8"))
+    assert rep["n_train"] + rep["n_val"] == 60 and "neg_weak" in rep["sample"]

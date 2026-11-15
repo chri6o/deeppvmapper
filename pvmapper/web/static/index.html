@@ -114,6 +114,9 @@
       <label>Name des neuen Modells<input id="t-name" placeholder="z. B. de-schulen"></label>
       <label>Bildquelle<select id="t-source" class="source-select"></select></label>
     </div>
+    <label>PV-Leistung laut Register ab (kWp, optional)<input id="t-minkwp" type="number" placeholder="alle"></label>
+    <label class="check"><input type="checkbox" id="t-secure" checked> nur sichere PV-Angaben (Register Stufe A/B, Meldungen)</label>
+    <label class="check"><input type="checkbox" id="t-posonly" checked> Datensatz nur mit PV-Gebäuden (Negativbeispiele lädt das Training selbst)</label>
     <label class="check"><input type="checkbox" id="t-weak" checked> „keine PV bekannt“ als schwache Negative nutzen</label>
     <details><summary>… oder eigene Labels (GeoJSON mit <code>label</code> 0/1)</summary><label>Pfad<input id="t-file" placeholder="/daten/labels.geojson"></label></details>
     <div class="row"><button id="t-strata" class="secondary">Verfügbare Beispiele anzeigen</button><button id="t-prepare" class="secondary">Nur Datensatz anlegen (zum Maskieren)</button><button id="t-start" class="primary">Training starten</button></div>
