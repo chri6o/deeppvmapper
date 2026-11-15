@@ -19,6 +19,8 @@ Weights are downloaded from Hugging Face (gabrielkasmi/bdappv-models) into
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
 from dataclasses import dataclass
 
@@ -63,6 +65,11 @@ PROFILES = {
 
 
 def weight_path(model_dir: str, filename: str, download: bool = True) -> str:
+    if filename.startswith("custom/") or os.path.isabs(filename):
+        path = filename if os.path.isabs(filename) else os.path.join(model_dir, filename)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(path)
+        return path
     local = os.path.join(model_dir, os.path.basename(filename))
     if os.path.isfile(local):
         return local
@@ -131,8 +138,59 @@ def device_info() -> dict:
     return info
 
 
+# ---------------------------------------------------------------------------
+# custom profiles (fine-tuned with pvmapper.training): model_dir/custom/<name>.profile.json
+# ---------------------------------------------------------------------------
+
+def custom_profiles(model_dir: str) -> dict:
+    out = {}
+    d = os.path.join(model_dir, "custom")
+    if not os.path.isdir(d):
+        return out
+    for f in sorted(os.listdir(d)):
+        if not f.endswith(".profile.json"):
+            continue
+        try:
+            with open(os.path.join(d, f), encoding="utf-8") as fh:
+                j = json.load(fh)
+            pr = j["profile"]
+            pr["norm_mean"], pr["norm_std"] = tuple(pr["norm_mean"]), tuple(pr["norm_std"])
+            out[pr["id"]] = Profile(**pr)
+        except Exception:                                        # noqa: BLE001
+            continue
+    return out
+
+
+def all_profiles(model_dir: str) -> dict:
+    return {**PROFILES, **custom_profiles(model_dir)}
+
+
+def get_profile(profile_id: str, model_dir: str) -> Profile:
+    P = all_profiles(model_dir)
+    if profile_id not in P:
+        raise KeyError(f"unbekanntes Modellprofil '{profile_id}'")
+    return P[profile_id]
+
+
+def save_custom(model_dir: str, name: str, base: Profile, cls, seg, cls_threshold: float,
+                seg_threshold: float, report: dict) -> str:
+    d = os.path.join(model_dir, "custom")
+    os.makedirs(d, exist_ok=True)
+    cls_f, seg_f = f"custom/{name}_cls.pth", f"custom/{name}_seg.pth"
+    torch.save({k: v.cpu() for k, v in cls.state_dict().items()}, os.path.join(model_dir, cls_f))
+    torch.save({k: v.cpu() for k, v in seg.state_dict().items()}, os.path.join(model_dir, seg_f))
+    pr = dataclasses.asdict(base)
+    pr.update(id=f"custom:{name}", label=f"Eigenes Modell: {name} (Basis {base.id})", cls_file=cls_f, seg_file=seg_f,
+              cls_threshold=float(cls_threshold), seg_threshold=float(seg_threshold),
+              licence=f"{base.licence} (fine-tuned)")
+    path = os.path.join(d, f"{name}.profile.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"profile": pr, "report": report}, f, ensure_ascii=False, indent=1)
+    return path
+
+
 def load(profile_id: str, model_dir: str, device: str = "auto"):
-    profile = PROFILES[profile_id]
+    profile = get_profile(profile_id, model_dir)
     dev = pick_device(device)
     cls = build_classifier(profile, weight_path(model_dir, profile.cls_file)).to(dev)
     seg = build_segmenter(profile, weight_path(model_dir, profile.seg_file)).to(dev)

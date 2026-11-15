@@ -72,8 +72,8 @@ def make_cells(region_wgs84, cell_m: float):
 
 def estimate(p: dict, cfg: dict) -> dict:
     """Quick size estimate for the UI: cells, km², rough imagery volume."""
-    from .models import PROFILES
-    prof = PROFILES[p.get("profile") or cfg["profile"]]
+    from .models import get_profile
+    prof = get_profile(p.get("profile") or cfg["profile"], cfg["model_dir"])
     cell_m = int(cfg["area_cell_px"]) * prof.resolution_m
     region = region_geometry(p)
     cells, _ = make_cells(region, cell_m)
@@ -191,7 +191,7 @@ def export(job, cfg, db, utm, region):
     if p.get("buildings"):
         job.log("Gleiche Erkennungen mit Gebäudelayer ab …")
         bitems = [(b.id, geo.reproject(b.geometry, "EPSG:4326", utm).buffer(1.5))
-                  for b in bld.read_buildings(p["buildings"], id_field=p.get("id_field") or None)
+                  for b in bld.read_buildings(p["buildings"], id_field=p.get("id_field") or None, cfg=cfg)
                   if b.geometry.geom_type in ("Polygon", "MultiPolygon")]
         bindex = STRtree([g for _, g in bitems]) if bitems else None
 

@@ -6,6 +6,8 @@ Supported inputs (all yield `Building` records in WGS84):
   *.csv                columns `lat`,`lon` (or `latitude`,`longitude`, `y`,`x`)
                        or a `wkt`/`geometry` column; separator auto-detected
   *.gpkg / *.shp / …   any OGR format, via pyogrio or GDAL/osgeo if installed
+  pvmap:cc=DE&sub=…    PV-Map connector (see pvmap.py): footprints, building type and the PV
+                       state known from registers/layers come along as properties
   postgresql://…       PostGIS; pass an SQL query returning id + geometry
                        (needs `psycopg`), e.g.
                        SELECT osm_id AS id, ST_AsText(ST_Transform(way,4326)) AS wkt,
@@ -166,9 +168,22 @@ def _read_postgis(dsn, query, id_field):
             yield Building(_pick_id(d, id_field, i), geom, _clean(d))
 
 
+def _read_pvmap(spec, cfg):
+    from . import pvmap
+    client = pvmap.Client.from_config(cfg)
+    for ft in client.buildings(**pvmap.parse_input(spec)):
+        props = dict(ft.get("properties") or {})
+        if not ft.get("geometry"):
+            continue
+        yield Building(str(ft.get("id") or props.get("id")), shape(ft["geometry"]), _clean(props))
+
+
 def read_buildings(path_or_dsn: str, id_field: Optional[str] = None, query: Optional[str] = None,
-                   layer: Optional[str] = None) -> Iterator[Building]:
+                   layer: Optional[str] = None, cfg: Optional[dict] = None) -> Iterator[Building]:
     s = str(path_or_dsn)
+    if s.startswith("pvmap:"):
+        yield from _read_pvmap(s, cfg)
+        return
     if s.startswith(("postgresql://", "postgres://")):
         if not query:
             raise ValueError("PostGIS input needs a SQL query")
@@ -184,4 +199,8 @@ def read_buildings(path_or_dsn: str, id_field: Optional[str] = None, query: Opti
 
 
 def count_buildings(path_or_dsn, **kw) -> int:
+    s = str(path_or_dsn)
+    if s.startswith("pvmap:"):
+        from . import pvmap
+        return int(pvmap.Client.from_config(kw.get("cfg")).count(**pvmap.parse_input(s))["total"])
     return sum(1 for _ in read_buildings(path_or_dsn, **kw))

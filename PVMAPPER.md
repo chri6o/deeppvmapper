@@ -33,6 +33,20 @@ Das Skript installiert PyTorch für ROCm (die ROCm-Laufzeitbibliotheken sind in 
 - **Bildquellen:** alle hinterlegten Dienste mit Auflösung und Lizenz, auf Wunsch als Ebene in der Karte.
 - **Einstellungen:** Modell, Gerät, Schwellenwerte, Batchgröße, parallele Downloads, kWp pro m², Mindestfläche, kWp-Filter und **Größenklassen** (Standard: S < 30, M < 100, L < 750, XL ≥ 750 kWp).
 
+## PV-Map-Konnektor und Training mit Bestands-PV
+
+PV-Mapper holt aus PV-Map **Gebäudelisten** und **Trainingsbeispiele**. In PV-Map legst du dafür ein API-Token an (Verwaltung → Datenquellen → API-Tokens) und trägst es mit der Adresse in den Einstellungen von PV-Mapper ein. Schnittstelle: PV-Map `docs/pvmapper-connector.md`.
+
+- **Gebäude prüfen → „aus PV-Map laden“:** nach Land, Region (NUTS3/LAU), Gebäudeart und PV-Stand („ohne bekannte PV“ für die Suche, „mit bekannter PV“ für den Abgleich). Gebäudeart, Name und der PV-Stand aus PV-Map kommen in die Ergebnisse mit. Die Datei `comparison.json` zeigt, wie viele der laut Register belegten Gebäude die Erkennung findet. Auf der Kommandozeile ist die Eingabe z. B. `pvmap:cc=DE&lau=DE_11000000&sub=Education&pv=none`.
+- **Training:** PV-Map liefert eine Stichprobe, geschichtet nach **Gebäudeart × Anlagengröße** (kWp-Grenzen frei wählbar, Standard 10/30/100/750). Die Labels sind „PV sicher“ (Register A/B, Meldung), „PV wahrscheinlich“ (Register C/D, Erkennungsebene), „keine PV (gemeldet)“ und „keine PV bekannt“ (schwach).
+  1. Ein Viertel der Gebäude bleibt zur Bewertung zurück.
+  2. Schwache Negative, bei denen das Ausgangsmodell sehr sicher PV sieht, werden verworfen, denn dort gibt es wahrscheinlich unregistrierte PV.
+  3. Der Klassifikator wird per *Multiple-Instance-Learning* trainiert: Das Label gilt für das Gebäude, also für den besten Bildausschnitt. Damit funktionieren kleine und große Dächer gleich.
+  4. Die Segmentierung wird nur nachtrainiert, wenn genug PV-Polygone vorliegen (Erkennungsebenen in PV-Map).
+  5. Die Schwelle wird auf F1 optimiert, kWp/m² je Größenklasse kalibriert.
+  6. Gespeichert wird das neue Modell nur, wenn es auf der Validierung mindestens so gut ist wie das Ausgangsmodell, und zwar als Profil `custom:<name>`. Der Bericht vergleicht vorher und nachher nach Art, Größe und Label.
+- Statt PV-Map geht auch eine eigene GeoJSON mit `properties.label` (0/1).
+
 ## Kommandozeile
 
 ```bash
@@ -42,6 +56,9 @@ python -m pvmapper buildings "postgresql://user:pw@localhost/osm" \
 python -m pvmapper area --bbox 13.30 52.45 13.36 52.48 --kwp-min 100
 python -m pvmapper resume 20261115-013936-688d
 python -m pvmapper sources --test
+python -m pvmapper pvmap --cc DE --strata                      # verfügbare Trainingsbeispiele
+python -m pvmapper buildings "pvmap:cc=DE&nuts3=DEA22&pv=none"
+python -m pvmapper train --cc DE --sub Education --per-stratum 150 --negatives 150 --name de-schulen
 ```
 
 Die Einstellungen stehen in `pvmapper.yml` im Arbeitsverzeichnis. Die Oberfläche schreibt diese Datei, Optionen auf der Kommandozeile überschreiben sie.

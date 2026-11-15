@@ -20,7 +20,7 @@ from shapely.geometry import Point, mapping
 
 from .. import area_mode, building_mode, buildings as bld, config as cfgmod
 from .. import geo, inference, models, runtime, sources
-from ..jobs import Job
+from ..jobs import Job, runner
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -64,9 +64,20 @@ class JobManager:
                 continue
             self.current = job
             cfg = self.get_cfg()
-            fn = building_mode.run if job.kind == "buildings" else area_mode.run
+            fn = runner(job.kind)
             job.run(lambda j: fn(j, cfg))
             self.current = None
+
+
+def _coords(g):
+    """all (x, y) of a GeoJSON geometry"""
+    def walk(c):
+        if c and isinstance(c[0], (int, float)):
+            yield (c[0], c[1])
+        else:
+            for x in c or []:
+                yield from walk(x)
+    return list(walk((g or {}).get("coordinates")))
 
 
 def _png_b64(im) -> str:
@@ -100,8 +111,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     @app.get("/api/info")
     def info():
         prof = []
-        for p in models.PROFILES.values():
-            have = all(os.path.isfile(os.path.join(cfg()["model_dir"], os.path.basename(f)))
+        for p in models.all_profiles(cfg()["model_dir"]).values():
+            have = all(os.path.isfile(os.path.join(cfg()["model_dir"], f if f.startswith("custom/") else os.path.basename(f)))
                        for f in (p.cls_file, p.seg_file))
             prof.append({"id": p.id, "label": p.label, "resolution_m": p.resolution_m,
                          "licence": p.licence, "downloaded": have,
@@ -122,7 +133,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     @app.post("/api/models/download")
     def download_models(body: dict = Body(default={})):
         pid = body.get("profile") or cfg()["profile"]
-        p = models.PROFILES[pid]
+        p = models.get_profile(pid, cfg()["model_dir"])
         paths = [models.weight_path(cfg()["model_dir"], f) for f in (p.cls_file, p.seg_file)]
         return {"ok": True, "paths": paths}
 
@@ -140,7 +151,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         lat, lon = float(body["lat"]), float(body["lon"])
         radius = float(body.get("radius_m", 40))
         c = cfg()
-        prof = models.PROFILES[body.get("profile") or c["profile"]]
+        prof = models.get_profile(body.get("profile") or c["profile"], c["model_dir"])
         cat = runtime.catalog(c)
         g = Point(lon, lat)
         utm = f"EPSG:{geo.utm_epsg(lon, lat)}"
@@ -186,7 +197,22 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def inspect_input(body: dict = Body(...)):
         """Counts records and returns a small preview of a building input."""
         kw = dict(id_field=body.get("id_field") or None, query=body.get("query") or None,
-                  layer=body.get("layer") or None)
+                  layer=body.get("layer") or None, cfg=cfg())
+        if str(body["input"]).startswith("pvmap:"):
+            from .. import pvmap
+            try:
+                cl = pvmap.Client.from_config(cfg())
+                flt = pvmap.parse_input(body["input"])
+                cnt = cl.count(**flt)
+                page = cl._get("/detect/buildings", {**flt, "limit": 300})["features"]
+            except Exception as e:                               # noqa: BLE001
+                raise HTTPException(400, f"PV-Map: {e}")
+            xs = [c for f in page for c in _coords(f["geometry"])]
+            bbox = [min(x for x, _ in xs), min(y for _, y in xs), max(x for x, _ in xs), max(y for _, y in xs)] if xs else None
+            return {"input": body["input"], "count": cnt["total"], "breakdown": cnt["rows"],
+                    "fields": list((page[0]["properties"] if page else {}).keys()), "bbox": bbox,
+                    "preview": {"type": "FeatureCollection", "features": [
+                        {"type": "Feature", "geometry": f["geometry"], "properties": {"id": f["id"]}} for f in page]}}
         try:
             n, preview, keys = 0, [], []
             minx = miny = 1e9
@@ -206,14 +232,35 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                 "bbox": [minx, miny, maxx, maxy] if n else None,
                 "preview": {"type": "FeatureCollection", "features": preview}}
 
+    # -- PV-Map connector ---------------------------------------------------------------------
+
+    @app.post("/api/pvmap/strata")
+    def pvmap_strata(body: dict = Body(...)):
+        from .. import pvmap
+        flt = {k: body.get(k) for k in pvmap.FILTER_KEYS if body.get(k)}
+        if not flt.get("cc"):
+            raise HTTPException(400, "Bitte ein Land wählen.")
+        try:
+            return pvmap.Client.from_config(cfg()).strata(bins=body.get("bins") or None, **flt)
+        except Exception as e:                                   # noqa: BLE001
+            raise HTTPException(400, f"PV-Map: {e}")
+
+    @app.get("/api/jobs/{jid}/report")
+    def job_report(jid: str):
+        path = os.path.join(_job(jid).dir, "report.json")
+        if not os.path.isfile(path):
+            raise HTTPException(404, "noch kein Bericht")
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
     # -- jobs ------------------------------------------------------------------------------
 
     @app.post("/api/jobs")
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area"):
-            raise HTTPException(400, "kind must be buildings or area")
+        if kind not in ("buildings", "area", "train"):
+            raise HTTPException(400, "kind must be buildings, area or train")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")
         if kind == "area":

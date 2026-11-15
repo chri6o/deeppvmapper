@@ -112,6 +112,58 @@ $("#b-start").onclick = async () => {
   catch (e) { info("#b-info", e.message, true); }
 };
 
+function regionParams(v) {
+  const p = {}; const parts = v.split(",").map((x) => x.trim()).filter(Boolean);
+  const lau = parts.filter((x) => x.includes("_")), n3 = parts.filter((x) => !x.includes("_"));
+  if (lau.length) p.lau = lau.join(","); if (n3.length) p.nuts3 = n3.join(","); return p;
+}
+$("#pm-load").onclick = async () => {
+  const q = new URLSearchParams({ cc: $("#pm-cc").value, ...regionParams($("#pm-region").value), sub: $("#pm-sub").value, pv: $("#pm-pv").value });
+  [...q.keys()].forEach((k) => { if (!q.get(k)) q.delete(k); });
+  info("#b-info", "Frage PV-Map ab …");
+  try {
+    const d = await api("/api/inspect", { json: { input: "pvmap:" + q.toString() } });
+    setInput(d);
+    if (d.breakdown) info("#b-info", `<b>${fmt(d.count)}</b> Gebäude in PV-Map.<br>` + d.breakdown.map((r) => `${esc(r.sub)} · ${esc(r.pv)}: ${fmt(r.n)}`).join("<br>"));
+  } catch (e) { info("#b-info", e.message, true); }
+};
+
+// ------------------------------------------------------------------ training tab
+function trainParams() {
+  const bins = $("#t-bins").value.split(",").map(Number).filter((x) => x > 0);
+  return { cc: $("#t-cc").value, ...regionParams($("#t-region").value), sub: $("#t-sub").value || null, bins,
+    per_stratum: +$("#t-per").value, negatives: +$("#t-neg").value, profile: $("#t-profile").value, epochs: +$("#t-epochs").value,
+    name: $("#t-name").value.trim() || null, sources: $("#t-source").value, use_weak_negatives: $("#t-weak").checked,
+    labels_file: $("#t-file").value.trim() || null };
+}
+const LBL = { pos_high: "PV sicher", pos_medium: "PV wahrscheinlich", neg_high: "keine PV (gemeldet)", neg_weak: "keine PV bekannt" };
+$("#t-strata").onclick = async () => {
+  $("#t-out").innerHTML = `<div class="info">Frage PV-Map ab …</div>`;
+  try {
+    const d = await api("/api/pvmap/strata", { json: trainParams() });
+    $("#t-out").innerHTML = `<div class="tablewrap"><table><tr><th>Label</th><th>Art</th><th>Größe</th><th>verfügbar</th><th>kWp</th></tr>` +
+      d.strata.map((r) => `<tr><td>${LBL[r.label_kind] || r.label_kind}</td><td>${esc(r.sub)}</td><td>${esc(r.size_bin)}</td><td class="num">${fmt(r.n)}</td><td class="num">${fmt(r.kwp)}</td></tr>`).join("") + `</table></div>`;
+  } catch (e) { $("#t-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
+$("#t-start").onclick = async () => {
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: trainParams() } }); tab("jobs"); openJob(j.id); }
+  catch (e) { $("#t-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
+async function showReport(id) {
+  let r; try { r = await api(`/api/jobs/${id}/report`); } catch { $("#jd-report").innerHTML = ""; return; }
+  const row = (name, a, b) => `<tr><td>${esc(name)}</td><td class="num">${fmt(a?.n)}</td><td class="num">${fmt(a?.recall, 2)} → <b>${fmt(b?.recall, 2)}</b></td><td class="num">${fmt(a?.precision, 2)} → <b>${fmt(b?.precision, 2)}</b></td><td class="num">${fmt(a?.f1, 2)} → <b>${fmt(b?.f1, 2)}</b></td></tr>`;
+  const V = r.vorher, N = r.nachher;
+  let h = `<h3>Bewertung: vorher → nachher</h3><div class="hint">${r.n_train} Training, ${r.n_val} Validierung · Schwelle ${r.cls_threshold} · Segmentierung ${r.segmentation_trained ? "nachtrainiert" : "unverändert"}</div>
+    <div class="tablewrap"><table><tr><th>Gruppe</th><th>n</th><th>Trefferquote</th><th>Präzision</th><th>F1</th></tr>` +
+    row("alle sicheren Labels", V.nur_sichere_labels, N.nur_sichere_labels);
+  for (const [k, title] of [["nach_art", "Art"], ["nach_groesse", "Größe"], ["nach_label", "Label"]])
+    for (const g of Object.keys(N[k])) h += row(`${title}: ${LBL[g] || g}`, V[k][g], N[k][g]);
+  h += `</table></div>`;
+  const cal = Object.entries(r.kwp_per_m2_by_size || {});
+  if (cal.length) h += `<div class="hint">kWp je m² erkannter Fläche (Median): ${cal.map(([k, v]) => `${esc(k)}: ${fmt(v, 3)}`).join(" · ")}</div>`;
+  $("#jd-report").innerHTML = h;
+}
+
 // ------------------------------------------------------------------ area tab
 function areaParams() {
   const p = { sources: $("#a-source").value, profile: $("#a-profile").value,
@@ -143,13 +195,14 @@ $("#a-start").onclick = async () => {
 };
 
 // ------------------------------------------------------------------ jobs
-const KIND = { buildings: "Gebäude", area: "Fläche" };
+const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training" };
 const STATUS = { queued: "wartet", running: "läuft", done: "fertig", failed: "Fehler", cancelled: "abgebrochen" };
 async function loadJobs() {
   S.jobs = await api("/api/jobs");
   $("#job-list").innerHTML = S.jobs.length ? S.jobs.map((j) => {
     const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
-    const what = j.kind === "buildings" ? (j.params.input || "").split(/[\\/]/).pop() : (j.params.bbox ? "Rechteck" : "Polygon");
+    const what = j.kind === "buildings" ? (j.params.input || "").split(/[\\/]/).pop()
+      : j.kind === "train" ? (j.params.name || j.params.cc || "Labels") : (j.params.bbox ? "Rechteck" : "Polygon");
     return `<div class="job ${S.job === j.id ? "sel" : ""}" data-id="${j.id}">
       <div class="top"><span>${KIND[j.kind]} · ${esc(what)}</span><span class="badge ${j.status}">${STATUS[j.status]}</span></div>
       <div class="progress"><div style="width:${pct}%"></div></div>
@@ -169,21 +222,24 @@ async function refreshJob(withResults) {
   $("#jd-title").textContent = `${KIND[j.kind]} · ${j.id} · ${STATUS[j.status]}`;
   $("#jd-bar").style.width = pct + "%";
   const c = j.counters, stats = [
-    [fmt(j.done) + " / " + fmt(j.total), j.kind === "area" ? "Kacheln" : "Gebäude"],
+    [fmt(j.done) + " / " + fmt(j.total), j.kind === "area" ? "Kacheln" : j.kind === "train" ? "Schritte" : "Gebäude"],
     [fmt(j.rate_per_s * 3600), "pro Stunde"],
     [j.eta_s ? dur(j.eta_s) : (j.status === "done" ? "fertig" : "–"), "Restzeit"],
   ];
   if (j.kind === "buildings") stats.push([fmt(c.pv), "mit PV"], [fmt(c.kein_pv), "ohne PV"], [fmt(c.fehler), "ohne Bild"]);
+  else if (j.kind === "train") stats.push([fmt(c.f1_vorher, 2), "F1 vorher"], [fmt(c.f1_nachher, 2), "F1 nachher"], [c.modell ? "gespeichert" : "–", "neues Modell"]);
   else stats.push([fmt(c.zellen_mit_pv), "Kacheln mit PV"], [fmt(c.anlagen), "Anlagen"], [fmt(c.fehler), "Fehler"]);
-  stats.push([fmt(c.kwp_sum, 0) + " kWp", "geschätzt gesamt"]);
+  if (j.kind !== "train") stats.push([fmt(c.kwp_sum, 0) + " kWp", "geschätzt gesamt"]);
   $("#jd-stats").innerHTML = stats.map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
   $("#jd-files").innerHTML = j.files.filter((f) => /\.(csv|geojson|json)$/.test(f) && f !== "job.json")
     .map((f) => `<a class="link" href="/api/jobs/${j.id}/files/${f}">${f}</a>`).join(" · ");
   $("#jd-log").textContent = j.log.join("\n");
   $("#jd-cancel").classList.toggle("hidden", !["running", "queued"].includes(j.status));
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
-  $("#jd-status").classList.toggle("hidden", j.kind === "area");
-  if (withResults || (j.status !== S.lastStatus && j.status === "done")) loadResults();
+  $("#jd-status").classList.toggle("hidden", j.kind !== "buildings");
+  $$(".filters").forEach((x) => x.classList.toggle("hidden", j.kind === "train"));
+  if (j.kind === "train") { $("#jd-table").innerHTML = ""; if (withResults || j.status === "done") showReport(j.id); }
+  else { $("#jd-report").innerHTML = ""; if (withResults || (j.status !== S.lastStatus && j.status === "done")) loadResults(); }
   S.lastStatus = j.status;
   if (!["running", "queued"].includes(j.status)) { clearInterval(S.poll); loadJobs(); }
 }
@@ -251,7 +307,7 @@ function renderSources() {
 const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap": "patch_overlap", "#s-cls": "cls_threshold", "#s-seg": "seg_threshold",
   "#s-kwp": "kwp_per_m2", "#s-minarea": "min_pv_area_m2", "#s-buffer": "buffer_m", "#s-radius": "point_radius_m",
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
-  "#s-extra": "sources_extra", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
+  "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
 function renderSettings() {
   const c = S.info.config, d = S.info.device;
   $("#s-device").innerHTML = `PyTorch ${esc(d.torch)} · Gerät <b>${esc(d.device)}</b>` +

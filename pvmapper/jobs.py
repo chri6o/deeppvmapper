@@ -127,3 +127,16 @@ def open_db(path: str) -> sqlite3.Connection:
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA synchronous=NORMAL")
     return con
+
+
+def runner(kind: str):
+    """job kind → function(job, cfg)"""
+    if kind == "buildings":
+        from .building_mode import run
+    elif kind == "area":
+        from .area_mode import run
+    elif kind == "train":
+        from .training import run
+    else:
+        raise ValueError(f"unknown job kind {kind}")
+    return run

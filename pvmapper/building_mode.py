@@ -95,7 +95,7 @@ def run(job, cfg: dict):
     db.execute("DELETE FROM results WHERE status = 'fehler'")
 
     read_kw = dict(id_field=p.get("id_field") or None, query=p.get("query") or None,
-                   layer=p.get("layer") or None)
+                   layer=p.get("layer") or None, cfg=cfg)
     job.log(f"Lese Gebäude aus {p['input']} …")
     job.total = bld.count_buildings(p["input"], **read_kw)
     job.done = len(done)
@@ -251,5 +251,35 @@ def export(job, db=None):
                                       "source": d["source"]}}
 
     write_fc(os.path.join(job.dir, "buildings.geojson"), bfeats())
+    compare_with_known(job, db)
     write_fc(os.path.join(job.dir, "pv_polygons.geojson"), pvfeats())
     job.log("Exporte geschrieben: buildings.csv, buildings.geojson, pv_polygons.geojson")
+
+
+def compare_with_known(job, db):
+    """If the buildings came with a known PV state (PV-Map: pv_conf from registers/layers/reports), compare it with the
+    detection: agreement by source confidence and by building type → comparison.json (and the job log)."""
+    import collections
+    stats = collections.defaultdict(lambda: collections.Counter())
+    any_known = False
+    for status, props, kwp in db.execute("SELECT status, props, kwp_est FROM results WHERE status != 'fehler'"):
+        p = json.loads(props or "{}")
+        if "pv_conf" not in p:
+            continue
+        any_known = True
+        known = p.get("pv_conf") or ("no_pv_reported" if p.get("reported_no_pv") else "unknown")
+        det = "pv" if status == "pv" else "kein_pv"
+        for key in ("alle", f"art:{p.get('sub') or '?'}"):
+            stats[(key, known)][det] += 1
+    if not any_known:
+        return
+    rows = []
+    for (group, known), c in sorted(stats.items()):
+        n = c["pv"] + c["kein_pv"]
+        rows.append({"gruppe": group, "bekannt": known, "n": n, "erkannt_pv": c["pv"],
+                     "anteil_erkannt": round(c["pv"] / n, 3) if n else None})
+    with open(os.path.join(job.dir, "comparison.json"), "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=1)
+    for r in rows:
+        if r["gruppe"] == "alle":
+            job.log(f"Abgleich PV-Map: bekannt={r['bekannt']}: {r['erkannt_pv']}/{r['n']} als PV erkannt")

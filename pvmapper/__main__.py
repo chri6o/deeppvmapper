@@ -33,11 +33,10 @@ def _cfg(args):
 
 
 def _run(kind, params, cfg):
-    from .jobs import Job
-    from . import area_mode, building_mode
+    from .jobs import Job, runner
     job = Job(cfg["jobs_dir"], kind, params)
     job.log(f"Job {job.id} in {job.dir}")
-    fn = building_mode.run if kind == "buildings" else area_mode.run
+    fn = runner(kind)
     job.run(lambda j: fn(j, cfg))
     print(json.dumps({k: v for k, v in job.as_dict().items() if k != "log"}, indent=1, ensure_ascii=False))
     return 0 if job.status == "done" else 1
@@ -50,7 +49,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def common(sp):
-        sp.add_argument("--profile", choices=["nrw", "ign", "google"])
+        sp.add_argument("--profile", help="nrw | ign | google | custom:<name>")
         sp.add_argument("--device")
         sp.add_argument("--model-dir", dest="model_dir")
         sp.add_argument("--jobs-dir", dest="jobs_dir")
@@ -84,6 +83,24 @@ def main(argv=None):
     a.add_argument("--buildings", help="optional building layer to match detections")
     a.add_argument("--all-detections", action="store_true",
                    help="keep detections not on a building (default: only on buildings if a layer is given)")
+    t = sub.add_parser("train", help="fine-tune with the existing PV stock from PV-Map (or a labelled GeoJSON)")
+    common(t)
+    t.add_argument("--cc", help="country code for the PV-Map sample, e.g. DE")
+    for k in ("nuts3", "lau", "sub", "cls", "tag", "bbox"):
+        t.add_argument(f"--{k}")
+    t.add_argument("--labels-file", help="local GeoJSON with properties.label 0/1 instead of PV-Map")
+    t.add_argument("--bins", default="10,30,100,750", help="kWp bounds of the size strata")
+    t.add_argument("--per-stratum", type=int, default=100)
+    t.add_argument("--negatives", type=int, default=100)
+    t.add_argument("--epochs", type=int, default=6)
+    t.add_argument("--name", help="name of the new model profile")
+    t.add_argument("--seed", default="1")
+    t.add_argument("--no-weak-negatives", action="store_true")
+    pm = sub.add_parser("pvmap", help="PV-Map connector: counts and training strata")
+    pm.add_argument("--cc", required=True)
+    for k in ("nuts3", "lau", "sub", "cls", "tag", "bbox"):
+        pm.add_argument(f"--{k}")
+    pm.add_argument("--strata", action="store_true", help="show the training strata (label × type × size)")
     r = sub.add_parser("resume")
     r.add_argument("job_id")
     r.add_argument("--jobs-dir", dest="jobs_dir")
@@ -105,8 +122,8 @@ def main(argv=None):
     cfg = _cfg(args)
 
     if args.cmd == "models":
-        from .models import PROFILES, weight_path
-        prof = PROFILES[cfg["profile"]]
+        from .models import get_profile, weight_path
+        prof = get_profile(cfg["profile"], cfg["model_dir"])
         for f in (prof.cls_file, prof.seg_file):
             print("→", weight_path(cfg["model_dir"], f))
         return 0
@@ -144,13 +161,30 @@ def main(argv=None):
             ap.error("area needs --bbox or --geojson")
         return _run("area", params, cfg)
 
+    if args.cmd == "train":
+        params = {k: getattr(args, k) for k in ("cc", "nuts3", "lau", "sub", "cls", "tag", "bbox", "per_stratum",
+                                                "negatives", "epochs", "name", "seed") if getattr(args, k) is not None}
+        params["bins"] = [float(x) for x in args.bins.split(",")] if args.bins else None
+        params["labels_file"] = args.labels_file
+        params["use_weak_negatives"] = not args.no_weak_negatives
+        params["profile"] = args.profile
+        if not params.get("cc") and not args.labels_file:
+            ap.error("train needs --cc (PV-Map) or --labels-file")
+        return _run("train", params, cfg)
+
+    if args.cmd == "pvmap":
+        from . import pvmap
+        cl = pvmap.Client.from_config(cfg)
+        flt = {k: getattr(args, k) for k in ("cc", "nuts3", "lau", "sub", "cls", "tag", "bbox") if getattr(args, k)}
+        print(json.dumps(cl.strata(**flt) if args.strata else cl.count(**flt), indent=1, ensure_ascii=False))
+        return 0
+
     if args.cmd == "resume":
-        from .jobs import Job
-        from . import area_mode, building_mode
+        from .jobs import Job, runner
         cfg = cfgmod.load(args.config)
         jd = args.jobs_dir or cfg["jobs_dir"]
         job = Job.load(jd, args.job_id)
-        fn = building_mode.run if job.kind == "buildings" else area_mode.run
+        fn = runner(job.kind)
         job.run(lambda j: fn(j, cfg))
         return 0 if job.status == "done" else 1
 

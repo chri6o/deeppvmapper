@@ -33,6 +33,8 @@ DEFAULTS = {
     "sources": "auto",                # 'auto' or list of source ids / country codes
     "sources_extra": None,            # path to an additional sources YAML
     "area_cell_px": 2560,             # area mode: image cell edge length in pixels
+    "pvmap_url": "https://pv-map.solar",  # PV-Map connector (building lists, training samples)
+    "pvmap_token": "",                # API token from PV-Map: Verwaltung → Datenquellen → API-Tokens
     "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",
 }
 
