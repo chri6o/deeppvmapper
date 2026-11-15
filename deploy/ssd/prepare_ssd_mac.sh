@@ -319,7 +319,7 @@ sudo caffeinate -i "$QEMU_BIN" \
   -machine q35 "${ACCEL[@]}" -smp "$NCPU" -m 6144 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,file="$WORK/ovmf-vars.fd" \
-  -drive file="/dev/$DISK",format=raw,if=virtio,cache=writethrough \
+  -drive file="/dev/$DISK",format=raw,if=virtio,cache=writethrough,discard=ignore,detect-zeroes=off \
   -drive file="$ISO",media=cdrom,readonly=on \
   -drive file="$WORK/seed.iso",media=cdrom,readonly=on \
   -kernel "$KDIR/$KERNEL_PATH" -initrd "$KDIR/$INITRD_PATH" \
