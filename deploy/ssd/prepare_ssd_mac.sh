@@ -310,6 +310,11 @@ sudo -v || die "sudo abgelehnt"
 diskutil unmountDisk force "/dev/$DISK" >/dev/null 2>&1 || true
 if ! sudo dd if="/dev/r$DISK" of=/dev/null bs=1m count=1 2>"$WORK/dd.err"; then
   cat "$WORK/dd.err"
+  if grep -q "not configured" "$WORK/dd.err"; then
+    diskutil list external physical || true
+    die "/dev/$DISK gibt es nicht (mehr). macOS vergibt die Nummer nach dem Ab-/Anstecken oder einem Abbruch oft neu –
+  oben die aktuelle Nummer der SSD ablesen und das Skript erneut starten."
+  fi
   die "Kein Zugriff auf /dev/r$DISK. macOS blockiert den Rohzugriff auf externe Laufwerke:
   Systemeinstellungen → Datenschutz & Sicherheit → Festplattenvollzugriff → Terminal (bzw. iTerm) einschalten,
   Terminal komplett beenden (Cmd-Q), neu öffnen und das Skript erneut starten."
