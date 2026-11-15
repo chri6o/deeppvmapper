@@ -595,3 +595,16 @@ def test_check_results_to_dataset_review_and_train(tmp_path, monkeypatch):
     # only the two reviewed images count (TEST1 and TEST4 are still open) – too few to train, which is the point
     assert any("2 übernommene Erkennungen noch nicht geprüft" in line for line in tj.log_lines)
     assert tj.status == "failed" and "Training 2" in tj.error
+
+
+def test_negative_filter_for_detection_datasets(tmp_path):
+    from pvmapper import training
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"))
+    chk = Job(cfg["jobs_dir"], "buildings", {"input": "pvmap:cc=DE&nuts3=DEA22&sub=Education&pv=none"})
+    chk.save()
+    f = training._negative_filter(cfg, {"from_job": chk.id}, [])
+    assert f == {"cc": "DE", "nuts3": "DEA22", "sub": "Education"}
+    f = training._negative_filter(cfg, {"from_job": "gone"}, [{"source": "nl-pdok-hr"}, {"source": "de-nw"}, {"source": "nl-pdok-hr"}])
+    assert f == {"cc": "NL"}
+    with pytest.raises(RuntimeError):
+        training._negative_filter(cfg, {}, [])

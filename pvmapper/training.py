@@ -78,6 +78,33 @@ def load_sample(job, cfg) -> list[dict]:
     return feats
 
 
+def _negative_filter(cfg, sp: dict, metas) -> dict:
+    """PV-Map filter for fetching negatives: the dataset's own filters; for datasets taken from a 'check
+    buildings' job the filters of that job's PV-Map input; otherwise at least the country of the imagery"""
+    from . import pvmap
+    from .jobs import Job
+    flt = {k: sp.get(k) for k in pvmap.FILTER_KEYS if sp.get(k)}
+    if not flt.get("cc") and sp.get("from_job"):
+        try:
+            chk = Job.load(cfg["jobs_dir"], sp["from_job"])
+            inp = str(chk.params.get("input") or "")
+            if inp.startswith("pvmap:"):
+                flt = {**pvmap.parse_input(inp), **flt}
+        except Exception:                                        # noqa: BLE001  (check job deleted)
+            pass
+    flt.pop("pv", None)                                          # negatives: any PV state, PV-Map labels them
+    if not flt.get("cc"):
+        cat = runtime.catalog(cfg)
+        cc = collections.Counter(cat.sources[m["source"]].country for m in metas
+                                 if m.get("source") in cat.sources and cat.sources[m["source"]].country)
+        if cc:
+            flt["cc"] = cc.most_common(1)[0][0]
+    if not flt.get("cc"):
+        raise RuntimeError("Für die Gegenbeispiele aus PV-Map fehlt das Land – Datensatz mit Land anlegen "
+                           "oder Gegenbeispiele im Datensatz markieren (Label „PV vorhanden“ aus).")
+    return flt
+
+
 def _from_check_job(job, cfg) -> list[dict]:
     """buildings selected in the results of a 'check buildings' job → dataset items to review in the mask editor.
     The detected PV polygons are a *suggestion* (mask_source 'model', not used for training until a user saves the
@@ -514,7 +541,7 @@ def run(job, cfg: dict):
             # positives-only dataset (for masking): fetch negatives with the same filters for training
             from . import pvmap
             sp = src.params
-            flt = {k: sp.get(k) for k in pvmap.FILTER_KEYS if sp.get(k)}
+            flt = _negative_filter(cfg, sp, metas)
             n_neg = int(p.get("negatives") or max(50, len(metas) // 2))
             job.log(f"Datensatz hat keine Negativbeispiele – lade {n_neg} je Gebäudeart aus PV-Map …")
             d = pvmap.Client.from_config(cfg).training(per_stratum=0, negatives=n_neg,
