@@ -327,6 +327,8 @@ def test_annotation_ai_and_training_with_user_masks(tmp_path, monkeypatch):
     rep = json.load(open(os.path.join(tj.dir, "report.json"), encoding="utf-8"))
     assert rep["segmentation_trained"] and rep["n_masks_train"] <= 10
     assert rep["n_train"] + rep["n_val"] <= 39
+    for a in rep["abweichungen"]:
+        assert os.path.isfile(os.path.join(tj.dir, "chips", a["chip"])) and {"vorher", "nachher", "label"} <= set(a)
     assert any("„Kein PV“-Markierungen" in line for line in tj.log_lines)
 
 
@@ -608,3 +610,24 @@ def test_negative_filter_for_detection_datasets(tmp_path):
     assert f == {"cc": "NL"}
     with pytest.raises(RuntimeError):
         training._negative_filter(cfg, {}, [])
+
+
+def test_review_chips_for_disagreements(tmp_path):
+    from PIL import Image as PImage
+    from pvmapper import training
+    d = tmp_path / "ds"
+    d.mkdir()
+    val = []
+    for i, lab in enumerate((1, 0, 0)):
+        name = f"TEST{i}"
+        PImage.fromarray(np.full((40, 50, 3), 120, np.uint8)).save(d / f"{name}.jpg")
+        PImage.fromarray(np.full((40, 50), 255, np.uint8)).save(d / f"{name}.fp.png")
+        val.append({"id": name, "name": name, "label": lab, "label_kind": "det_pv" if lab else "neg_weak", "sub": "Education"})
+    pix = [np.arange(0, 400)]
+    scores_old = {"TEST0": (np.array([0.9]), pix), "TEST1": (np.array([0.1]), pix), "TEST2": (np.array([0.1]), pix)}
+    scores_new = {"TEST0": (np.array([0.9]), pix), "TEST1": (np.array([0.8]), pix), "TEST2": (np.array([0.1]), pix)}
+    po, pn = training.predict(scores_old, 0.5, 10), training.predict(scores_new, 0.5, 10)
+    job = Job(str(tmp_path / "jobs"), "train", {})
+    out = training.review_chips(job, str(d), val, scores_old, 0.5, scores_new, 0.5, po, pn)
+    assert [a["id"] for a in out] == ["TEST1"] and out[0]["nachher"] and not out[0]["vorher"]
+    assert os.path.isfile(os.path.join(job.dir, "chips", out[0]["chip"]))

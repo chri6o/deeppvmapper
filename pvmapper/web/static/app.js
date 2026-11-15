@@ -165,6 +165,14 @@ async function showReport(id) {
   h += `</table></div>`;
   const cal = Object.entries(r.kwp_per_m2_by_size || {});
   if (cal.length) h += `<div class="hint">kWp je m² erkannter Fläche (Median): ${cal.map(([k, v]) => `${esc(k)}: ${fmt(v, 3)}`).join(" · ")}</div>`;
+  const ab = r.abweichungen || [];
+  if (ab.length) {
+    const yn = (x) => x ? "PV" : "–";
+    h += `<h3>Zum Ansehen: ${ab.length} Gebäude, bei denen die Modelle sich unterscheiden oder das Label verfehlen</h3>
+      <div class="hint">Bild · vorher (rot) · nachher (blau). Bei „keine PV bekannt“ entscheidet dein Blick: ist dort PV, liegt das neue Modell richtig.</div>` +
+      ab.map((a) => `<div class="valrow"><div class="hint"><b>${esc(a.id)}</b> · ${esc(LBL[a.label_kind] || a.label_kind)} · ${esc(a.sub || "")} · vorher ${yn(a.vorher)} → nachher <b>${yn(a.nachher)}</b></div>
+        <img loading="lazy" style="max-width:100%;border-radius:6px" src="/api/jobs/${id}/chips/${encodeURIComponent(a.chip)}"></div>`).join("");
+  }
   $("#jd-report").innerHTML = h;
 }
 

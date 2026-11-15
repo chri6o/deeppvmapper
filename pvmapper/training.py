@@ -272,6 +272,47 @@ def predict(scores, threshold, min_px):
     return res
 
 
+def _pred_mask(scores, bid, threshold, shape):
+    probs, pix = scores[bid]
+    m = np.zeros(shape[0] * shape[1], bool)
+    for i in np.flatnonzero(probs >= threshold):
+        m[pix[i]] = True
+    return m.reshape(shape[:2])
+
+
+def review_chips(job, ds_dir, val, base_scores, base_thr, new_scores, new_thr, base_pred, new_pred,
+                 limit: int = 60) -> list[dict]:
+    """val buildings where the models disagree or the new one is wrong → chips/val_<name>.jpg
+    (image | before (red) | after (blue), footprint yellow) for a visual check"""
+    out = []
+    os.makedirs(os.path.join(job.dir, "chips"), exist_ok=True)
+    order = sorted(val, key=lambda m: (base_pred[m["id"]][0] == new_pred[m["id"]][0], m["id"]))
+    for m in order:
+        b, n = base_pred[m["id"]][0], new_pred[m["id"]][0]
+        if b == n and n == bool(m["label"]):
+            continue
+        if len(out) >= limit:
+            break
+        img, fp, _ = load_arrays(ds_dir, m)
+        tiles = [img]
+        for sc, thr, col in ((base_scores, base_thr, (140, 0, 0)), (new_scores, new_thr, (0, 0, 140))):
+            o = img.copy()
+            mk = _pred_mask(sc, m["id"], thr, img.shape)
+            o[mk] = (0.45 * o[mk] + np.array(col)).clip(0, 255).astype(np.uint8)
+            cnts, _ = cv2.findContours(fp.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(o, cnts, -1, (255, 220, 0), max(1, img.shape[1] // 300))
+            tiles.append(o)
+        sep = np.full((img.shape[0], 6, 3), 255, np.uint8)
+        im = Image.fromarray(np.concatenate([tiles[0], sep, tiles[1], sep, tiles[2]], 1))
+        if im.width > 1200:
+            im = im.resize((1200, int(im.height * 1200 / im.width)), Image.LANCZOS)
+        fn = "val_" + runtime.safe_name(m["name"]) + ".jpg"
+        im.save(os.path.join(job.dir, "chips", fn), quality=82)
+        out.append({"id": m["id"], "label": int(m["label"]), "label_kind": m.get("label_kind"), "sub": m.get("sub"),
+                    "vorher": bool(b), "nachher": bool(n), "chip": fn})
+    return out
+
+
 def metrics(metas, pred, px_area_m2):
     """overall and per group: precision/recall/F1 on strong labels, plus recall per size class, FP rate per label"""
     def block(rows):
@@ -606,6 +647,7 @@ def run(job, cfg: dict):
     job.done = 0
     base_scores = score_buildings(det, ds_dir, val)
     job.step(len(val))
+    base_thr = det.cls_threshold
     base_pred = predict(base_scores, det.cls_threshold, min_px)
     base_metrics = metrics(val, base_pred, px_area)
 
@@ -638,6 +680,11 @@ def run(job, cfg: dict):
     new_metrics = metrics(val, new_pred, px_area)
     base_f1 = (metrics([m for m in val if m["label_kind"] != "neg_weak"] or val, base_pred, px_area)["alle"]["f1"]) or 0
     job.log(f"F1 (sichere Labels) vorher {base_f1:.3f} → nachher {f1:.3f}, Schwelle {thr}")
+    try:
+        diffs = review_chips(job, ds_dir, val, base_scores, base_thr, new_scores, thr, base_pred, new_pred)
+    except Exception as e:                                       # noqa: BLE001  (review images are optional)
+        diffs = []
+        job.log(f"Vergleichsbilder nicht erstellt: {e}")
 
     name = runtime.safe_name(p.get("name") or f"{base_id}-{p.get('cc', 'xx')}-{time.strftime('%Y%m%d')}").lower()
     calib = {k: v["median"] for k, v in new_metrics["kwp_pro_m2"].items() if v["n"] >= 5}
@@ -645,7 +692,7 @@ def run(job, cfg: dict):
               "params": {k: v for k, v in p.items() if k != "pvmap_token"},
               "sample": dict(kinds), "n_train": len(train), "n_val": len(val), "n_masks_train": n_mask,
               "segmentation_trained": do_seg, "cls_threshold": thr, "kwp_per_m2_by_size": calib,
-              "vorher": base_metrics, "nachher": new_metrics, "minutes": round((time.time() - t0) / 60, 1)}
+              "vorher": base_metrics, "nachher": new_metrics, "abweichungen": diffs, "minutes": round((time.time() - t0) / 60, 1)}
     with open(os.path.join(job.dir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
     better = f1 >= base_f1
