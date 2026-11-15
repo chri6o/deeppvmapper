@@ -88,6 +88,11 @@ class AIError(RuntimeError):
     pass
 
 
+import threading  # noqa: E402
+
+_DET_LOCK = threading.Lock()
+
+
 # ---------------------------------------------------------------------------
 # rendering
 # ---------------------------------------------------------------------------
@@ -163,7 +168,7 @@ def _parse_json(text: str) -> dict:
         raise AIError(f"JSON nicht lesbar: {e}: {m.group(0)[:200]}")
 
 
-def ask(provider: str, api_key: str, model: str, prompt: str, jpeg: bytes, timeout: int = 120,
+def ask(provider: str, api_key: str, model: str, prompt: str, jpeg: bytes, timeout: int = 90,
         session=None) -> tuple[dict, dict]:
     """Sends one image + prompt; returns (parsed JSON, usage)."""
     if provider not in PROVIDERS:
@@ -307,7 +312,8 @@ def label_item(cfg: dict, d: str, name: str, provider: str, mode: str = "candida
     hint = (cfg.get("ai_prompt_hint") or "").strip()
     cands = []
     if mode == "candidates" and det is not None:
-        cands = annotate.suggest_from_model(det, d, name, cls_threshold=0.05)["polygons"]
+        with _DET_LOCK:                                          # one GPU user at a time (threads share the model)
+            cands = annotate.suggest_from_model(det, d, name, cls_threshold=0.05)["polygons"]
         # candidates that are basically the whole roof are useless to judge
         cands = [c for c in cands if not fp_px or _area_px([c], w, h) < 0.85 * fp_px]
         if not cands:
@@ -391,8 +397,14 @@ def run(job, cfg: dict):
         except Exception as e:                                   # noqa: BLE001
             return m, None, str(e)[:300]
 
+    from concurrent.futures import as_completed
+    t_start = time.time()
     with ThreadPoolExecutor(int(p.get("concurrency", 3))) as pool:
-        for m, r, err in pool.map(one, items):
+        futs = [pool.submit(one, m) for m in items]
+        for k, fut in enumerate(as_completed(futs)):            # progress as soon as any image is done
+            m, r, err = fut.result()
+            if k == 0:
+                job.log(f"Erstes Bild nach {time.time() - t_start:.0f} s fertig.")
             job.check_cancel()
             if err:
                 job.step(1, fehler=1)
