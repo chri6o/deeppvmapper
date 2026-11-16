@@ -631,3 +631,14 @@ def test_review_chips_for_disagreements(tmp_path):
     out = training.review_chips(job, str(d), val, scores_old, 0.5, scores_new, 0.5, po, pn)
     assert [a["id"] for a in out] == ["TEST1"] and out[0]["nachher"] and not out[0]["vorher"]
     assert os.path.isfile(os.path.join(job.dir, "chips", out[0]["chip"]))
+
+
+def test_corner_points_for_snapping(tmp_path):
+    from PIL import Image as PImage
+    from pvmapper import annotate
+    img = np.full((120, 160, 3), 150, np.uint8)
+    img[30:70, 40:110] = (40, 55, 90)
+    PImage.fromarray(img).save(tmp_path / "x.jpg")
+    pts = annotate.corner_points(str(tmp_path), "x")
+    for cx_, cy in ((40, 30), (109, 30), (109, 69), (40, 69)):
+        assert min(abs(x - cx_) + abs(y - cy) for x, y in pts) < 3

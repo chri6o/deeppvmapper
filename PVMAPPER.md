@@ -117,6 +117,14 @@ Segmentierung dreifach; Bilder nur mit „Kein PV“-Markierung werden ebenfalls
 Training Helligkeit, Gamma, Schattenbänder und Reflexe. Die KI-Masken prüfen jede Fläche gegen eine Liste
 typischer Verwechsler und durchlaufen dieselbe Nachbearbeitung.
 
+### Masken-Editor: Werkzeuge und Tasten
+
+Der Editor nutzt das ganze Fenster (☰ oder B blendet die Liste ein). Werkzeuge: V Zeiger (Fläche wählen und verschieben,
+Ecken ziehen, Doppelklick auf eine Kante fügt eine Ecke ein, Entf löscht Ecke bzw. Fläche), H Hand, Z Lupe (Klick vergrößert,
+Rechtsklick verkleinert, Rahmen ziehen), 1 Polygon, 2 Rechteck, 3 gedrehtes Rechteck. Halten: Shift oder Leertaste = Hand,
+Cmd/Strg = Zeiger, Alt = Lupe. Ebenen: N oder G wechselt zwischen PV und „Gaube / kein PV“. Fang (S): Ecken aus dem Luftbild,
+Ecken und Kanten der Flächen und des Gebäudeumrisses. ? zeigt alle Tasten.
+
 ### Erkennungen als Trainingsbeispiele
 
 In den Ergebnissen von „Gebäude prüfen“ lassen sich Gebäude anhaken (oder „Zufällig wählen“, z. B. 40) und mit

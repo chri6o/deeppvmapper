@@ -335,6 +335,11 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         return annotate.save_annotation(d, name, body.get("polygons"), body.get("label"), st, "user",
                                         negatives=body.get("negatives"))
 
+    @app.get("/api/datasets/{jid}/items/{name}/corners")
+    def dataset_corners(jid: str, name: str):
+        d, name = _item(jid, name)
+        return {"points": annotate.corner_points(d, name)}
+
     @app.post("/api/datasets/{jid}/items/{name}/suggest")
     def dataset_suggest(jid: str, name: str, body: dict = Body(default={})):
         d, name = _item(jid, name)

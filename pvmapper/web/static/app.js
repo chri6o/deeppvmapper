@@ -437,6 +437,7 @@ async function openDataset(id) {
   $("#m-size").innerHTML = `<option value="">alle Größen</option>` + sizes.map((x) => `<option>${esc(x)}</option>`).join("");
   if (d.items.some((x) => String(x.label_kind || "").startsWith("det_") && x.status === "open")) $("#m-filter").value = "det";
   renderStats(d.stats); renderList();
+  if (M.list.length && (!M.item || !M.items.some((x) => x.name === M.item.name))) openItem(0);   // straight into the editor
 }
 function renderStats(s) {
   $("#m-stats").innerHTML = [[s.total, "Bilder"], [s.positive, "mit PV (Label)"], [s.positive_without_mask, "PV ohne Maske"],
@@ -464,40 +465,88 @@ function renderList() {
 }
 
 // ------------------------------------------------------------------ editor
+// Tools: poly / rect / rrect (draw), select (pointer: move vertices and areas), pan (hand), zoom (magnifier).
+// Hold Shift = hand, Cmd/Ctrl = pointer, Alt = magnifier (click: in, right-click: out, drag: zoom to frame).
+// Snap (S): corners found in the image, vertices of all areas and of the footprint, then edges.
 const cv = $("#e-canvas"), cx = cv.getContext("2d");
-function showEditor(on) { $("#editor").classList.toggle("hidden", !on); if (on) fitCanvas(); }
+const store = { get(k, d) { try { const v = localStorage.getItem("pvm." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("pvm." + k, JSON.stringify(v)); } catch { /* storage unavailable */ } } };
+M.snap = store.get("snap", true); M.full = store.get("full", true); M.corners = [];
+function showEditor(on) {
+  $("#editor").classList.toggle("hidden", !on);
+  document.body.classList.toggle("e-full", on && M.full);
+  if (on) fitCanvas();
+}
+function setFull(f) { M.full = f; store.set("full", f); document.body.classList.toggle("e-full", f && !$("#editor").classList.contains("hidden"));
+  $("#e-full").classList.toggle("on", !f); if (M.img) { fitView(); draw(); } }
 async function openItem(i) {
   if (i < 0 || i >= M.list.length) { $("#e-info").innerHTML = "Ende der Liste."; return; }
   M.idx = i; const m = M.list[i];
-  const d = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`);
+  const base = `/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`;
+  const d = await api(base);
   M.item = { ...m, ...d.meta, width: d.width, height: d.height, footprint: d.footprint };
   M.polys = d.polygons; M.other = d.negatives || []; M.layer = "pv"; setLayerButtons();
-  M.hist = []; M.cur = []; M.sel = -1; M.label = d.effective_label; M.dirty = false;
+  M.hist = []; M.cur = []; M.sel = -1; M.vsel = -1; M.label = d.effective_label; M.dirty = false; M.corners = [];
   $("#e-label").checked = !!M.label;
   M.img = new Image();
   M.img.onload = () => { showEditor(true); fitView(); draw(); };
-  M.img.src = `/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/image`;
+  M.img.src = base + "/image";
+  api(base + "/corners").then((c) => { if (M.item && M.item.name === m.name) M.corners = c.points; }).catch(() => {});
   info2(); renderList();
   const tr = $(`#m-list tr[data-i="${i}"]`); if (tr) tr.scrollIntoView({ block: "nearest" });
 }
+const TOOL_TXT = { poly: "Polygon", rect: "Rechteck", rrect: "gedrehtes Rechteck", select: "Zeiger", pan: "Hand", zoom: "Lupe" };
 function info2(extra = "") {
   const m = M.item; if (!m) return;
   const ai = m.ai ? ` · KI (${esc(m.ai.provider)}/${esc(m.ai.mode)}): ${m.ai.pv_visible ? "PV" : "keine PV"}${m.ai.confidence != null ? ", Sicherheit " + fmt(m.ai.confidence, 2) : ""}${m.ai.reviewed ? ", geprüft" : ", <b>ungeprüft</b>"}${m.ai.note ? " – " + esc(m.ai.note) : ""}` : "";
-  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · Fläche ${fmt(areaM2(), 1)} m²${ai}${extra ? " · " + extra : ""}
-    <span class="hint" style="color:#8f9bb3"> · ${M.layer === "neg" ? "<b>Ebene „Kein PV“</b> (Gauben, Fenster …) · " : ""}N wechselt PV/Kein PV · 1 Polygon · 2 Rechteck · 3 gedreht (Kante + Breite) · Doppelklick/Enter schließt · Entf löscht Auswahl · Mausrad zoomt, Leertaste+Ziehen verschiebt</span>`;
+  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m² · ${negPolys().length} Aufbauten${ai}${extra ? " · " + extra : ""}
+    <span class="hint" style="color:#8f9bb3"> · Ebene <b>${M.layer === "neg" ? "Aufbauten (kein PV)" : "PV"}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
+  const hl = $("#e-helplink"); if (hl) hl.onclick = (e) => { e.preventDefault(); toggleHelp(); };
 }
+function toggleHelp(on) { const h = $("#e-help"), show = on === undefined ? h.classList.contains("hidden") : on; h.classList.toggle("hidden", !show); }
 function areaM2() {
   const res = (S.info.profiles.find((p) => p.id === (M.dsProfile || S.info.config.profile)) || { resolution_m: 0.1 }).resolution_m;
   let a = 0; for (const p of pvPolys()) { let s = 0; for (let i = 0; i < p.length; i++) { const [x1, y1] = p[i], [x2, y2] = p[(i + 1) % p.length]; s += x1 * y2 - x2 * y1; } a += Math.abs(s) / 2; }
   return a * res * res;
 }
 function fitCanvas() { const r = cv.getBoundingClientRect(); cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio; }
-function fitView() { fitCanvas(); const s = Math.min(cv.width / M.img.width, cv.height / M.img.height) * 0.96; M.view = { s, x: (cv.width - M.img.width * s) / 2, y: (cv.height - M.img.height * s) / 2 }; }
+function fitView() { fitCanvas(); const s = Math.min(cv.width / M.img.width, cv.height / M.img.height) * 0.97; M.view = { s, x: (cv.width - M.img.width * s) / 2, y: (cv.height - M.img.height * s) / 2 }; }
 window.addEventListener("resize", () => { if (!$("#editor").classList.contains("hidden") && M.img) { fitView(); draw(); } });
 const toScreen = ([x, y]) => [M.view.x + x * M.view.s, M.view.y + y * M.view.s];
-function toImg(e) { const r = cv.getBoundingClientRect(); const px = (e.clientX - r.left) * devicePixelRatio, py = (e.clientY - r.top) * devicePixelRatio;
-  return [Math.max(0, Math.min(M.img.width, (px - M.view.x) / M.view.s)), Math.max(0, Math.min(M.img.height, (py - M.view.y) / M.view.s))]; }
+function evPx(e) { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * devicePixelRatio, (e.clientY - r.top) * devicePixelRatio]; }
+function toImgRaw(e) { const [px, py] = evPx(e); return [(px - M.view.x) / M.view.s, (py - M.view.y) / M.view.s]; }
+function clampImg([x, y]) { return [Math.max(0, Math.min(M.img.width, x)), Math.max(0, Math.min(M.img.height, y))]; }
+function toImg(e) { return clampImg(toImgRaw(e)); }
+const r1 = (v) => Math.round(v * 10) / 10;
 function path(p, close = true) { cx.beginPath(); p.forEach((q, i) => { const [x, y] = toScreen(q); i ? cx.lineTo(x, y) : cx.moveTo(x, y); }); if (close) cx.closePath(); }
+function zoomAt(px, py, f) { M.view.x = px - (px - M.view.x) * f; M.view.y = py - (py - M.view.y) * f; M.view.s *= f; draw(); }
+
+// ---------------------------------------------------------------- snapping
+function snapRadius() { return 10 * devicePixelRatio / M.view.s; }        // 10 screen px in image units
+function nearestOnSeg(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L2));
+  return [a[0] + t * dx, a[1] + t * dy];
+}
+function snapPoint(p, skip) {
+  // skip: {poly, v} vertex being dragged (not a target for itself)
+  M.snapHit = null;
+  if (!M.snap || !M.img) return p;
+  const R = snapRadius(); let best = null, bd = R;
+  const rings = [...M.polys.map((q, i) => ({ q, i, own: true })), ...M.other.map((q) => ({ q })), ...M.item.footprint.map((q) => ({ q }))];
+  const consider = (c, kind) => { const d = Math.hypot(c[0] - p[0], c[1] - p[1]); if (d < bd) { bd = d; best = { c, kind }; } };
+  for (const { q, i, own } of rings) q.forEach((v, j) => { if (!(own && skip && skip.poly === i && skip.v === j)) consider(v, "Ecke"); });
+  M.cur.forEach((v) => consider(v, "Ecke"));
+  if (!best) for (const c of M.corners) consider(c, "Bildecke");
+  if (!best) for (const { q, i, own } of rings) for (let j = 0; j < q.length; j++) {
+    if (own && skip && skip.poly === i && (skip.v === j || skip.v === (j + 1) % q.length)) continue;
+    consider(nearestOnSeg(p, q[j], q[(j + 1) % q.length]), "Kante");
+  }
+  if (!best) return p;
+  M.snapHit = best; return [r1(best.c[0]), r1(best.c[1])];
+}
+
+// ---------------------------------------------------------------- drawing
 function draw() {
   if (!M.img) return;
   cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = "#1b2232"; cx.fillRect(0, 0, cv.width, cv.height);
@@ -506,74 +555,168 @@ function draw() {
   const lw = 2 * devicePixelRatio;
   cx.lineWidth = lw; cx.strokeStyle = "#ffdc00"; cx.setLineDash([6, 4]); M.item.footprint.forEach((p) => { path(p); cx.stroke(); }); cx.setLineDash([]);
   const ai = M.item.mask_source === "ai" && !(M.item.ai && M.item.ai.reviewed);
-  const negs = M.layer === "neg" ? M.polys : M.other, pvs = M.layer === "pv" ? M.polys : M.other;
-  negs.forEach((p, i) => { path(p); cx.fillStyle = "rgba(0,200,255,.18)"; cx.fill(); cx.setLineDash([4, 3]);
-    cx.strokeStyle = M.layer === "neg" && i === M.sel ? "#fff" : "#38d6ff"; cx.lineWidth = M.layer === "neg" ? lw * 1.4 : lw * 0.8; cx.stroke(); cx.setLineDash([]); });
-  if (M.layer === "neg") { cx.globalAlpha = 0.45; pvs.forEach((p) => { path(p); cx.strokeStyle = "#ff3b5c"; cx.lineWidth = lw; cx.stroke(); }); cx.globalAlpha = 1; }
-  else M.polys.forEach((p, i) => { path(p); cx.fillStyle = ai ? "rgba(140,90,255,.35)" : "rgba(230,30,60,.35)"; cx.fill(); cx.strokeStyle = i === M.sel ? "#fff" : (ai ? "#a78bfa" : "#ff3b5c"); cx.lineWidth = i === M.sel ? lw * 1.8 : lw; cx.stroke(); });
-  if (M.cur.length) { path(M.cur, false); cx.strokeStyle = "#00e5ff"; cx.lineWidth = lw; cx.stroke(); M.cur.forEach((q) => { const [x, y] = toScreen(q); cx.fillStyle = "#00e5ff"; cx.fillRect(x - 3, y - 3, 6, 6); }); }
-  if (M.rect) { const [a, b] = M.rect; path([a, [b[0], a[1]], b, [a[0], b[1]]]); cx.strokeStyle = "#00e5ff"; cx.stroke(); }
+  const drawNeg = (p, act, sel) => { path(p); cx.fillStyle = "rgba(0,200,255,.22)"; cx.fill(); cx.setLineDash([5, 3]);
+    cx.strokeStyle = sel ? "#fff" : "#38d6ff"; cx.lineWidth = act ? lw * 1.3 : lw * 0.8; cx.stroke(); cx.setLineDash([]); };
+  const drawPv = (p, act, sel) => { path(p); cx.fillStyle = ai ? "rgba(140,90,255,.33)" : "rgba(230,30,60,.33)"; if (act) cx.fill();
+    cx.strokeStyle = sel ? "#fff" : (ai ? "#a78bfa" : "#ff3b5c"); cx.lineWidth = sel ? lw * 1.8 : act ? lw : lw * 0.8; cx.stroke(); };
+  const act = M.layer;
+  (act === "neg" ? M.other : M.polys).forEach((p, i) => drawPv(p, act === "pv", act === "pv" && i === M.sel));
+  (act === "neg" ? M.polys : M.other).forEach((p, i) => drawNeg(p, act === "neg", act === "neg" && i === M.sel));
+  if (M.sel >= 0 && M.polys[M.sel] && (eff() === "select")) M.polys[M.sel].forEach((v, j) => {
+    const [x, y] = toScreen(v); cx.fillStyle = j === M.vsel ? "#ffdc00" : "#fff"; cx.strokeStyle = "#000"; cx.lineWidth = 1;
+    cx.fillRect(x - 4 * devicePixelRatio, y - 4 * devicePixelRatio, 8 * devicePixelRatio, 8 * devicePixelRatio);
+    cx.strokeRect(x - 4 * devicePixelRatio, y - 4 * devicePixelRatio, 8 * devicePixelRatio, 8 * devicePixelRatio); });
+  const curCol = M.layer === "neg" ? "#38d6ff" : "#00e5ff";
+  if (M.cur.length) {
+    path(M.tool === "poly" && M.hover ? [...M.cur, M.hover] : M.cur, false); cx.strokeStyle = curCol; cx.lineWidth = lw; cx.stroke();
+    M.cur.forEach((q) => { const [x, y] = toScreen(q); cx.fillStyle = curCol; cx.fillRect(x - 3, y - 3, 6, 6); });
+  }
+  if (M.rect) { const [a, b] = M.rect; path([a, [b[0], a[1]], b, [a[0], b[1]]]); cx.strokeStyle = curCol; cx.lineWidth = lw; cx.stroke(); }
+  if (M.zrect) { const [a, b] = M.zrect; path([a, [b[0], a[1]], b, [a[0], b[1]]]); cx.strokeStyle = "#fff"; cx.setLineDash([4, 4]); cx.lineWidth = 1.5 * devicePixelRatio; cx.stroke(); cx.setLineDash([]); }
   if (M.tool === "rrect" && M.cur.length && M.hover) {
     const pv = M.cur.length === 1 ? [M.cur[0], M.hover] : rrect(M.cur[0], M.cur[1], M.hover);
-    path(pv, M.cur.length === 2); cx.strokeStyle = "#00e5ff"; cx.lineWidth = 2 * devicePixelRatio; cx.stroke();
+    path(pv, M.cur.length === 2); cx.strokeStyle = curCol; cx.lineWidth = lw; cx.stroke();
   }
+  if (M.snapHit) { const [x, y] = toScreen(M.snapHit.c); cx.strokeStyle = "#ff3df5"; cx.lineWidth = 2 * devicePixelRatio;
+    cx.beginPath(); cx.arc(x, y, 7 * devicePixelRatio, 0, 7); cx.stroke(); }
 }
 function setLayerButtons() { $("#e-layer-pv").classList.toggle("on", M.layer === "pv"); $("#e-layer-neg").classList.toggle("on", M.layer === "neg"); }
 function setLayer(l) {
   if (l === M.layer) return;
   if (M.cur.length >= 3) closePoly();
-  [M.polys, M.other] = [M.other, M.polys]; M.layer = l; M.hist = []; M.cur = []; M.sel = -1; setLayerButtons(); draw(); info2();
+  [M.polys, M.other] = [M.other, M.polys]; M.layer = l; M.hist = []; M.cur = []; M.sel = -1; M.vsel = -1; setLayerButtons(); draw(); info2();
 }
 $("#e-layer-pv").onclick = () => setLayer("pv");
 $("#e-layer-neg").onclick = () => setLayer("neg");
 const pvPolys = () => M.layer === "pv" ? M.polys : M.other, negPolys = () => M.layer === "neg" ? M.polys : M.other;
-function push() { M.hist.push(JSON.stringify(M.polys)); if (M.hist.length > 50) M.hist.shift(); M.dirty = true; }
-function undo() { if (M.cur.length) { M.cur.pop(); } else if (M.hist.length) { M.polys = JSON.parse(M.hist.pop()); } draw(); info2(); }
-function closePoly() { if (M.cur.length >= 3) { push(); M.polys.push(M.cur.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10])); } M.cur = []; draw(); info2(); }
+function push() { M.hist.push(JSON.stringify(M.polys)); if (M.hist.length > 80) M.hist.shift(); M.dirty = true; }
+function undo() { if (M.cur.length) { M.cur.pop(); } else if (M.hist.length) { M.polys = JSON.parse(M.hist.pop()); M.sel = -1; M.vsel = -1; } draw(); info2(); }
+function closePoly() { if (M.cur.length >= 3) { push(); M.polys.push(M.cur.map(([x, y]) => [r1(x), r1(y)])); } M.cur = []; draw(); info2(); }
 function inside(pt, poly) { let c = false; for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) { const [xi, yi] = poly[i], [xj, yj] = poly[j];
   if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi) c = !c; } return c; }
+function rrect(a, b, c) {
+  // rectangle with edge a–b, extended perpendicular to the edge up to the projection of c
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
+  const t = (c[0] - a[0]) * nx + (c[1] - a[1]) * ny;
+  return [a, b, [b[0] + nx * t, b[1] + ny * t], [a[0] + nx * t, a[1] + ny * t]].map(([x, y]) => [r1(x), r1(y)]);
+}
 
+// ---------------------------------------------------------------- tools and modifiers
 let space = false;
+const mods = { shift: false, alt: false, meta: false };
+function eff() {
+  // temporary tools while a modifier is held (not in the middle of drawing a polygon)
+  if (space || mods.shift) return "pan";
+  if (mods.alt) return "zoom";
+  if (mods.meta) return "select";
+  return M.tool;
+}
+function setCursor() {
+  const t = eff();
+  cv.style.cursor = M.drag ? "grabbing" : t === "pan" ? "grab" : t === "zoom" ? "zoom-in" : t === "select" ? (M.hoverVertex ? "move" : "default") : "crosshair";
+}
+function hitVertex(p) {
+  const R = 8 * devicePixelRatio / M.view.s;
+  const order = M.sel >= 0 ? [M.sel, ...M.polys.keys()] : [...M.polys.keys()];
+  for (const i of order) { const q = M.polys[i]; if (!q) continue; const j = q.findIndex((v) => Math.hypot(v[0] - p[0], v[1] - p[1]) < R); if (j >= 0) return { i, j }; }
+  return null;
+}
+function hitEdge(p) {
+  const R = 6 * devicePixelRatio / M.view.s;
+  for (let i = 0; i < M.polys.length; i++) { const q = M.polys[i];
+    for (let j = 0; j < q.length; j++) { const c = nearestOnSeg(p, q[j], q[(j + 1) % q.length]); if (Math.hypot(c[0] - p[0], c[1] - p[1]) < R) return { i, j, c }; } }
+  return null;
+}
 cv.addEventListener("mousedown", (e) => {
   if (!M.img) return;
-  if (space || e.button === 1 || e.button === 2) { M.drag = { x: e.clientX, y: e.clientY, vx: M.view.x, vy: M.view.y }; e.preventDefault(); return; }
-  const p = toImg(e);
+  mods.shift = e.shiftKey; mods.alt = e.altKey; mods.meta = e.metaKey || e.ctrlKey;
+  const t = eff();
+  if (t === "pan" || e.button === 1) { M.drag = { x: e.clientX, y: e.clientY, vx: M.view.x, vy: M.view.y }; setCursor(); e.preventDefault(); return; }
+  if (t === "zoom") {
+    const [px, py] = evPx(e);
+    if (e.button === 2) { zoomAt(px, py, 1 / 2); return; }
+    M.zrect = [toImgRaw(e), toImgRaw(e)]; M.zstart = [px, py]; return;
+  }
+  if (e.button === 2) { M.drag = { x: e.clientX, y: e.clientY, vx: M.view.x, vy: M.view.y }; setCursor(); return; }
+  const raw = toImg(e);
+  if (t === "select") {
+    const v = hitVertex(raw);
+    if (v) { push(); M.sel = v.i; M.vsel = v.j; M.vdrag = v; draw(); return; }
+    let hit = M.polys.findIndex((q) => inside(raw, q));
+    if (hit < 0) {                                              // area of the other layer → switch layer
+      const ho = M.other.findIndex((q) => inside(raw, q));
+      if (ho >= 0) { setLayer(M.layer === "pv" ? "neg" : "pv"); hit = ho; }
+    }
+    M.sel = hit; M.vsel = -1;
+    if (hit >= 0) { push(); M.pdrag = { i: hit, start: raw, orig: JSON.parse(JSON.stringify(M.polys[hit])), moved: false }; }
+    draw(); info2(); return;
+  }
+  const p = snapPoint(raw);
   if (M.tool === "rect") { M.rect = [p, p]; return; }
   if (M.tool === "rrect") {
     M.cur.push(p);
     if (M.cur.length === 3) { const q = rrect(M.cur[0], M.cur[1], M.cur[2]); M.cur = []; push(); M.polys.push(q); info2(); }
     draw(); return;
   }
-  if (!M.cur.length) { const hit = M.polys.findIndex((q) => inside(p, q)); if (hit >= 0 && !e.shiftKey) { M.sel = hit; draw(); return; } M.sel = -1; }
   if (M.cur.length >= 3) { const [fx, fy] = toScreen(M.cur[0]), [sx, sy] = toScreen(p); if (Math.hypot(fx - sx, fy - sy) < 10 * devicePixelRatio) { closePoly(); return; } }
   M.cur.push(p); draw();
 });
 cv.addEventListener("mousemove", (e) => {
+  if (!M.img) return;
+  mods.shift = e.shiftKey; mods.alt = e.altKey; mods.meta = e.metaKey || e.ctrlKey;
   if (M.drag) { M.view.x = M.drag.vx + (e.clientX - M.drag.x) * devicePixelRatio; M.view.y = M.drag.vy + (e.clientY - M.drag.y) * devicePixelRatio; draw(); return; }
-  if (M.rect) { M.rect[1] = toImg(e); draw(); }
-  else if (M.tool === "rrect" && M.cur.length) { M.hover = toImg(e); draw(); }
+  if (M.zrect) { M.zrect[1] = toImgRaw(e); draw(); return; }
+  const raw = toImg(e);
+  if (M.vdrag) { M.polys[M.vdrag.i][M.vdrag.j] = snapPoint(raw, { poly: M.vdrag.i, v: M.vdrag.j }).map(r1); draw(); info2(); return; }
+  if (M.pdrag) { const dx = raw[0] - M.pdrag.start[0], dy = raw[1] - M.pdrag.start[1]; M.pdrag.moved = true;
+    M.polys[M.pdrag.i] = M.pdrag.orig.map(([x, y]) => [r1(x + dx), r1(y + dy)]); draw(); return; }
+  const t = eff();
+  if (t === "select") { M.hoverVertex = !!hitVertex(raw); M.snapHit = null; setCursor(); draw(); return; }
+  if (t === "pan" || t === "zoom") { M.snapHit = null; setCursor(); draw(); return; }
+  const p = snapPoint(raw);
+  if (M.rect) M.rect[1] = p;
+  M.hover = p; setCursor(); draw();
 });
-function rrect(a, b, c) {
-  // rectangle with edge a–b, extended perpendicular to the edge up to the projection of c
-  const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L, ny = dx / L;
-  const t = (c[0] - a[0]) * nx + (c[1] - a[1]) * ny;
-  return [a, b, [b[0] + nx * t, b[1] + ny * t], [a[0] + nx * t, a[1] + ny * t]].map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10]);
-}
-window.addEventListener("mouseup", () => {
-  if (M.drag) { M.drag = null; return; }
+window.addEventListener("mouseup", (e) => {
+  if (M.drag) { M.drag = null; setCursor(); return; }
+  if (M.zrect) {
+    const [a, b] = M.zrect, [sx, sy] = M.zstart, [ex, ey] = evPx(e); M.zrect = null;
+    if (Math.hypot(ex - sx, ey - sy) < 6 * devicePixelRatio) zoomAt(sx, sy, 2);            // click: zoom in
+    else {                                                                                   // frame: fit it
+      const w = Math.abs(b[0] - a[0]) || 1, h = Math.abs(b[1] - a[1]) || 1, s = Math.min(cv.width / w, cv.height / h) * 0.95;
+      M.view = { s, x: cv.width / 2 - (a[0] + b[0]) / 2 * s, y: cv.height / 2 - (a[1] + b[1]) / 2 * s }; draw();
+    }
+    return;
+  }
+  if (M.vdrag) { M.vdrag = null; M.snapHit = null; draw(); return; }
+  if (M.pdrag) { if (!M.pdrag.moved) M.hist.pop(); M.pdrag = null; draw(); return; }
   if (M.rect) { const [[x1, y1], [x2, y2]] = M.rect; M.rect = null;
-    if (Math.abs(x2 - x1) > 2 && Math.abs(y2 - y1) > 2) { push(); M.polys.push([[x1, y1], [x2, y1], [x2, y2], [x1, y2]].map(([x, y]) => [Math.round(x), Math.round(y)])); }
+    if (Math.abs(x2 - x1) > 2 && Math.abs(y2 - y1) > 2) { push(); M.polys.push([[x1, y1], [x2, y1], [x2, y2], [x1, y2]].map(([x, y]) => [r1(x), r1(y)])); }
     draw(); info2(); }
 });
-cv.addEventListener("dblclick", (e) => { e.preventDefault(); if (M.cur.length > 3) M.cur.pop(); closePoly(); });
+cv.addEventListener("dblclick", (e) => {
+  e.preventDefault();
+  if (eff() === "select") {                                    // double-click on an edge: insert a vertex
+    const h = hitEdge(toImg(e)); if (h) { push(); M.polys[h.i].splice(h.j + 1, 0, h.c.map(r1)); M.sel = h.i; M.vsel = h.j + 1; draw(); }
+    return;
+  }
+  if (M.tool === "poly") { if (M.cur.length > 3) M.cur.pop(); closePoly(); }
+});
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
-cv.addEventListener("wheel", (e) => { e.preventDefault(); const r = cv.getBoundingClientRect(); const px = (e.clientX - r.left) * devicePixelRatio, py = (e.clientY - r.top) * devicePixelRatio;
-  const f = e.deltaY < 0 ? 1.2 : 1 / 1.2; M.view.x = px - (px - M.view.x) * f; M.view.y = py - (py - M.view.y) * f; M.view.s *= f; draw(); }, { passive: false });
+cv.addEventListener("mouseleave", () => { M.hover = null; M.snapHit = null; if (M.img) draw(); });
+cv.addEventListener("wheel", (e) => { e.preventDefault(); const [px, py] = evPx(e);
+  if (e.ctrlKey && !mods.meta) { zoomAt(px, py, Math.exp(-e.deltaY * 0.01)); return; }   // pinch on trackpads
+  zoomAt(px, py, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
 
-function setTool(t) { M.tool = t; M.cur = []; $$(".etool [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t)); draw(); }
+function setTool(t) { M.tool = t; M.cur = []; M.rect = null; if (t !== "select") M.vsel = -1;
+  $$(".etool [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t)); setCursor(); draw(); info2(); }
+function setSnap(on) { M.snap = on; store.set("snap", on); $("#e-snap").classList.toggle("on", on); M.snapHit = null; if (M.img) { draw(); info2(); } }
 $$(".etool [data-tool]").forEach((b) => b.onclick = () => setTool(b.dataset.tool));
+$("#e-snap").onclick = () => setSnap(!M.snap);
+$("#e-full").onclick = () => setFull(!M.full);
+$("#e-fit").onclick = () => { fitView(); draw(); };
 $("#e-undo").onclick = undo;
-$("#e-clear").onclick = () => { if (M.polys.length) { push(); M.polys = []; draw(); info2(); } };
+$("#e-clear").onclick = () => { if (M.polys.length) { push(); M.polys = []; M.sel = -1; draw(); info2(); } };
 $("#e-label").onchange = () => { M.label = $("#e-label").checked ? 1 : 0; M.dirty = true; };
 $("#e-prev").onclick = () => openItem(M.idx - 1);
 $("#e-next").onclick = () => openItem(M.idx + 1);
@@ -581,6 +724,8 @@ $("#e-save").onclick = () => saveItem("done");
 $("#e-skip").onclick = () => saveItem("skip");
 $("#e-model").onclick = () => suggest(null);
 $("#e-ai").onclick = () => suggest($("#m-provider").value);
+$("#e-close").onclick = () => { showEditor(false); };
+setSnap(M.snap); $("#e-full").classList.toggle("on", !M.full);
 
 async function saveItem(status) {
   const m = M.item; if (!m) return;
@@ -609,29 +754,53 @@ async function suggest(provider) {
     info2(provider ? `KI: ${d.pv_visible ? "PV sichtbar" : "keine PV"} (${fmt(d.confidence, 2)}) ${esc(d.note || "")} – prüfen und speichern` : `Modellvorschlag (Score ${fmt(d.max_prob, 2)}) – prüfen und speichern`);
   } catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); }
 }
+function editorActive() { return currentTab() === "masks" && !$("#editor").classList.contains("hidden"); }
 document.addEventListener("keydown", (e) => {
-  if (currentTab() !== "masks" || $("#editor").classList.contains("hidden")) return;
+  if (!editorActive()) return;
   if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName) && document.activeElement.type !== "checkbox") return;
-  const k = e.key;
-  if (k === " ") { space = true; e.preventDefault(); return; }
-  if ((e.ctrlKey || e.metaKey) && k.toLowerCase() === "z") { undo(); e.preventDefault(); return; }
+  const k = e.key, kl = k.toLowerCase();
+  if (k === "Shift" || k === "Alt" || k === "Meta" || k === "Control") {
+    mods.shift = e.shiftKey; mods.alt = e.altKey; mods.meta = e.metaKey || e.ctrlKey; setCursor(); draw();
+    if (k === "Alt") e.preventDefault(); return;
+  }
+  if (k === " ") { space = true; setCursor(); e.preventDefault(); return; }
+  if ((e.ctrlKey || e.metaKey) && kl === "z") { undo(); e.preventDefault(); return; }
+  if (e.ctrlKey || e.metaKey) return;                            // leave browser shortcuts alone
   if (k === "Enter") { e.preventDefault(); if (M.cur.length) closePoly(); else saveItem("done"); }
-  else if (k === "Escape") { M.cur = []; M.rect = null; M.sel = -1; draw(); }
-  else if (k === "Delete" || (k === "Backspace" && M.sel >= 0)) { if (M.sel >= 0) { push(); M.polys.splice(M.sel, 1); M.sel = -1; draw(); info2(); } e.preventDefault(); }
+  else if (k === "Escape") { if (!$("#e-help").classList.contains("hidden")) toggleHelp(false); M.cur = []; M.rect = null; M.zrect = null; M.sel = -1; M.vsel = -1; draw(); }
+  else if (k === "Delete" || (k === "Backspace" && M.sel >= 0)) {
+    if (M.sel >= 0) { push();
+      if (M.vsel >= 0 && M.polys[M.sel].length > 3) { M.polys[M.sel].splice(M.vsel, 1); M.vsel = -1; }
+      else { M.polys.splice(M.sel, 1); M.sel = -1; M.vsel = -1; }
+      draw(); info2(); }
+    e.preventDefault(); }
   else if (k === "Backspace") { undo(); e.preventDefault(); }
   else if (k === "ArrowRight") openItem(M.idx + 1);
   else if (k === "ArrowLeft") openItem(M.idx - 1);
-  else if (k.toLowerCase() === "n") setLayer(M.layer === "pv" ? "neg" : "pv");
+  else if (kl === "n" || kl === "g") setLayer(M.layer === "pv" ? "neg" : "pv");
   else if (k === "1") setTool("poly");
   else if (k === "2") setTool("rect");
   else if (k === "3") setTool("rrect");
-  else if (k.toLowerCase() === "m") suggest(null);
-  else if (k.toLowerCase() === "k") suggest($("#m-provider").value);
-  else if (k.toLowerCase() === "x") saveItem("skip");
-  else if (k.toLowerCase() === "l") { $("#e-label").checked = !$("#e-label").checked; $("#e-label").onchange(); }
-  else if (k.toLowerCase() === "f") { fitView(); draw(); }
+  else if (kl === "v") setTool("select");
+  else if (kl === "h") setTool("pan");
+  else if (kl === "z") setTool("zoom");
+  else if (kl === "s") setSnap(!M.snap);
+  else if (kl === "b") setFull(!M.full);
+  else if (k === "?") toggleHelp();
+  else if (k === "+" || k === "=") zoomAt(cv.width / 2, cv.height / 2, 1.5);
+  else if (k === "-") zoomAt(cv.width / 2, cv.height / 2, 1 / 1.5);
+  else if (kl === "m") suggest(null);
+  else if (kl === "k") suggest($("#m-provider").value);
+  else if (kl === "x") saveItem("skip");
+  else if (kl === "l") { $("#e-label").checked = !$("#e-label").checked; $("#e-label").onchange(); }
+  else if (kl === "f" || k === "0") { fitView(); draw(); }
 });
-document.addEventListener("keyup", (e) => { if (e.key === " ") space = false; });
+document.addEventListener("keyup", (e) => {
+  if (e.key === " ") space = false;
+  mods.shift = e.shiftKey; mods.alt = e.altKey; mods.meta = e.metaKey || e.ctrlKey;
+  if (editorActive()) { setCursor(); draw(); }
+});
+window.addEventListener("blur", () => { space = false; mods.shift = mods.alt = mods.meta = false; });
 
 $("#m-ai-batch").onclick = async () => {
   if (!M.ds) return;

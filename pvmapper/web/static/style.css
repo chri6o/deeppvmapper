@@ -81,3 +81,13 @@ code { background: #f2f5fa; padding: 0 3px; border-radius: 3px; }
 tr.cur { background: #fff4cc !important; }
 kbd { border: 1px solid #ccc; border-radius: 3px; padding: 0 4px; font-size: 11px; background: #fafafa; }
 .filters2 select { width: auto; margin-right: 6px; }
+
+/* mask editor: full window (list hidden), help overlay */
+body.e-full #panel { display: none; }
+#e-full.on { background: var(--accent); color: var(--accent-ink); }
+#e-snap.on { background: #6d28d9; color: #fff; }
+#e-layer-neg.on { background: #0891b2; color: #fff; }
+#e-layer-pv.on { background: #e11d48; color: #fff; }
+.ehelp { position: absolute; left: 12px; right: 12px; bottom: 44px; background: rgba(15,21,36,.95); color: #dfe5f1; padding: 12px 14px;
+  border-radius: 8px; line-height: 1.7; font-size: 13px; z-index: 5; }
+.einfo a { color: #9cc3ff; }

@@ -240,21 +240,45 @@
   <div id="map"></div>
   <div id="editor" class="hidden">
     <div class="etool">
-      <div class="seg"><button data-tool="poly" class="on" title="Polygon (1)">⬠ Polygon</button><button data-tool="rect" title="Rechteck (2)">▭ Rechteck</button><button data-tool="rrect" title="Gedrehtes Rechteck (3): Kante mit zwei Klicks, dritter Klick für die Breite">◇ Gedreht</button></div>
-      <div class="seg"><button id="e-layer-pv" class="on" title="PV-Flächen zeichnen (N wechselt)">PV</button><button id="e-layer-neg" title="Verwechsler markieren – Gauben, Dachfenster, Solarthermie … (N wechselt). Das Training lernt dort gezielt „keine PV“.">Kein PV</button></div>
+      <button id="e-full" title="Liste einblenden / Vollbild (B)">☰</button>
+      <div class="seg" title="Werkzeuge">
+        <button data-tool="select" title="Zeiger (V) – Fläche wählen, verschieben, Ecken ziehen; Doppelklick auf Kante fügt Ecke ein. Halten: Cmd/Strg">➤</button>
+        <button data-tool="pan" title="Hand (H) – Bild verschieben. Halten: Shift oder Leertaste">✋</button>
+        <button data-tool="zoom" title="Lupe (Z) – Klick vergrößert, Rechtsklick verkleinert, Rahmen ziehen zoomt darauf. Halten: Alt">🔍</button>
+      </div>
+      <div class="seg" title="Zeichnen">
+        <button data-tool="poly" class="on" title="Polygon (1) – Klicks setzen Ecken, Doppelklick/Enter oder Klick auf den Startpunkt schließt">⬠</button>
+        <button data-tool="rect" title="Rechteck (2) – ziehen">▭</button>
+        <button data-tool="rrect" title="Gedrehtes Rechteck (3) – Kante mit zwei Klicks, dritter Klick für die Breite">◇</button>
+      </div>
+      <button id="e-snap" class="on" title="Fang (S): Bildecken, Ecken und Kanten der Flächen und des Umrisses">🧲 Fang</button>
+      <div class="seg" title="Ebene">
+        <button id="e-layer-pv" class="on" title="PV-Module markieren (N/G wechselt)">PV</button>
+        <button id="e-layer-neg" title="Aufbauten ohne PV markieren – Gauben, Dachfenster, Lichtkuppeln, Solarthermie (N/G wechselt). Das Training lernt dort gezielt „keine PV“.">Gaube / kein PV</button>
+      </div>
       <button id="e-model" title="Modellvorschlag (M)">Modell</button>
       <button id="e-ai" title="KI-Vorschlag (K)">KI</button>
-      <button id="e-undo" title="Rückgängig (Strg+Z)">↶</button>
-      <button id="e-clear" title="Alle Flächen löschen">Leeren</button>
+      <button id="e-undo" title="Rückgängig (Cmd/Strg+Z)">↶</button>
+      <button id="e-clear" title="Alle Flächen der aktiven Ebene löschen">Leeren</button>
+      <button id="e-fit" title="Ganzes Bild (F oder 0)">⤢</button>
       <span class="sp"></span>
       <label class="check" title="Label umschalten (L)"><input type="checkbox" id="e-label"> PV vorhanden</label>
       <button id="e-prev" title="Zurück (←)">←</button>
       <button id="e-skip" title="Überspringen (X)">Überspringen</button>
       <button id="e-save" class="primary" title="Speichern und weiter (Enter)">Speichern ↵</button>
       <button id="e-next" title="Weiter ohne Speichern (→)">→</button>
+      <button id="e-close" title="Editor schließen">✕</button>
     </div>
     <div id="e-wrap"><canvas id="e-canvas"></canvas></div>
     <div id="e-info" class="einfo"></div>
+    <div id="e-help" class="ehelp hidden">
+      <b>Werkzeuge</b> V Zeiger · H Hand · Z Lupe · 1 Polygon · 2 Rechteck · 3 gedrehtes Rechteck<br>
+      <b>Halten</b> Shift oder Leertaste = Hand · Cmd/Strg = Zeiger · Alt = Lupe (Klick vergrößert, Rechtsklick verkleinert, Rahmen ziehen)<br>
+      <b>Zeiger</b> Fläche anklicken und ziehen · Ecke ziehen · Doppelklick auf Kante = neue Ecke · Entf löscht Ecke bzw. Fläche<br>
+      <b>Ebenen</b> N oder G wechselt PV ↔ Gaube/kein PV · Klick mit dem Zeiger auf eine Fläche der anderen Ebene wechselt dorthin<br>
+      <b>Ansicht</b> Mausrad / Trackpad zoomt · + / − · F oder 0 ganzes Bild · B Liste ein/aus · S Fang ein/aus<br>
+      <b>Ablauf</b> Enter speichert und öffnet das nächste Bild · ← → blättern · X überspringen · L Label · M Modell · K KI · Cmd/Strg+Z rückgängig · Esc abbrechen
+    </div>
   </div>
   <div id="chipview" class="hidden"><button id="chipclose">×</button><img id="chipimg" alt=""><div id="chipcap"></div></div>
 </section>

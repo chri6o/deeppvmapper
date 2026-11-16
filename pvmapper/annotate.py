@@ -201,3 +201,15 @@ def suggest_from_model(det, d, name, cls_threshold: float | None = None) -> dict
 def neg_mask(d, name):
     p = os.path.join(d, name + ".neg.png")
     return (np.asarray(Image.open(p)) > 0) if os.path.isfile(p) else None
+
+
+def corner_points(d, name, max_corners: int = 2500) -> list:
+    """corner-like image points (roof edges, module field corners) for snapping in the mask editor"""
+    img = np.asarray(Image.open(os.path.join(d, name + ".jpg")).convert("L"))
+    g = cv2.GaussianBlur(img, (3, 3), 0)
+    pts = cv2.goodFeaturesToTrack(g, maxCorners=max_corners, qualityLevel=0.015, minDistance=3, blockSize=5)
+    if pts is None:
+        return []
+    pts = cv2.cornerSubPix(g, pts.astype(np.float32), (3, 3), (-1, -1),
+                           (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.05))
+    return [[round(float(x), 1), round(float(y), 1)] for x, y in pts.reshape(-1, 2)]
