@@ -48,7 +48,7 @@ class Detector:
     def __init__(self, profile: Profile, cls_model, seg_model, device: str,
                  cls_threshold: float | None = None, seg_threshold: float | None = None,
                  batch_size: int = 32, overlap: float = 0.25, tta: bool = True,
-                 neighbor_factor: float = 0.5):
+                 neighbor_factor: float = 0.5, precision: str = "auto"):
         self.p = profile
         self.cls = cls_model
         self.seg = seg_model
@@ -59,6 +59,9 @@ class Detector:
         self.overlap = overlap
         self.tta = tta                      # average segmentation over flips (less dependent on light direction)
         self.neighbor_factor = neighbor_factor  # in images with PV, also segment patches scoring ≥ factor×threshold
+        # half precision on the GPU: about twice the throughput on RDNA3/Ampere, results practically unchanged
+        self.fp16 = precision == "fp16" or (precision == "auto" and str(device).startswith("cuda"))
+        self.stats = {"patches": 0, "segmented": 0, "gpu_s": 0.0}
         self.mean = torch.tensor(profile.norm_mean, device=device).view(1, 3, 1, 1)
         self.std = torch.tensor(profile.norm_std, device=device).view(1, 3, 1, 1)
 
@@ -84,8 +87,18 @@ class Detector:
             b *= 2
         return min(b, max(cap, k))
 
+    def _amp(self):
+        import contextlib
+        if self.fp16 and not torch.is_grad_enabled():
+            return torch.autocast(device_type="cuda", dtype=torch.float16)
+        return contextlib.nullcontext()
+
     @torch.no_grad()
     def _classify(self, x: torch.Tensor) -> torch.Tensor:
+        with self._amp():
+            return self._classify_impl(x).float()
+
+    def _classify_impl(self, x: torch.Tensor) -> torch.Tensor:
         if x.shape[-1] != self.p.cls_input_px:
             x = F.interpolate(x, size=(self.p.cls_input_px,) * 2, mode="bilinear",
                               align_corners=False, antialias=True)
@@ -98,12 +111,16 @@ class Detector:
 
     @torch.no_grad()
     def _segment(self, x: torch.Tensor) -> torch.Tensor:
+        with self._amp():
+            return self._segment_impl(x)
+
+    def _segment_impl(self, x: torch.Tensor) -> torch.Tensor:
         xn = (x - self.mean) / self.std
-        prob = torch.sigmoid(self.seg(xn)["out"][:, 0])
+        prob = torch.sigmoid(self.seg(xn)["out"][:, 0].float())
         if self.tta:
             # flips change where shadows and glare fall relative to the network's receptive field
-            prob = prob + torch.sigmoid(self.seg(xn.flip(-1))["out"][:, 0]).flip(-1)
-            prob = prob + torch.sigmoid(self.seg(xn.flip(-2))["out"][:, 0]).flip(-2)
+            prob = prob + torch.sigmoid(self.seg(xn.flip(-1))["out"][:, 0].float()).flip(-1)
+            prob = prob + torch.sigmoid(self.seg(xn.flip(-2))["out"][:, 0].float()).flip(-2)
             prob = prob / 3
         return prob >= self.seg_threshold
 
@@ -126,6 +143,8 @@ class Detector:
                 index.append((key, x, y, h, w))
                 patches.append(img[y:y + size, x:x + size])
 
+        import time as _t
+        t0 = _t.time()
         bs = self.batch_size
         probs = np.zeros(len(patches), np.float32)
         for b in range(0, len(patches), bs):                     # pass 1: classify all patches
@@ -154,6 +173,9 @@ class Detector:
                     continue
                 region = r.mask[py:py + hh, px:px + ww]
                 np.maximum(region, m[:hh, :ww].astype(np.uint8), out=region)
+        self.stats["patches"] += len(patches)
+        self.stats["segmented"] += len(sel)
+        self.stats["gpu_s"] += _t.time() - t0
         return results
 
 

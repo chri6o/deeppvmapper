@@ -129,10 +129,7 @@ def run(job, cfg: dict):
             img, win, src = sources.fetch_for_geometry(
                 cat, search, prof.resolution_m, buffer_m if fp is not None else 0.0,
                 src_filter, min_px=prof.patch_px)
-            img2 = src2 = None
-            if cross and getattr(src, "alt", None):
-                img2, src2 = sources.fetch_second(cat, src, win, img)
-            return b, search, fp, img, win, (src, img2, src2), None
+            return b, search, fp, img, win, src, None
         except Exception as e:                                   # noqa: BLE001
             return b, search, fp, None, None, None, str(e)[:500]
 
@@ -163,22 +160,38 @@ def run(job, cfg: dict):
               + ",".join("?" * len(keys)) + ")")
     group, group_patches = [], 0
     target_patches = max(det.batch_size * 2, 16)
+    import time as _t
+    t_start, n_start, last_report = _t.time(), job.done, job.done
+    det.stats.update(patches=0, segmented=0, gpu_s=0.0)
+    job.log(f"Grafikkarte: {'halbe Genauigkeit (fp16)' if det.fp16 else 'volle Genauigkeit (fp32)'}, "
+            f"Batch {det.batch_size}, Spiegel-Mittelung {'an' if det.tta else 'aus'}.")
 
     def flush():
         nonlocal group, group_patches
         if not group:
             return
-        items = [(i, item[3]) for i, item in enumerate(group)]
-        items += [((i, 2), item[5][1]) for i, item in enumerate(group) if item[5][1] is not None]
-        res = det.run(items)
+        res = det.run([(i, item[3]) for i, item in enumerate(group)])
+        masks, infos, clips = {}, {}, {}
+        for i, (b, search, fp, img, win, src, _) in enumerate(group):
+            clips[i] = runtime.clip_mask(fp, win, img.shape) if fp is not None else None
+            masks[i], infos[i] = postproc.clean(img, res[i].mask, prof.resolution_m, clips[i], pp_cfg)
+        # cross-check only where the first image shows PV: a second year of imagery for the hits
+        seconds = {}
+        hits = [i for i, item in enumerate(group) if cross and masks[i].any() and getattr(item[5], "alt", None)]
+        if hits:
+            with ThreadPoolExecutor(int(cfg["fetch_workers"])) as pool:
+                got = pool.map(lambda i: (i, *sources.fetch_second(cat, group[i][5], group[i][4], group[i][3])), hits)
+                seconds = {i: (im2, s2) for i, im2, s2 in got if im2 is not None}
+            if seconds:
+                res2 = det.run([(i, im2) for i, (im2, _) in seconds.items()])
         rows = []
-        for i, (b, search, fp, img, win, (src, img2, src2), _) in enumerate(group):
+        for i, (b, search, fp, img, win, src, _) in enumerate(group):
             r = res[i]
-            clip = runtime.clip_mask(fp, win, img.shape) if fp is not None else None
-            mask, info = postproc.clean(img, r.mask, prof.resolution_m, clip, pp_cfg)
+            mask, info = masks[i], infos[i]
+            img2, src2 = seconds.get(i, (None, None))
             check = "ohne"
             if img2 is not None:
-                mask2, _ = postproc.clean(img2, res[(i, 2)].mask, prof.resolution_m, clip, pp_cfg)
+                mask2, _ = postproc.clean(img2, res2[i].mask, prof.resolution_m, clips[i], pp_cfg)
                 mask, check = postproc.fuse(mask, mask2, prof.resolution_m)
             polys = inference.mask_to_polygons(mask, win)
             row = _summarise(b, polys, fp, search, win, src, r.max_prob, cfg)
@@ -197,6 +210,14 @@ def run(job, cfg: dict):
         db.executemany(insert, rows)
         job.step(len(rows))
         group, group_patches = [], 0
+        nonlocal last_report
+        if job.done - last_report >= 2000:
+            last_report = job.done
+            el = max(_t.time() - t_start, 1e-6)
+            st = det.stats
+            job.log(f"{job.done}/{job.total}: {3600 * (job.done - n_start) / el:,.0f} Gebäude/h · Grafikkarte "
+                    f"{100 * st['gpu_s'] / el:.0f} % der Zeit beschäftigt · {st['segmented']} von {st['patches']} "
+                    f"Ausschnitten segmentiert".replace(",", "."))
 
     while True:
         item = fetched.get()

@@ -42,6 +42,7 @@ DEFAULTS = {
     "ai_masks": "reviewed",           # training uses AI masks: reviewed (default) | all | none
     "ai_prompt_hint": "",             # extra instruction appended to the AI prompt (e.g. regional roof types)
     "seg_tta": True,                  # average segmentation over flipped images
+    "precision": "auto",              # auto = half precision (fp16) on the GPU, fp32 on the CPU; fp32 forces full precision
     "neighbor_factor": 0.5,           # in images with PV also segment patches scoring ≥ this × threshold
     "cross_check": True,              # second aerial image (other year) as cross-check, where the source has one
     "postproc": True,                 # mask post-processing (see pvmapper/postproc.py; postproc_* thresholds)
