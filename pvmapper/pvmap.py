@@ -5,11 +5,14 @@ PV-Map connector (https://pv-map.solar, API docs: PV-Map docs/pvmapper-connector
   - counts:           GET /api/detect/count
   - training sample:  GET /api/detect/training   (labels pos_high/pos_medium/neg_high/neg_weak, stratified by
                                                    building type × size of the existing PV, optional PV polygons)
+  - work list:        GET /api/detect/queue      (next buildings by priority, leased; PV-Map docs/pvmapper-ergebnisse.md)
+  - results:          POST /api/detect/results   (every check, also "no PV"; /results/finish at the end of a run)
 
 Authentication: API token created in PV-Map (Verwaltung → Datenquellen → API-Tokens), `pvm_…`.
 Configure `pvmap_url` and `pvmap_token` in pvmapper.yml / the settings tab, or env PVMAP_URL / PVMAP_TOKEN.
 
-As a building input, use  `pvmap:cc=DE&lau=DE_11000000&sub=Education&pv=none`  wherever a file path is accepted.
+As a building input, use  `pvmap:cc=DE&lau=DE_11000000&sub=Education&pv=none`  wherever a file path is accepted;
+`pvmapqueue:cc=DE&nuts3=DEA2&model=…` reads the work list instead (sync job).
 """
 
 from __future__ import annotations
@@ -39,12 +42,12 @@ class Client:
         cfg = cfg or {}
         return cls(cfg.get("pvmap_url"), cfg.get("pvmap_token"))
 
-    def _get(self, path: str, params: dict):
+    def _get(self, path: str, params: dict, method: str = "GET", body=None):
         if not self.token:
             raise PVMapError("Kein PV-Map-Token konfiguriert (Einstellungen → PV-Map).")
         p = {k: v for k, v in params.items() if v not in (None, "", [])}
-        r = self.s.get(f"{self.url}/api{path}", params=p, timeout=self.timeout,
-                       headers={"Authorization": f"Bearer {self.token}", "Accept-Language": "de"})
+        r = self.s.request(method, f"{self.url}/api{path}", params=p, json=body, timeout=self.timeout,
+                           headers={"Authorization": f"Bearer {self.token}", "Accept-Language": "de"})
         if r.status_code != 200:
             try:
                 msg = r.json().get("detail")
@@ -82,6 +85,34 @@ class Client:
         if bins:
             params["bins"] = ",".join(str(b) for b in bins)
         return self._get("/detect/training", params)
+
+
+    # -- work list and results (PV-Map docs/pvmapper-ergebnisse.md) ---------------------------------------
+
+    def queue(self, limit: int = 1000, model: str | None = None, recheck_days: int = 365, **filters) -> dict:
+        return self._get("/detect/queue", {**filters, "limit": limit, "model": model, "recheck_days": recheck_days})
+
+    def queue_count(self, model: str | None = None, recheck_days: int = 365, **filters) -> dict:
+        return self._get("/detect/queue/count", {**filters, "model": model, "recheck_days": recheck_days})
+
+    def send_results(self, items: list, run: str | None = None, model: str | None = None) -> dict:
+        return self._get("/detect/results", {}, "POST", {"run": run, "model": model, "items": items})
+
+    def finish(self) -> dict:
+        return self._get("/detect/results/finish", {}, "POST", {})
+
+
+QUEUE_KEYS = FILTER_KEYS + ("model", "recheck_days", "limit")
+
+
+def parse_queue(s: str) -> dict:
+    """'pvmapqueue:cc=DE&nuts3=DEA2&model=custom:x' → filters + model/recheck_days/limit"""
+    q = (s.split(":", 1)[1] if ":" in s else "").lstrip("?")
+    d = {k: v for k, v in parse_qsl(q) if k in QUEUE_KEYS}
+    d.pop("pv", None)
+    if not d.get("cc"):
+        raise PVMapError("PV-Map-Arbeitsliste braucht mindestens cc=… (Ländercode)")
+    return d
 
 
 def parse_input(s: str) -> dict:

@@ -82,7 +82,7 @@ def _summarise(b, polys, footprint, search, win, src, prob, cfg):
         "max_prob": round(prob, 4), "n_installations": n_inst if has_pv else 0,
         "footprint_m2": round(geo.reproject(footprint, "EPSG:4326", utm).area, 1) if footprint is not None else None,
         "source": src.id, "lon": round(c.x, 7), "lat": round(c.y, 7), "error": None, "chip": None,
-        "props": json.dumps(b.props, ensure_ascii=False),
+        "props": json.dumps({k: v for k, v in b.props.items() if not k.startswith("_")}, ensure_ascii=False),
         "footprint_wkt": footprint.simplify(1e-6).wkt if footprint is not None else None,
         "pv_wkt": geo.reproject(merged, utm, "EPSG:4326").wkt if has_pv else None,
     }
@@ -109,10 +109,40 @@ def run(job, cfg: dict):
                    layer=p.get("layer") or None, cfg=cfg)
     job.log(f"Lese Gebäude aus {p['input']} …")
     job.total = bld.count_buildings(p["input"], **read_kw)
+    if p.get("max"):
+        job.total = min(job.total, len(done) + int(p["max"]))
     job.done = len(done)
     job.log(f"{job.total} Gebäude, davon {len(done)} bereits erledigt. Profil {prof.id}, "
             f"Gerät {det.device}, Auflösung {prof.resolution_m} m/px.")
     job.save()
+
+    # results back to PV-Map (sync job with the work list, PV-Map docs/pvmapper-ergebnisse.md)
+    push = bool(p.get("push"))
+    client = pending = None
+    if push:
+        from . import pvmap
+        client = pvmap.Client.from_config(cfg)
+        pending = []
+    until = None
+    if p.get("until"):
+        import datetime as _dt
+        until = _dt.datetime.fromisoformat(p["until"])
+    max_n = int(p.get("max") or 0)
+    confirm = float(cfg.get("sync_confirm_score", 0.9))
+
+    def send(force=False):
+        if push and pending and (force or len(pending) >= 200):
+            try:
+                out = client.send_results(list(pending), run=job.id, model=prof.id)
+                job.counters["gesendet"] += len(pending)
+                if out.get("unknown"):
+                    job.counters["unbekannt_in_pvmap"] += out["unknown"]
+            except Exception as e:                               # noqa: BLE001
+                job.counters["senden_fehler"] += len(pending)
+                if job.counters["senden_fehler"] <= len(pending):
+                    job.log(f"Senden an PV-Map fehlgeschlagen: {str(e)[:200]}")
+                return
+            pending.clear()
 
     fetched: queue.Queue = queue.Queue(maxsize=int(cfg["fetch_workers"]) * 4)
     SENTINEL = object()
@@ -129,6 +159,13 @@ def run(job, cfg: dict):
             img, win, src = sources.fetch_for_geometry(
                 cat, search, prof.resolution_m, buffer_m if fp is not None else 0.0,
                 src_filter, min_px=prof.patch_px)
+            if push:
+                b.props["_img_hash"] = h = sources.image_hash(img)
+                sc = b.props.get("_scan") or {}
+                # work list: same aerial image and same model as at the last check → nothing new to compute
+                if sc.get("img_hash") and sources.hash_distance(sc["img_hash"], h) <= 12 and sc.get("model") == prof.id:
+                    b.props["_unchanged"] = True
+                    return b, search, fp, None, win, src, None
             return b, search, fp, img, win, src, None
         except Exception as e:                                   # noqa: BLE001
             return b, search, fp, None, None, None, str(e)[:500]
@@ -137,8 +174,15 @@ def run(job, cfg: dict):
         try:
             with ThreadPoolExecutor(int(cfg["fetch_workers"])) as pool:
                 pending = []
+                n_read = 0
                 for b in bld.read_buildings(p["input"], **read_kw):
                     if job._cancel.is_set():
+                        break
+                    if until is not None and _dt.datetime.now(until.tzinfo) >= until:
+                        job.log("Zeitfenster zu Ende – Rest beim nächsten Lauf.")
+                        break
+                    n_read += 1
+                    if max_n and n_read > max_n:
                         break
                     if b.id in done:
                         continue
@@ -204,11 +248,20 @@ def run(job, cfg: dict):
                                     second=img2).save(os.path.join(chip_dir, name), quality=82)
                 row["chip"] = name
             rows.append(tuple(row[k] for k in keys))
+            if push:
+                tier = 1 if (check == "bestaetigt" and r.max_prob >= confirm) else 2
+                pending.append({"id": b.id, "result": "pv" if row["has_pv"] else "none",
+                                "tier": tier if row["has_pv"] else None, "kwp": row["kwp_est"], "area_m2": row["pv_area_m2"],
+                                "max_prob": row["max_prob"], "check": check, "source": src.id,
+                                "source2": src2.id if src2 is not None else None, "img_hash": b.props.get("_img_hash"),
+                                "polygons": mapping(shp_wkt.loads(row["pv_wkt"])) if row["pv_wkt"] else None,
+                                "n_installations": row["n_installations"], "size_class": row["size_class"]})
             job.counters[row["status"]] += 1
             if row["has_pv"]:
                 job.counters["kwp_sum"] = round(job.counters.get("kwp_sum", 0) + row["kwp_est"], 1)
         db.executemany(insert, rows)
         job.step(len(rows))
+        send()
         group, group_patches = [], 0
         nonlocal last_report
         if job.done - last_report >= 2000:
@@ -236,6 +289,12 @@ def run(job, cfg: dict):
             if job.counters["fehler"] <= 20:
                 job.log(f"Bild für {b.id} nicht verfügbar: {err[:160]}")
             continue
+        if b.props.get("_unchanged"):
+            pending.append({"id": b.id, "result": "unchanged"})
+            job.counters["unveraendert"] += 1
+            job.step(1)
+            send()
+            continue
         group.append(item)
         n = len(inference.patch_grid(max(img.shape[1], prof.patch_px),
                                      max(img.shape[0], prof.patch_px), prof.patch_px, det.overlap))
@@ -243,6 +302,14 @@ def run(job, cfg: dict):
         if group_patches >= target_patches:
             flush()
     flush()
+    if push:
+        send(force=True)
+        try:
+            client.finish()
+        except Exception as e:                                   # noqa: BLE001
+            job.log(f"PV-Map: Abschluss nicht gemeldet ({str(e)[:120]})")
+        job.log(f"An PV-Map gesendet: {job.counters.get('gesendet', 0)} Ergebnisse, davon "
+                f"{job.counters.get('unveraendert', 0)} mit unverändertem Luftbild.")
     job.check_cancel()
     export(job, db)
     job.log(f"Fertig: {job.counters.get('pv', 0)} mit PV, {job.counters.get('kein_pv', 0)} ohne, "

@@ -178,11 +178,35 @@ def _read_pvmap(spec, cfg):
         yield Building(str(ft.get("id") or props.get("id")), shape(ft["geometry"]), _clean(props))
 
 
+def _read_pvmap_queue(spec, cfg):
+    """work list from PV-Map in chunks; handed-out buildings are leased there, so the next chunk brings new ones"""
+    from . import pvmap
+    client = pvmap.Client.from_config(cfg)
+    q = pvmap.parse_queue(spec)
+    limit = int(q.pop("limit", None) or 500)
+    while True:
+        fc = client.queue(limit=limit, **q)
+        feats = fc.get("features") or []
+        for ft in feats:
+            props = dict(ft.get("properties") or {})
+            if not ft.get("geometry"):
+                continue
+            scan = props.pop("scan", None)
+            b = Building(str(ft.get("id") or props.get("id")), shape(ft["geometry"]), _clean(props))
+            b.props["_scan"] = scan or None
+            yield b
+        if len(feats) < limit:
+            return
+
+
 def read_buildings(path_or_dsn: str, id_field: Optional[str] = None, query: Optional[str] = None,
                    layer: Optional[str] = None, cfg: Optional[dict] = None) -> Iterator[Building]:
     s = str(path_or_dsn)
     if s.startswith("pvmap:"):
         yield from _read_pvmap(s, cfg)
+        return
+    if s.startswith("pvmapqueue:"):
+        yield from _read_pvmap_queue(s, cfg)
         return
     if s.startswith(("postgresql://", "postgres://")):
         if not query:
@@ -203,4 +227,9 @@ def count_buildings(path_or_dsn, **kw) -> int:
     if s.startswith("pvmap:"):
         from . import pvmap
         return int(pvmap.Client.from_config(kw.get("cfg")).count(**pvmap.parse_input(s))["total"])
+    if s.startswith("pvmapqueue:"):
+        from . import pvmap
+        q = pvmap.parse_queue(s)
+        q.pop("limit", None)
+        return int(sum(pvmap.Client.from_config(kw.get("cfg")).queue_count(**q)["open"].values()))
     return sum(1 for _ in read_buildings(path_or_dsn, **kw))

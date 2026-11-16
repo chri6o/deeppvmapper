@@ -642,3 +642,101 @@ def test_corner_points_for_snapping(tmp_path):
     pts = annotate.corner_points(str(tmp_path), "x")
     for cx_, cy in ((40, 30), (109, 30), (109, 69), (40, 69)):
         assert min(abs(x - cx_) + abs(y - cy) for x, y in pts) < 3
+
+
+# --------------------------------------------------------------- sync with PV-Map (work list, results)
+
+def test_sync_job_sends_results_and_skips_unchanged_images(tmp_path, monkeypatch):
+    from pvmapper import pvmap, sync
+    cx, cy = 13.40, 52.52
+    blds = {"TESTpv": box(cx, cy, cx + 0.0003, cy + 0.0002), "TESTnone": box(cx + 0.001, cy, cx + 0.0013, cy + 0.0002),
+            "TESTsame": box(cx + 0.002, cy, cx + 0.0023, cy + 0.0002)}
+
+    class FakeSrc:
+        id = "fake"
+        alt = []
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 90, np.uint8)
+        if geom.intersects(blds["TESTpv"]):
+            h, w = img.shape[:2]
+            img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    # the fingerprint of TESTsame's image is known from an earlier check with the same model
+    win = geo.window_around(blds["TESTsame"], "EPSG:25833", 0.1, 3.0, 64)
+    same_hash = sources.image_hash(np.full((win.height, win.width, 3), 90, np.uint8))
+    calls = {"queue": 0, "sent": [], "finish": 0, "q": None}
+
+    def queue(self, limit=1000, **q):
+        calls["queue"] += 1
+        calls["q"] = q
+        if calls["queue"] > 1:
+            return {"features": []}
+        feats = []
+        for bid, g in blds.items():
+            scan = {"img_hash": same_hash, "model": "nrw", "result": "none"} if bid == "TESTsame" else None
+            feats.append({"type": "Feature", "id": bid, "geometry": g.__geo_interface__,
+                          "properties": {"id": bid, "sub": "Education", "prio": 4 if scan else 1, "scan": scan}})
+        return {"features": feats}
+
+    monkeypatch.setattr(pvmap.Client, "queue", queue)
+    monkeypatch.setattr(pvmap.Client, "queue_count", lambda self, **q: {"open": {"1": 2, "4": 1}})
+    monkeypatch.setattr(pvmap.Client, "send_results", lambda self, items, run=None, model=None: calls["sent"].extend(items) or {"unknown": 0})
+    monkeypatch.setattr(pvmap.Client, "finish", lambda self: calls.__setitem__("finish", calls["finish"] + 1) or {})
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), fetch_workers=1, pvmap_token="pvm_x", sync_filter="cc=DE&nuts3=DEA2")
+    job = Job(cfg["jobs_dir"], "sync", {})
+    job.run(lambda j: sync.run(j, cfg))
+    assert job.status == "done", job.error
+    sent = {x["id"]: x for x in calls["sent"]}
+    assert sent["TESTsame"]["result"] == "unchanged" and sent["TESTnone"]["result"] == "none"
+    assert sent["TESTpv"]["result"] == "pv" and sent["TESTpv"]["tier"] == 2 and sent["TESTpv"]["polygons"]["type"] in ("Polygon", "MultiPolygon")
+    assert sent["TESTpv"]["img_hash"] and calls["finish"] == 1
+    assert calls["q"]["nuts3"] == "DEA2" and calls["q"]["model"] == "nrw"
+    assert job.counters["unveraendert"] == 1 and job.counters["gesendet"] == 3
+
+
+def test_sync_window_and_scheduler(tmp_path, monkeypatch):
+    import datetime as dt
+    from pvmapper import sync
+    tz = dt.timezone(dt.timedelta(hours=1))
+    cfg = {"sync_start": "22:00", "sync_end": "06:00"}
+    assert sync.window(cfg, dt.datetime(2026, 11, 16, 23, 30, tzinfo=tz))[1].hour == 6
+    assert sync.window(cfg, dt.datetime(2026, 11, 17, 5, 59, tzinfo=tz))[0].day == 16
+    assert sync.window(cfg, dt.datetime(2026, 11, 17, 12, 0, tzinfo=tz)) is None
+    monkeypatch.setenv("PVMAPPER_NO_SCHEDULER", "1")
+    from pvmapper.web.app import create_app
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"),
+                     sync_enabled=True, pvmap_token="pvm_x"), str(cfgp))
+    app = create_app(str(cfgp))
+    started = []
+    import pvmapper.web.app as webapp
+    monkeypatch.setattr(webapp.JobManager, "submit", lambda self, job: started.append(job))
+    night = dt.datetime(2026, 11, 16, 23, 0, tzinfo=tz)
+    assert app.state.sync_tick(night) is not None and app.state.sync_tick(night + dt.timedelta(minutes=5)) is None
+    assert app.state.sync_tick(dt.datetime(2026, 11, 17, 14, 0, tzinfo=tz)) is None
+    assert app.state.sync_tick(dt.datetime(2026, 11, 17, 22, 30, tzinfo=tz)) is not None, "next night: again"
+    assert started[0].kind == "sync" and started[0].params["until"].startswith("2026-11-17T06:00")
+
+
+def test_review_result_to_wgs84(tmp_path):
+    from PIL import Image as PImage
+    from pvmapper import annotate
+    d = tmp_path
+    win = geo.window_around(box(13.4, 52.52, 13.4003, 52.5202), "EPSG:25833", 0.1, 3, 64)
+    PImage.fromarray(np.full((win.height, win.width, 3), 100, np.uint8)).save(d / "b.jpg")
+    PImage.fromarray(np.zeros((win.height, win.width), np.uint8)).save(d / "b.fp.png")
+    meta = {"id": "B1", "name": "b", "label": 1, "status": "open",
+            "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy, win.width, win.height]}
+    json.dump(meta, open(d / "b.json", "w"))
+    m = annotate.save_annotation(str(d), "b", [[[10, 10], [110, 10], [110, 60], [10, 60]]])     # 100×50 px at 10 cm = 50 m²
+    r = annotate.review_result(str(d), "b", m)
+    assert r["result"] == "pv" and r["reviewed"] and r["tier"] == 1 and abs(r["area_m2"] - 50) < 3
+    lon, lat = r["polygons"]["coordinates"][0][0]
+    assert 13.39 < lon < 13.41 and 52.51 < lat < 52.53
+    m = annotate.save_annotation(str(d), "b", [], label=0)
+    assert annotate.review_result(str(d), "b", m) == {"id": "B1", "result": "none", "reviewed": True}

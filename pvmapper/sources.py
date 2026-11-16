@@ -296,3 +296,18 @@ def fetch_second(catalog: Catalog, src: Source, win: geo.Window, primary: np.nda
             continue
         return img, alt
     return None, None
+
+
+def image_hash(img: np.ndarray) -> str:
+    """fingerprint of an aerial image (16×16 brightness pattern, 64 hex digits): the same flight gives (almost) the same
+    fingerprint even if the server encodes the JPEG a little differently; a new flight changes many bits"""
+    from PIL import Image
+    g = np.asarray(Image.fromarray(img).convert("L").resize((16, 16), Image.BILINEAR), dtype=np.float32)
+    bits = (g > g.mean()).flatten()
+    return "".join(f"{int(''.join('1' if b else '0' for b in bits[i:i + 4]), 2):x}" for i in range(0, 256, 4))
+
+
+def hash_distance(a: str, b: str) -> int:
+    if not a or not b or len(a) != len(b):
+        return 256
+    return bin(int(a, 16) ^ int(b, 16)).count("1")

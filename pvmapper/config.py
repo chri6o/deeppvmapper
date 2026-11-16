@@ -46,6 +46,15 @@ DEFAULTS = {
     "neighbor_factor": 0.5,           # in images with PV also segment patches scoring ≥ this × threshold
     "cross_check": True,              # second aerial image (other year) as cross-check, where the source has one
     "postproc": True,                 # mask post-processing (see pvmapper/postproc.py; postproc_* thresholds)
+    "sync_enabled": False,            # night sync with PV-Map: fetch the work list, check, send results (PV-Map docs/pvmapper-ergebnisse.md)
+    "sync_start": "22:00",            # time window, local time
+    "sync_end": "06:00",
+    "sync_filter": "cc=DE",           # which buildings: cc, nuts3 (any NUTS level, e.g. DEA2), lau, sub, cls
+    "sync_profile": None,             # model for the sync (None = default model)
+    "sync_recheck_days": 365,         # look at a building's aerial image again after … days (new image → new check)
+    "sync_confirm_score": 0.9,        # cross-check confirmed and score ≥ this → "confirmed" (tier 1) in PV-Map
+    "sync_chunk": 500,                # buildings per request to the work list
+    "sync_push_reviews": True,        # masks checked in the editor go to PV-Map as "checked by hand"
     "web_password": "",               # if set: the web UI asks for this password (any user name)
     "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",
 }

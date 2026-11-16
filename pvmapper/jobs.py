@@ -139,6 +139,8 @@ def runner(kind: str):
         from .training import run
     elif kind == "ai_masks":
         from .ai_label import run
+    elif kind == "sync":
+        from .sync import run
     else:
         raise ValueError(f"unknown job kind {kind}")
     return run

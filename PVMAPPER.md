@@ -134,6 +134,16 @@ korrigieren und mit Enter speichern; Fehltreffer mit „PV vorhanden“ (L) zum 
 auf der Ebene „Kein PV“ markieren. Ins Training gehen nur gespeicherte (geprüfte) Bilder; Gegenbeispiele lädt das
 Training bei Bedarf aus PV-Map nach.
 
+## Abgleich mit PV-Map (Nachtbetrieb)
+
+Unter **Einstellungen → PV-Map-Abgleich** Nachtbetrieb an, Zeitfenster und Gebäudefilter (z. B. `cc=DE&nuts3=DEA2`) setzen. Im Zeitfenster
+holt PV-Mapper die nächsten Gebäude aus der Arbeitsliste von PV-Map (zuerst nie geprüfte), prüft sie und sendet jedes Ergebnis
+zurück, auch „keine PV“. Nach der Wiederholfrist wird das Luftbild erneut geladen; nur wenn es sich geändert hat (neue Befliegung,
+Fingerabdruck des Bildes), wird neu gerechnet. „Bestätigt“ (zählt in PV-Map als PV, je nach Sichtbarkeit) ist eine Erkennung, wenn die
+Gegenprobe mit dem zweiten Luftbild sie bestätigt und der Score über der Schwelle liegt, oder wenn sie im Masken-Editor geprüft wurde
+(gespeicherte Masken gehen automatisch an PV-Map). „Jetzt abgleichen“ startet einen Lauf von zwei Stunden. Details und die Sichtbarkeit in
+PV-Map: PV-Map `docs/pvmapper-ergebnisse.md`.
+
 ## Kommandozeile
 
 ```bash

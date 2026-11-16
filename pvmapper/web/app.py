@@ -99,6 +99,37 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     mgr = JobManager(cfg)
     mgr.load_existing()
 
+    # night sync with PV-Map: one sync job per time window, started when the GPU is free (PV-Map docs/pvmapper-ergebnisse.md)
+    def sync_tick(now=None):
+        from .. import sync
+        c = cfg()
+        if not c.get("sync_enabled") or not c.get("pvmap_token"):
+            return None
+        w = sync.window(c, now)
+        if not w:
+            return None
+        key = w[0].isoformat()
+        if state.get("sync_window") == key:
+            return None                                          # already started in this window
+        if mgr.current is not None or not mgr.q.empty():
+            return None                                          # another job has the GPU: try again in a minute
+        state["sync_window"] = key
+        job = Job(c["jobs_dir"], "sync", {"filter": c.get("sync_filter") or "cc=DE", "until": w[1].isoformat(), "auto": True})
+        mgr.submit(job)
+        return job
+
+    def sync_loop():
+        import time as _t
+        while True:
+            _t.sleep(60)
+            try:
+                sync_tick()
+            except Exception:                                    # noqa: BLE001
+                pass
+    if not os.environ.get("PVMAPPER_NO_SCHEDULER"):
+        threading.Thread(target=sync_loop, name="sync", daemon=True).start()
+    app.state.sync_tick = sync_tick
+
     @app.middleware("http")
     async def password_gate(request, call_next):
         """optional HTTP basic auth for use in the local network (config: web_password; any user name)"""
@@ -332,8 +363,52 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         st = body.get("status", "done")
         if st not in ("open", "done", "skip"):
             raise HTTPException(400, "status: open, done oder skip")
-        return annotate.save_annotation(d, name, body.get("polygons"), body.get("label"), st, "user",
+        meta = annotate.save_annotation(d, name, body.get("polygons"), body.get("label"), st, "user",
                                         negatives=body.get("negatives"))
+        if st == "done" and cfg().get("sync_push_reviews", True) and cfg().get("pvmap_token"):
+            threading.Thread(target=_push_review, args=(d, name, meta), daemon=True).start()
+        return meta
+
+    def _push_review(d, name, meta):
+        """a mask checked by hand → PV-Map as a reviewed result (confirmed PV or no PV); buildings PV-Map does not know are ignored there"""
+        try:
+            from .. import pvmap
+            item = annotate.review_result(d, name, meta, float(cfg().get("kwp_per_m2") or 0.2))
+            if item:
+                pvmap.Client.from_config(cfg()).send_results([item], run="review", model="review")
+        except Exception:                                        # noqa: BLE001
+            pass
+
+    @app.get("/api/sync/status")
+    def sync_status():
+        """open buildings in the PV-Map work list per priority, the night window and the last sync jobs"""
+        from .. import pvmap, sync
+        c = cfg()
+        out = {"enabled": bool(c.get("sync_enabled")), "start": c.get("sync_start"), "end": c.get("sync_end"),
+               "filter": c.get("sync_filter"), "in_window": bool(sync.window(c)),
+               "jobs": [j.as_dict() | {"log": None} for j in sorted(mgr.jobs.values(), key=lambda j: j.id, reverse=True)
+                        if j.kind == "sync"][:5]}
+        try:
+            q = pvmap.parse_queue("pvmapqueue:" + (c.get("sync_filter") or "cc=DE"))
+            q.pop("limit", None)
+            out["queue"] = pvmap.Client.from_config(c).queue_count(model=(c.get("sync_profile") or c.get("profile")),
+                                                                    recheck_days=int(c.get("sync_recheck_days") or 365), **q)
+        except Exception as e:                                   # noqa: BLE001
+            out["queue_error"] = str(e)[:300]
+        return out
+
+    @app.post("/api/sync/start")
+    def sync_start(body: dict = Body(default={})):
+        """start a sync now (optionally limited to `hours` or `max` buildings)"""
+        import datetime as _dt
+        p = {"filter": body.get("filter") or cfg().get("sync_filter") or "cc=DE"}
+        if body.get("hours"):
+            p["until"] = (_dt.datetime.now().astimezone() + _dt.timedelta(hours=float(body["hours"]))).isoformat()
+        if body.get("max"):
+            p["max"] = int(body["max"])
+        job = Job(cfg()["jobs_dir"], "sync", p)
+        mgr.submit(job)
+        return job.as_dict()
 
     @app.get("/api/datasets/{jid}/items/{name}/corners")
     def dataset_corners(jid: str, name: str):
@@ -360,13 +435,13 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area", "train", "ai_masks"):
+        if kind not in ("buildings", "area", "train", "ai_masks", "sync"):
             raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")
         if kind == "train" and params.get("from_job"):
             src = _job(params["from_job"])
-            if src.kind != "buildings":
+            if src.kind not in ("buildings", "sync"):
                 raise HTTPException(400, "Nur Ergebnisse von „Gebäude prüfen“ lassen sich übernehmen.")
             params.setdefault("profile", src.params.get("profile"))
             params.setdefault("sources", src.params.get("sources"))

@@ -213,3 +213,27 @@ def corner_points(d, name, max_corners: int = 2500) -> list:
     pts = cv2.cornerSubPix(g, pts.astype(np.float32), (3, 3), (-1, -1),
                            (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.05))
     return [[round(float(x), 1), round(float(y), 1)] for x, y in pts.reshape(-1, 2)]
+
+
+def review_result(d, name, meta, kwp_per_m2: float = 0.2) -> dict | None:
+    """result for PV-Map from an image checked by hand: PV polygons in WGS84 (from the stored window) or 'none'"""
+    from shapely.geometry import Polygon, mapping
+    from shapely.ops import unary_union
+    from . import geo
+    win = meta.get("window")
+    if not win or meta.get("status") != "done":
+        return None
+    w = geo.Window(win[0], *win[1:5], int(win[5]), int(win[6]))
+    label = effective_label(meta)
+    polys = current_polygons(d, name) if label == 1 else []
+    if label == 1 and not polys:
+        return None                                            # PV, but no area drawn: nothing to say about where
+    if not polys:
+        return {"id": meta["id"], "result": "none", "reviewed": True}
+    shapes = [Polygon([w.pixel_to_crs(x, y) for x, y in p]).buffer(0) for p in polys]
+    g = unary_union([x for x in shapes if not x.is_empty])
+    c = geo.reproject(g.centroid, w.crs, "EPSG:4326")
+    k = geo.scale_factor(w.crs, c.x, c.y)
+    area = g.area / (k * k)
+    return {"id": meta["id"], "result": "pv", "tier": 1, "reviewed": True, "area_m2": round(area, 1),
+            "kwp": round(area * kwp_per_m2, 1), "polygons": mapping(geo.reproject(g, w.crs, "EPSG:4326"))}

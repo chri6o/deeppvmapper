@@ -224,6 +224,23 @@
       <label>ChatGPT-Modell<input id="s-oaimodel" placeholder="gpt-5.1"></label>
       <label>Zusatzhinweis an die KI (optional)<input id="s-aihint" placeholder="z. B. Module meist schwarz auf dunklem Bitumendach"></label>
     </div>
+    <h3>PV-Map-Abgleich (Nachtbetrieb)</h3>
+    <p class="hint">PV-Mapper holt im Zeitfenster die nächsten Gebäude aus der PV-Map-Arbeitsliste (zuerst nie geprüfte), prüft sie und
+      sendet jedes Ergebnis zurück – auch „keine PV“. Bereits geprüfte Gebäude werden nach der Wiederholfrist nur neu gerechnet, wenn es ein
+      neues Luftbild gibt. Was in PV-Map sichtbar ist, stellst du dort unter Verwaltung → Datenquellen ein.</p>
+    <div class="grid2">
+      <label>Nachtbetrieb<select id="s-sync-on"><option value="false">aus</option><option value="true">an</option></select></label>
+      <label>Gebäude (Filter)<input id="s-sync-filter" placeholder="cc=DE&amp;nuts3=DEA2&amp;sub=Education"></label>
+      <label>von (Uhrzeit)<input id="s-sync-start" placeholder="22:00"></label>
+      <label>bis (Uhrzeit)<input id="s-sync-end" placeholder="06:00"></label>
+      <label>Modell<select id="s-sync-profile" class="profile-select"></select></label>
+      <label>Luftbild erneut ansehen nach (Tagen)<input id="s-sync-recheck" type="number" placeholder="365"></label>
+      <label>„Bestätigt“ ab Score (mit Gegenprobe)<input id="s-sync-score" type="number" step="0.01" placeholder="0.9"></label>
+      <label>Geprüfte Masken an PV-Map senden<select id="s-sync-reviews"><option value="true">ja</option><option value="false">nein</option></select></label>
+    </div>
+    <div class="row"><button id="s-sync-status" class="secondary">Arbeitsliste anzeigen</button>
+      <button id="s-sync-now" class="secondary">Jetzt abgleichen (2 Stunden)</button></div>
+    <div id="s-sync-out"></div>
     <h3>Größenklassen</h3>
     <p class="hint">Obergrenze in kWp (exklusiv). Leere Obergrenze = offen.</p>
     <table id="s-classes"></table>

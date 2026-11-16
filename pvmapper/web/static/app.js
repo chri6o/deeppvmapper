@@ -79,6 +79,7 @@ async function init() {
   $$(".source-select").forEach((el) => { el.innerHTML = srcOpts; el.onchange = () => { if (!["auto", ...countries].includes(el.value)) showSource(el.value); }; });
   const profOpts = S.info.profiles.map((p) => `<option value="${p.id}">${esc(p.label)}${p.downloaded ? "" : " (wird geladen)"}</option>`).join("");
   $$(".profile-select").forEach((el) => { el.innerHTML = profOpts; el.value = S.info.config.profile; });
+  $("#s-sync-profile").innerHTML = `<option value="">Standard-Modell</option>` + profOpts;
   renderSources(); renderSettings(); loadJobs();
 }
 
@@ -207,13 +208,14 @@ $("#a-start").onclick = async () => {
 };
 
 // ------------------------------------------------------------------ jobs
-const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training", ai_masks: "KI-Masken" };
+const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training", ai_masks: "KI-Masken", sync: "PV-Map-Abgleich" };
 const STATUS = { queued: "wartet", running: "läuft", done: "fertig", failed: "Fehler", cancelled: "abgebrochen" };
 async function loadJobs() {
   S.jobs = await api("/api/jobs");
   $("#job-list").innerHTML = S.jobs.length ? S.jobs.map((j) => {
     const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
-    const what = j.kind === "buildings" ? (j.params.input || "").split(/[\\/]/).pop()
+    const what = j.kind === "sync" ? (j.params.filter || "") + (j.params.auto ? " · Nachtbetrieb" : "")
+      : j.kind === "buildings" ? (j.params.input || "").split(/[\\/]/).pop()
       : j.kind === "train" ? ((j.params.prepare_only ? "Datensatz " : "") + (j.params.name || j.params.cc || j.params.dataset_from || "Labels"))
       : j.kind === "ai_masks" ? `${j.params.provider} · ${j.params.dataset}` : (j.params.bbox ? "Rechteck" : "Polygon");
     return `<div class="job ${S.job === j.id ? "sel" : ""}" data-id="${j.id}">
@@ -239,7 +241,8 @@ async function refreshJob(withResults) {
     [fmt(j.rate_per_s * 3600), "pro Stunde"],
     [j.eta_s ? dur(j.eta_s) : (j.status === "done" ? "fertig" : "–"), "Restzeit"],
   ];
-  if (j.kind === "buildings") stats.push([fmt(c.pv), "mit PV"], [fmt(c.kein_pv), "ohne PV"], [fmt(c.fehler), "ohne Bild"]);
+  if (j.kind === "buildings" || j.kind === "sync") stats.push([fmt(c.pv), "mit PV"], [fmt(c.kein_pv), "ohne PV"], [fmt(c.fehler), "ohne Bild"]);
+  if (j.kind === "sync") stats.push([fmt(c.gesendet), "an PV-Map gesendet"], [fmt(c.unveraendert), "Luftbild unverändert"]);
   else if (j.kind === "ai_masks") stats.push([fmt(c.maske), "Masken"], [fmt(c.keine_pv_laut_ki), "keine PV laut KI"], [fmt(c.fehler), "Fehler"]);
   else if (j.kind === "train" && j.params.prepare_only) stats.push([fmt(c.datensatz), "Bilder im Datensatz"], [fmt(c.bild_fehlt), "ohne Bild"], ["→ Masken", "nächster Schritt"]);
   else if (j.kind === "train") stats.push([fmt(c.f1_vorher, 2), "F1 vorher"], [fmt(c.f1_nachher, 2), "F1 nachher"], [c.modell ? "gespeichert" : "–", "neues Modell"]);
@@ -251,9 +254,9 @@ async function refreshJob(withResults) {
   $("#jd-log").textContent = j.log.join("\n");
   $("#jd-cancel").classList.toggle("hidden", !["running", "queued"].includes(j.status));
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
-  $("#jd-status").classList.toggle("hidden", j.kind !== "buildings");
+  $("#jd-status").classList.toggle("hidden", !["buildings", "sync"].includes(j.kind));
   $$(".filters").forEach((x) => x.classList.toggle("hidden", j.kind === "train" || j.kind === "ai_masks"));
-  ["#jd-selrand", "#jd-seln", "#jd-todataset", "#jd-selinfo"].forEach((q) => $(q).classList.toggle("hidden", j.kind !== "buildings"));
+  ["#jd-selrand", "#jd-seln", "#jd-todataset", "#jd-selinfo"].forEach((q) => $(q).classList.toggle("hidden", !["buildings", "sync"].includes(j.kind)));
   if (j.kind === "train" || j.kind === "ai_masks") { $("#jd-table").innerHTML = ""; if (j.kind === "train" && (withResults || j.status === "done")) showReport(j.id); else $("#jd-report").innerHTML = ""; }
   else { $("#jd-report").innerHTML = ""; if (withResults || (j.status !== S.lastStatus && j.status === "done")) loadResults(); }
   S.lastStatus = j.status;
@@ -365,7 +368,22 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
   "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
-const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-tta": "seg_tta" };
+const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews" };
+Object.assign(SET, { "#s-sync-filter": "sync_filter", "#s-sync-start": "sync_start", "#s-sync-end": "sync_end", "#s-sync-profile": "sync_profile",
+  "#s-sync-recheck": "sync_recheck_days", "#s-sync-score": "sync_confirm_score" });
+const PRIO = { 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };
+$("#s-sync-status").onclick = async () => {
+  $("#s-sync-out").innerHTML = `<div class="info">Frage PV-Map …</div>`;
+  try { const d = await api("/api/sync/status");
+    const q = d.queue ? Object.entries(d.queue.open).map(([k, v]) => `${PRIO[k] || k}: <b>${fmt(v)}</b>`).join(" · ") + ` · bisher geprüft ${fmt(d.queue.checked)} von ${fmt(d.queue.total)}` : esc(d.queue_error || "");
+    const jobs = (d.jobs || []).map((j) => `${esc(j.id)} · ${STATUS[j.status]} · ${fmt(j.done)} Gebäude · ${fmt((j.counters || {}).gesendet)} gesendet`).join("<br>");
+    $("#s-sync-out").innerHTML = `<div class="info">Arbeitsliste (${esc(d.filter || "")}): ${q}<br>Nachtbetrieb ${d.enabled ? `an, ${esc(d.start)}–${esc(d.end)}${d.in_window ? " (läuft gerade im Zeitfenster)" : ""}` : "aus"}${jobs ? "<br>" + jobs : ""}</div>`; }
+  catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
+$("#s-sync-now").onclick = async () => {
+  try { const j = await api("/api/sync/start", { json: { hours: 2 } }); tab("jobs"); openJob(j.id); }
+  catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
 function renderSettings() {
   const c = S.info.config, d = S.info.device;
   $("#s-device").innerHTML = `PyTorch ${esc(d.torch)} · Gerät <b>${esc(d.device)}</b>` +
