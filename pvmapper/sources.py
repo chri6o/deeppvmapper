@@ -79,6 +79,7 @@ class Source:
     extra_params: dict = field(default_factory=dict)
     notes: str = ""
     alt: list = field(default_factory=list)   # other flights/years of the same area, for the cross-check
+    history: dict = field(default_factory=dict)  # older flights for the installation age (pvmapper/age.py)
 
     def __post_init__(self):
         self._sem = threading.Semaphore(max(1, int(self.concurrency)))
@@ -244,7 +245,7 @@ class Catalog:
 
     def as_dicts(self):
         keys = ("id", "name", "country", "region", "type", "native_resolution_m", "license",
-                "attribution", "bbox", "priority", "enabled", "notes", "alt")
+                "attribution", "bbox", "priority", "enabled", "notes", "alt", "history")
         return [{k: getattr(s, k) for k in keys} for s in self.sources.values()]
 
 

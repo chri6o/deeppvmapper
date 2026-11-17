@@ -236,6 +236,10 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             if polys and c.get("typology", True):
                 try:
                     tf = typology.for_window(img, mask, win, prof.resolution_m, src, "Probe", None, None, c)
+                    if tf and c.get("age_check", True) and body.get("age", True):
+                        from .. import age
+                        age.estimate([{"img": img, "win": win, "src": src, "mask": mask, "feats": tf,
+                                       "res_m": prof.resolution_m}], det, c, int(c.get("fetch_workers") or 4))
                     sm = typology.summarise([f["properties"] for f in tf])
                 except Exception as e:                           # noqa: BLE001
                     out["typology_error"] = f"{type(e).__name__}: {e}"[:200]
@@ -637,7 +641,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                      kwp_low=r[19], kwp_high=r[20], layout=r[21],
                      installations=[{k: f["properties"].get(k) for k in (
                          "layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source",
-                         "outline_area_m2", "kwp_est", "kwp_low", "kwp_high")} for f in json.loads(r[22] or "[]")])
+                         "outline_area_m2", "kwp_est", "kwp_low", "kwp_high", "install_year", "install_year_low",
+                         "install_year_high", "module_efficiency")} for f in json.loads(r[22] or "[]")])
             rows.append(d)
             if r[13]:
                 feats.append({"type": "Feature", "geometry": mapping(shp_wkt.loads(r[13])),

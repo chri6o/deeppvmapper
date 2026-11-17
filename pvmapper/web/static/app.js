@@ -55,7 +55,7 @@ function instPopup(p) {
   const az = p.azimuth_deg == null ? "" : ` · ${Math.round(p.azimuth_deg)}°${p.azimuth2_deg != null ? "/" + Math.round(p.azimuth2_deg) + "°" : ""}`;
   return `<b>${esc(p.id)} · Anlage ${p.n}</b><br>${esc(LAYOUT_TXT[p.layout] || p.layout)}${az}${p.tilt_class ? " · Neigung " + esc(p.tilt_class) + "°" : ""}<br>` +
     `${fmt(p.outline_area_m2, 0)} m² × Belegung ${fmt(p.fill_factor, 2)}${p.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""}<br>` +
-    `<b>${fmt(p.kwp_est, 1)} kWp</b> (${fmt(p.kwp_low, 0)}–${fmt(p.kwp_high, 0)})`;
+    `<b>${fmt(p.kwp_est, 1)} kWp</b> (${fmt(p.kwp_low, 0)}–${fmt(p.kwp_high, 0)})${yearText(p) ? "<br>" + yearText(p).slice(3) : ""}`;
 }
 const drawn = new L.FeatureGroup().addTo(map);
 map.addControl(new L.Control.Draw({
@@ -326,8 +326,8 @@ async function loadResults() {
   if (d.geojson.features.length) map.fitBounds(dataLayer.getBounds(), { maxZoom: 18 });
   const t = $("#jd-table");
   if (job.kind === "area") {
-    t.innerHTML = `<tr><th>#</th><th>Fläche m²</th><th>Bauform</th><th>kWp</th><th>Spanne</th><th>Klasse</th><th>Gebäude</th></tr>` +
-      d.rows.map((r) => `<tr class="click" data-lat="${r.lat}" data-lon="${r.lon}"><td>${r.installation_id}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td>${esc(LAYOUT_TXT[r.layout] || "")}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td class="num">${r.kwp_low != null ? fmt(r.kwp_low, 0) + "–" + fmt(r.kwp_high, 0) : ""}</td><td>${r.size_class}</td><td>${esc(r.building_ids)}</td></tr>`).join("");
+    t.innerHTML = `<tr><th>#</th><th>Fläche m²</th><th>Bauform</th><th>Baujahr ≈</th><th>kWp</th><th>Spanne</th><th>Klasse</th><th>Gebäude</th></tr>` +
+      d.rows.map((r) => `<tr class="click" data-lat="${r.lat}" data-lon="${r.lon}"><td>${r.installation_id}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td>${esc(LAYOUT_TXT[r.layout] || "")}</td><td class="num">${r.install_year || ""}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td class="num">${r.kwp_low != null ? fmt(r.kwp_low, 0) + "–" + fmt(r.kwp_high, 0) : ""}</td><td>${r.size_class}</td><td>${esc(r.building_ids)}</td></tr>`).join("");
     $$("#jd-table tr.click").forEach((tr) => tr.onclick = () => map.setView([+tr.dataset.lat, +tr.dataset.lon], 19));
     return;
   }
@@ -361,11 +361,17 @@ $("#jd-todataset").onclick = async () => {
     S.sel = new Set(); openJob(j.id); loadJobs(); }
   catch (e) { alert(e.message); }
 };
+function yearText(i) {
+  if (i.install_year == null) return "";
+  const lo = i.install_year_low, hi = i.install_year_high;
+  const span = lo == null ? `vor ${hi}` : (lo === hi ? `${hi}` : `${lo}–${hi}`);
+  return ` · Baujahr ≈ ${i.install_year} (${span}${i.module_efficiency ? ", Wirkungsgrad " + Math.round(i.module_efficiency * 1000) / 10 + " %" : ""})`;
+}
 function instText(r) {
   if (!r.installations || !r.installations.length) return "";
   const az = (a) => (a == null ? "" : ` ${Math.round(a)}°`);
   return "<br>" + r.installations.map((i, k) => `Anlage ${k + 1}: ${esc(LAYOUT_TXT[i.layout] || i.layout)}${az(i.azimuth_deg)}${i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : ""}` +
-    `${i.tilt_class ? " · Neigung " + esc(i.tilt_class) + "°" : ""} · ${fmt(i.outline_area_m2, 0)} m² × Belegung ${fmt(i.fill_factor, 2)}${i.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""} → ${fmt(i.kwp_est, 1)} kWp (${fmt(i.kwp_low, 0)}–${fmt(i.kwp_high, 0)})`).join("<br>");
+    `${i.tilt_class ? " · Neigung " + esc(i.tilt_class) + "°" : ""} · ${fmt(i.outline_area_m2, 0)} m² × Belegung ${fmt(i.fill_factor, 2)}${i.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""} → ${fmt(i.kwp_est, 1)} kWp (${fmt(i.kwp_low, 0)}–${fmt(i.kwp_high, 0)})${yearText(i)}`).join("<br>");
 }
 function showBuilding(id) {
   const r = S.rows && S.rows[id];
@@ -409,7 +415,7 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
   "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
-const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push" };
+const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-age": "age_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push" };
 Object.assign(SET, { "#s-sync-filter": "sync_filter", "#s-sync-start": "sync_start", "#s-sync-end": "sync_end", "#s-sync-profile": "sync_profile",
   "#s-sync-recheck": "sync_recheck_days", "#s-sync-score": "sync_confirm_score" });
 const PRIO = { 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };

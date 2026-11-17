@@ -32,6 +32,13 @@ sources:
     attribution: "© Geobasis NRW"
     priority: 10
     alt: [de-nw-2024, de-nw-2023, de-nw-2022]
+    history:                      # older flights for the installation age: dates and resolution per place from the metadata layer
+      kind: nrw_info
+      url: https://www.wms.nrw.de/geobasis/wms_nw_hist_dop
+      info_layer: nw_hist_dop_info
+      layer: "nw_hist_dop_{year}"
+      crs: EPSG:25832
+      current_info: {url: "https://www.wms.nrw.de/geobasis/wms_nw_dop", layer: nw_dop_utm_info}   # flight date of the current image
 
   de-nw-2024:
     name: "DE · Nordrhein-Westfalen · DOP 2024 (Geobasis NRW, historisch)"
@@ -304,6 +311,21 @@ sources:
     attribution: "© Beeldmateriaal Nederland / PDOK"
     priority: 10
     alt: [nl-pdok-hr-2025, nl-pdok-hr-2024, nl-pdok-hr-2023]
+    history:                      # older flights for the installation age (one national flight per year)
+      kind: years
+      url: https://service.pdok.nl/hwh/luchtfotorgb/wms/v1_0
+      crs: EPSG:28992
+      layers:
+        2016: {layer: 2016_ortho25, res: 0.25}
+        2017: {layer: 2017_ortho25, res: 0.25}
+        2018: {layer: 2018_ortho25, res: 0.25}
+        2019: {layer: 2019_ortho25, res: 0.25}
+        2020: {layer: 2020_ortho25, res: 0.25}
+        2021: {layer: 2021_orthoHR, res: 0.08}
+        2022: {layer: 2022_orthoHR, res: 0.08}
+        2023: {layer: 2023_orthoHR, res: 0.08}
+        2024: {layer: 2024_orthoHR, res: 0.08}
+        2025: {layer: 2025_orthoHR, res: 0.08}
 
   nl-pdok-hr-2025:
     name: "NL · PDOK Luchtfoto 2025 HR (8 cm)"

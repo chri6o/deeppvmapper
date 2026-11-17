@@ -22,7 +22,8 @@ from shapely.ops import unary_union
 
 from . import buildings as bld
 from . import config as cfgmod
-from . import geo, inference, postproc, runtime, sources, typology
+from .jobs import Cancelled
+from . import age, geo, inference, postproc, runtime, sources, typology
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS results (
@@ -49,12 +50,18 @@ def apply_typology(row: dict, img, mask, win, clip, src, props: dict, res_m: flo
         return []
     if not feats:
         return []
+    set_from_installations(row, feats, cfg)
+    return feats
+
+
+def set_from_installations(row: dict, feats: list, cfg: dict):
+    """kWp (sum with range), main layout, size class and the installations JSON of a building from its installations"""
     sm = typology.summarise([f["properties"] for f in feats])
     kwp = sm["kwp_est"]
+    sm.pop("install_year", None)
     row.update(sm, kwp_method="typology", installations=json.dumps(feats, ensure_ascii=False, separators=(",", ":")))
     row["size_class"] = cfgmod.size_class(kwp, cfg["size_classes"])
     row["in_range"] = int(cfgmod.in_kwp_range(kwp, cfg))
-    return feats
 
 COLUMNS = ["id", "status", "has_pv", "pv_area_m2", "kwp_est", "size_class", "in_range",
            "max_prob", "n_installations", "footprint_m2", "source", "lon", "lat", "error", "chip",
@@ -156,6 +163,7 @@ def run(job, cfg: dict):
     max_n = int(p.get("max") or 0)
     confirm = float(cfg.get("sync_confirm_score", 0.9))
     push_typology = bool(cfg.get("typology_push", False))
+    age_on = bool(cfg.get("typology", True) and p.get("age_check", cfg.get("age_check", True)))
 
     def send(force=False):
         if push and pending and (force or len(pending) >= 200):
@@ -255,7 +263,7 @@ def run(job, cfg: dict):
                 seconds = {i: (im2, s2) for i, im2, s2 in got if im2 is not None}
             if seconds:
                 res2 = det.run([(i, im2) for i, (im2, _) in seconds.items()])
-        rows = []
+        rows, built = [], []
         for i, (b, search, fp, img, win, src, _) in enumerate(group):
             r = res[i]
             mask, info = masks[i], infos[i]
@@ -267,6 +275,25 @@ def run(job, cfg: dict):
             polys = inference.mask_to_polygons(mask, win)
             row = _summarise(b, polys, fp, search, win, src, r.max_prob, cfg)
             feats = apply_typology(row, img, mask, win, clips[i], src, b.props, prof.resolution_m, cfg)
+            built.append((i, row, feats, mask, img2, src2, check))
+        # build year from older flights for every installation found (sets efficiency and kWp)
+        dated = [x for x in built if x[2]]
+        if dated and age_on:
+            items = [{"img": group[i][3], "win": group[i][4], "src": group[i][5], "mask": mask, "feats": feats,
+                      "clip": clips[i], "res_m": prof.resolution_m} for i, row, feats, mask, *_ in dated]
+            try:
+                job.counters["baujahr_bestimmt"] += age.estimate(items, det, cfg, int(cfg["fetch_workers"]), job)
+            except Cancelled:
+                raise
+            except Exception as e:                               # noqa: BLE001 – never lose the detections over the age
+                if job.counters.get("baujahr_fehler", 0) < 5:
+                    job.log(f"Baujahr nicht bestimmbar: {type(e).__name__}: {e}"[:200])
+                job.counters["baujahr_fehler"] += 1
+            for i, row, feats, *_ in dated:
+                set_from_installations(row, feats, cfg)
+        for i, row, feats, mask, img2, src2, check in built:
+            b, search, fp, img, win, src, _ = group[i]
+            r, info = res[i], infos[i]
             row.update(check=check, source2=src2.id if src2 is not None else None,
                        removed=json.dumps(info["removed"][:20], ensure_ascii=False) if info["removed"] else None)
             job.counters["pruefung_" + check] += 1

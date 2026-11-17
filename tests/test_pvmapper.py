@@ -1004,3 +1004,108 @@ def test_typology_in_area_probe_and_editor(tmp_path, monkeypatch):
     r = annotate.review_result(str(d), "b", m, 0.2, dict(cfg, typology_push=True))
     assert r["kwp"] == t["summary"]["kwp_est"] and r["installations"][0]["review_status"] == "confirmed_manual"
     assert r["installations"][0]["geometry"]["type"] == "Polygon" and r["installations"][0]["imagery_year"] == 2024
+
+
+# --------------------------------------------------------------- installation age from older flights
+
+NRW_INFO = """GetFeatureInfo results:
+
+Layer 'nw_hist_dop_info'
+  Feature 1: 
+    Bildflugdatum = '2023-05-04'
+    Bodenauflösung Originalbild [m/Pixel] = '0.1'
+  Feature 2: 
+    Bildflugdatum = '2016-08-23'
+    Bodenauflösung Originalbild [m/Pixel] = '0.1'
+  Feature 3: 
+    Bildflugdatum = '2003-07-14'
+    Bodenauflösung Originalbild [m/Pixel] = '0.312500000000000'
+  Feature 4: 
+    Bildflugdatum = '1998-06-01'
+    Bodenauflösung Originalbild [m/Pixel] = '0.4'
+  Feature 5: 
+    Bildflugdatum = '2009-00-00'
+    Bodenauflösung Originalbild [m/Pixel] = '0.2'
+"""
+
+
+def test_age_nrw_metadata_and_year_math():
+    from pvmapper import age, typology as T
+    assert age.parse_nrw_info(NRW_INFO) == [(1998, "1998-06-01", 0.4), (2003, "2003-07-14", 0.3125),
+                                            (2009, None, 0.2), (2016, "2016-08-23", 0.1), (2023, "2023-05-04", 0.1)]
+    assert str(age.parse_flight_date("Kachelname = '32375_5628'\n    Bildflugdatum = '01.07.2025'")) == "2025-07-01"
+    conf = T.settings()
+    p = {"kwp_est": 21.5, "kwp_low": 19.0, "kwp_high": 23.0, "module_efficiency": 0.215}
+    age._apply_year(p, 2012, 2010, 2013, conf)               # built 2010–2013 → 16 % instead of 21.5 %
+    assert p["module_efficiency"] == 0.16 and p["kwp_est"] == 16.0
+    assert p["kwp_low"] <= p["kwp_est"] <= p["kwp_high"] < 21.5
+    assert p["install_year_low"] == 2010 and p["install_year_high"] == 2013
+
+
+def test_age_bisection_finds_build_year(monkeypatch):
+    """fake flights 2010–2022: modules from 2017 on → built between 2016 and 2017; kWp follows the efficiency"""
+    from pvmapper import age, typology as T
+    win = geo.window_around(box(13.4, 52.52, 13.4003, 52.5202), "EPSG:25833", 0.1, 3, 64)
+    H, W = win.height, win.width
+
+    def picture(with_pv):
+        img = np.full((H, W, 3), 150, np.uint8)
+        if with_pv:
+            img[H // 3: 2 * H // 3, W // 3: 2 * W // 3] = (40, 120, 250)
+        return img
+
+    fetched = []
+
+    class Flight:
+        def __init__(self, y):
+            self.y = y
+
+        def fetch(self, w):
+            fetched.append(self.y)
+            return picture(self.y >= 2017)
+
+    years = [2010, 2012, 2014, 2016, 2017, 2019, 2021, 2022]
+    monkeypatch.setattr(age, "timeline", lambda src, w, cfg=None: [(y, f"{y}-05-01", 0.1, Flight(y)) for y in years])
+
+    class Src:
+        id = "fake-2024"
+        history = {"kind": "fake"}
+
+    img = picture(True)
+    mask = (img[:, :, 2] > 200)
+    cfg = dict(config.DEFAULTS)
+    feats = T.for_window(img, mask, win, 0.1, Src(), "TESTA", None, {}, cfg)
+    k0 = feats[0]["properties"]["kwp_est"]
+    det = fake_detector()
+    n = age.estimate([{"img": img, "win": win, "src": Src(), "mask": mask, "feats": feats, "res_m": 0.1}], det, cfg)
+    p = feats[0]["properties"]
+    assert n == 1 and (p["install_year_low"], p["install_year_high"]) == (2016, 2017), p.get("age_flights")
+    assert p["install_year"] in (2016, 2017) and p["module_efficiency"] == 0.18
+    assert p["kwp_est"] == pytest.approx(k0 * 0.18 / 0.215, abs=0.2)
+    assert len(set(fetched)) <= 4                            # bisection, not every flight
+    assert all(f["verdict"] in ("present", "absent") for f in p["age_flights"])
+    # already on the oldest flight: "before 2010"
+    years[:] = [2018, 2020]
+    feats = T.for_window(img, mask, win, 0.1, Src(), "TESTB", None, {}, cfg)
+    monkeypatch.setattr(age, "timeline", lambda src, w, cfg=None: [(y, None, 0.25, Flight(2030)) for y in years])
+    age.estimate([{"img": img, "win": win, "src": Src(), "mask": mask, "feats": feats, "res_m": 0.1}], det, cfg)
+    p = feats[0]["properties"]
+    assert p["install_year_low"] is None and p["install_year_high"] == 2018 and p["install_year"] == 2017
+
+
+def test_age_evidence_verdicts():
+    from pvmapper import age
+    H, W = 120, 160
+    roof = np.full((H, W, 3), 150, np.uint8)
+    cur = roof.copy()
+    cur[40:80, 50:110] = (40, 60, 120)
+    mods = np.zeros((H, W), bool)
+    mods[40:80, 50:110] = True
+    # old flight without modules, model finds nothing
+    ev = age.evidence(cur, roof, mods, np.zeros_like(mods), 0.1, 0.1)
+    assert age.verdict(ev) == "absent", ev
+    # coarse old flight (31 cm) with modules: model misses them, contrast and pattern still there
+    import cv2
+    old = cv2.GaussianBlur(cur, (0, 0), 1.5)
+    ev = age.evidence(cur, old, mods, np.zeros_like(mods), 0.1, 0.3125)
+    assert age.verdict(ev) == "present", ev

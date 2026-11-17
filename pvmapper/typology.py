@@ -108,8 +108,11 @@ def efficiency_for_year(year: int | None, conf: dict) -> float:
     m = conf["module"]
     if not year:
         return float(m["efficiency"])
-    best = float(m["efficiency"])
-    for y, e in sorted((int(k), float(v)) for k, v in (m.get("efficiency_by_year") or {}).items()):
+    table = sorted((int(k), float(v)) for k, v in (m.get("efficiency_by_year") or {}).items())
+    if not table:
+        return float(m["efficiency"])
+    best = table[0][1]                          # older than the table: its first value
+    for y, e in table:
         if int(year) >= y:
             best = e
     return best
@@ -560,10 +563,15 @@ def summarise(props_list: list[dict]) -> dict:
         by[p["layout"]] = by.get(p["layout"], 0) + (p.get("outline_area_m2") or 0)
     tot = sum(by.values()) or 1
     main = max(by, key=by.get)
-    return {"kwp_est": round(sum(p["kwp_est"] for p in props_list), 1),
-            "kwp_low": round(sum(p["kwp_low"] for p in props_list), 1),
-            "kwp_high": round(sum(p["kwp_high"] for p in props_list), 1),
-            "layout": main if len(by) == 1 or by[main] >= 0.8 * tot else "mixed"}
+    out = {"kwp_est": round(sum(p["kwp_est"] for p in props_list), 1),
+           "kwp_low": round(sum(p["kwp_low"] for p in props_list), 1),
+           "kwp_high": round(sum(p["kwp_high"] for p in props_list), 1),
+           "layout": main if len(by) == 1 or by[main] >= 0.8 * tot else "mixed"}
+    aged = [p for p in props_list if p.get("install_year")]
+    if aged:                                    # build year of the largest dated installation
+        big = max(aged, key=lambda p: p.get("outline_area_m2") or 0)
+        out["install_year"] = big["install_year"]
+    return out
 
 
 def map_features(feats: list[dict], owner_id: str) -> list[dict]:
@@ -574,7 +582,8 @@ def map_features(feats: list[dict], owner_id: str) -> list[dict]:
         out.append({"type": "Feature", "geometry": f["geometry"], "properties": {
             "id": owner_id, "kind": "inst", "n": k + 1, **{x: p.get(x) for x in (
                 "layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source",
-                "outline_area_m2", "kwp_est", "kwp_low", "kwp_high")}}})
+                "outline_area_m2", "kwp_est", "kwp_low", "kwp_high", "install_year", "install_year_low",
+                "install_year_high", "module_efficiency")}}})
     return out
 
 

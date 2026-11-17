@@ -165,6 +165,20 @@ python -m pvmapper calibrate 20261117-210000-abcd
 
 Das schreibt `calibration.json` in den Job: je Bauform der Belegungsgrad, der die Registerleistung ergäbe (Median, Quartile, aktueller Standard), und der Fehler der Typologie-Schätzung im Vergleich zur alten Flächen-Schätzung. Passende Werte trägt man in eine eigene `typology.yml` ein (`typology_file` in den Einstellungen).
 
+## Anlagenalter aus älteren Luftbildern
+
+Für jede gefundene Anlage sucht `pvmapper/age.py` in älteren Befliegungen, ab wann die Module zu sehen sind. Die Halbierung der Zeitspanne braucht dafür 3–5 zusätzliche Bilder je Anlage, nur für Treffer und parallel für viele Gebäude. Ergebnis: „Baujahr ≈ 2018 (2016–2019)“. Das Baujahr bestimmt den Modulwirkungsgrad (`efficiency_by_year` in `typology.yml`) und damit kWp und Spanne.
+
+- **NRW:** historische DOP von Geobasis NRW; welche Flüge es am Ort gibt (Datum, Auflösung), liefert die Metadaten-Ebene. Das Flugdatum des aktuellen Bilds kommt aus der DOP-Metadaten-Ebene.
+- **Niederlande:** PDOK-Jahrgänge 2016–2020 (25 cm) und ab 2021 (8 cm).
+- Flüge gröber als `age_max_res_m` (0,4 m) bleiben unberücksichtigt.
+- **Befund je Flug:** Anteil der heutigen Module, die das Modell im alten Bild findet; Kontrast Module ↔ Dach im Vergleich zu heute; Ähnlichkeit des Helligkeitsmusters. Unklare Flüge werden übersprungen. Jeder Befund steht in `age_flights` der Anlage.
+- **Grenzen:** Ist die Anlage schon auf dem ältesten brauchbaren Flug zu sehen, steht da „vor <Jahr>“. Erweiterungen zählen ab dem ersten sichtbaren Teil, wenn sie in derselben Anlage liegen.
+
+Das Register (MaStR-Inbetriebnahmedatum) wird dafür bewusst nicht genutzt; es dient später als Gegencheck.
+
+Abschalten: Einstellungen → „Baujahr aus älteren Luftbildern“. Sichtbar in der Vorschau, im Karten-Popup, in der Tabelle bei „Fläche auswerten“ und bei der Probe.
+
 ## Abgleich mit PV-Map (Nachtbetrieb)
 
 Unter **Einstellungen → PV-Map-Abgleich** Nachtbetrieb an, Zeitfenster und Gebäudefilter (z. B. `cc=DE&nuts3=DEA2`) setzen. Im Zeitfenster

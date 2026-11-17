@@ -27,6 +27,7 @@ from shapely.strtree import STRtree
 from . import buildings as bld
 from . import config as cfgmod
 from . import geo, inference, postproc, runtime, sources, typology
+from .jobs import Cancelled
 
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS cells (id TEXT PRIMARY KEY, status TEXT, source TEXT, "
@@ -162,6 +163,13 @@ def run(job, cfg: dict):
         if polys and cfg.get("typology", True):
             try:
                 tfeats = typology.for_window(img, r.mask, win, det.p.resolution_m, src, f"z{cid}", None, None, cfg)
+                if tfeats and p.get("age_check", cfg.get("age_check", True)):
+                    from . import age
+                    job.counters["baujahr_bestimmt"] += age.estimate(
+                        [{"img": img, "win": win, "src": src, "mask": r.mask, "feats": tfeats, "res_m": det.p.resolution_m}],
+                        det, cfg, int(cfg["fetch_workers"]), job)
+            except Cancelled:
+                raise
             except Exception as e:                               # noqa: BLE001 – keep the detection
                 job.log(f"Zelle {cid}: Typologie fehlgeschlagen ({type(e).__name__}: {e})"[:200])
         db.execute("BEGIN")
@@ -241,6 +249,7 @@ def export(job, cfg, db, utm, region):
                 outlines += typology.map_features(mine, f"#{k}")
         props = {"installation_id": k, "pv_area_m2": round(area, 1), "kwp_est": kwp,
                  "kwp_low": sm.get("kwp_low"), "kwp_high": sm.get("kwp_high"), "layout": sm.get("layout"),
+                 "install_year": sm.get("install_year"),
                  "kwp_method": method,
                  "size_class": cfgmod.size_class(kwp, cfg["size_classes"]),
                  "in_range": int(cfgmod.in_kwp_range(kwp, cfg)),
@@ -254,7 +263,7 @@ def export(job, cfg, db, utm, region):
     with open(os.path.join(job.dir, "installation_outlines.geojson"), "w", encoding="utf-8") as f:
         json.dump({"type": "FeatureCollection", "features": outlines}, f, ensure_ascii=False)
     with open(os.path.join(job.dir, "installations.csv"), "w", newline="", encoding="utf-8") as f:
-        cols = ["installation_id", "pv_area_m2", "kwp_est", "kwp_low", "kwp_high", "layout", "kwp_method",
+        cols = ["installation_id", "pv_area_m2", "kwp_est", "kwp_low", "kwp_high", "layout", "install_year", "kwp_method",
                 "size_class", "in_range", "lon", "lat", "building_ids"]
         w = csv.DictWriter(f, cols)
         w.writeheader()

@@ -6,7 +6,8 @@ module:
   width_m: 1.13
   efficiency: 0.21        # module efficiency if the installation year is unknown (kWp per m² real module area)
   efficiency_range: [0.19, 0.23]
-  efficiency_by_year:     # first year → efficiency (used when the installation year is known, e.g. from MaStR)
+  efficiency_by_year:     # first year → efficiency of typical modules installed from then on (build year from older flights, age.py)
+    2000: 0.13
     2005: 0.14
     2011: 0.16
     2016: 0.18

@@ -59,6 +59,8 @@ DEFAULTS = {
     "typology": True,                 # classify every detected installation (layout, azimuth, tilt class, fill factor) and
                                       # estimate kWp from outline × fill factor × efficiency (pvmapper/typology.py)
     "typology_file": None,            # own typology.yml (defaults, thresholds); None = the one shipped with pvmapper
+    "age_check": True,                # build year of every installation from older flights (pvmapper/age.py) → efficiency, kWp
+    "age_max_res_m": 0.4,             # older flights coarser than this are not used
     "typology_push": False,           # send the installations to PV-Map (PV-Map migration 137 and later, docs/typology.md)
     "config_version": 2,
     "web_password": "",               # if set: the web UI asks for this password (any user name)
