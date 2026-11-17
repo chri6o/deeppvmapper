@@ -236,20 +236,53 @@ $("#a-start").onclick = async () => {
 // ------------------------------------------------------------------ jobs
 const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training", ai_masks: "KI-Masken", sync: "PV-Map-Abgleich" };
 const STATUS = { queued: "wartet", running: "läuft", done: "fertig", failed: "Fehler", cancelled: "abgebrochen" };
+const KEEP_JOBS = 3;             // newest jobs shown; older (not running) ones go to the archive
+function jobCard(j) {
+  const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+  const what = j.kind === "sync" ? (j.params.filter || "") + (j.params.auto ? " · Nachtbetrieb" : "")
+    : j.kind === "buildings" ? (j.params.input || "").split(/[\\/]/).pop()
+    : j.kind === "train" ? ((j.params.prepare_only ? "Datensatz " : "") + (j.params.name || j.params.cc || j.params.dataset_from || "Labels"))
+    : j.kind === "ai_masks" ? `${j.params.provider} · ${j.params.dataset}` : (j.params.bbox ? "Rechteck" : "Polygon");
+  const busy = ["running", "queued"].includes(j.status);
+  const res = ["buildings", "sync", "area"].includes(j.kind) ? "Ergebnisse" : j.kind === "train" ? (j.params.prepare_only ? "Masken" : "Bericht") : "Details";
+  return `<div class="job ${S.job === j.id ? "sel" : ""}" data-id="${j.id}">
+    <div class="top"><span>${KIND[j.kind]} · ${esc(what)}</span><span class="jbtns"><span class="badge ${j.status}">${STATUS[j.status]}</span>${busy ? "" : `<button class="jdel" data-id="${j.id}" data-kind="${j.kind}" title="Auftrag löschen">×</button>`}</span></div>
+    <div class="progress"><div style="width:${pct}%"></div></div>
+    <div class="meta"><span>${j.id} · ${fmt(j.done)} / ${fmt(j.total)} ${j.counters.pv != null ? "· " + fmt(j.counters.pv) + " mit PV" : ""}${j.counters.anlagen != null ? "· " + fmt(j.counters.anlagen) + " Anlagen" : ""}</span>
+      <button class="jopen small" data-id="${j.id}" data-kind="${j.kind}" data-prep="${j.params.prepare_only ? 1 : ""}">${res} →</button></div></div>`;
+}
 async function loadJobs() {
   S.jobs = await api("/api/jobs");
-  $("#job-list").innerHTML = S.jobs.length ? S.jobs.map((j) => {
-    const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
-    const what = j.kind === "sync" ? (j.params.filter || "") + (j.params.auto ? " · Nachtbetrieb" : "")
-      : j.kind === "buildings" ? (j.params.input || "").split(/[\\/]/).pop()
-      : j.kind === "train" ? ((j.params.prepare_only ? "Datensatz " : "") + (j.params.name || j.params.cc || j.params.dataset_from || "Labels"))
-      : j.kind === "ai_masks" ? `${j.params.provider} · ${j.params.dataset}` : (j.params.bbox ? "Rechteck" : "Polygon");
-    return `<div class="job ${S.job === j.id ? "sel" : ""}" data-id="${j.id}">
-      <div class="top"><span>${KIND[j.kind]} · ${esc(what)}</span><span class="badge ${j.status}">${STATUS[j.status]}</span></div>
-      <div class="progress"><div style="width:${pct}%"></div></div>
-      <div class="meta">${j.id} · ${fmt(j.done)} / ${fmt(j.total)} ${j.counters.pv != null ? "· " + fmt(j.counters.pv) + " mit PV" : ""}</div></div>`;
-  }).join("") : `<p class="hint">Noch keine Aufträge.</p>`;
+  const sorted = [...S.jobs].sort((a, b) => (a.id < b.id ? 1 : -1));
+  const recent = sorted.slice(0, KEEP_JOBS), old = sorted.slice(KEEP_JOBS);
+  const keep = [...recent, ...old.filter((j) => ["running", "queued"].includes(j.status))];
+  const arch = old.filter((j) => !keep.includes(j));
+  if (arch.some((j) => j.id === S.job)) S.archOpen = true;
+  $("#job-list").innerHTML = S.jobs.length ? keep.map(jobCard).join("") +
+    (arch.length ? `<details id="job-archive" ${S.archOpen ? "open" : ""}><summary>Archiv (${arch.length})</summary>${arch.map(jobCard).join("")}</details>` : "")
+    : `<p class="hint">Noch keine Aufträge.</p>`;
+  const ad = $("#job-archive"); if (ad) ad.ontoggle = () => { S.archOpen = ad.open; };
   $$(".job").forEach((el) => el.onclick = () => openJob(el.dataset.id));
+  $$(".jopen").forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    if (b.dataset.kind === "train" && b.dataset.prep) { M.ds = b.dataset.id; M.item = null; tab("masks"); return; }   // dataset → mask editor
+    openJob(b.dataset.id);
+    const t = $("#jd-table") || $("#job-detail"); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+  $$(".jdel").forEach((b) => b.onclick = async (e) => {
+    e.stopPropagation();
+    if (!b.classList.contains("confirm")) {          // first click arms, second click deletes
+      b.classList.add("confirm");
+      b.textContent = ["train", "ai_masks"].includes(b.dataset.kind) ? "Mit Masken löschen?" : "Löschen?";
+      setTimeout(() => { if (b.isConnected) { b.classList.remove("confirm"); b.textContent = "×"; } }, 4000);
+      return;
+    }
+    try {
+      await api(`/api/jobs/${b.dataset.id}`, { method: "DELETE" });
+      if (S.job === b.dataset.id) { S.job = null; clearInterval(S.poll); $("#job-detail").classList.add("hidden"); dataLayer.clearLayers(); instLayer.clearLayers(); showInstLegend(false); }
+      loadJobs();
+    } catch (err) { b.textContent = "Fehler"; b.title = err.message; }
+  });
 }
 function openJob(id) {
   S.job = id; $("#job-detail").classList.remove("hidden");
@@ -272,7 +305,8 @@ async function refreshJob(withResults) {
   else if (j.kind === "ai_masks") stats.push([fmt(c.maske), "Masken"], [fmt(c.keine_pv_laut_ki), "keine PV laut KI"], [fmt(c.fehler), "Fehler"]);
   else if (j.kind === "train" && j.params.prepare_only) stats.push([fmt(c.datensatz), "Bilder im Datensatz"], [fmt(c.bild_fehlt), "ohne Bild"], ["→ Masken", "nächster Schritt"]);
   else if (j.kind === "train") stats.push([fmt(c.f1_vorher, 2), "F1 vorher"], [fmt(c.f1_nachher, 2), "F1 nachher"], [c.modell ? "gespeichert" : "–", "neues Modell"]);
-  else stats.push([fmt(c.zellen_mit_pv), "Kacheln mit PV"], [fmt(c.anlagen), "Anlagen"], [fmt(c.fehler), "Fehler"]);
+  else if (j.kind === "area") stats.push([fmt(c.zellen_mit_pv), "Kacheln mit PV"], [fmt(c.anlagen), "Anlagen"], [fmt(c.fehler), "Fehler"], [fmt(c.baujahr_bestimmt), "Baujahr bestimmt"]);
+  if (j.kind === "buildings" || j.kind === "sync") stats.push([fmt(c.baujahr_bestimmt), "Baujahr bestimmt"]);
   if (!["train", "ai_masks"].includes(j.kind)) stats.push([fmt(c.kwp_sum, 0) + " kWp", "geschätzt gesamt"]);
   $("#jd-stats").innerHTML = stats.map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
   $("#jd-files").innerHTML = j.files.filter((f) => /\.(csv|geojson|json)$/.test(f) && f !== "job.json")
