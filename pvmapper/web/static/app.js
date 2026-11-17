@@ -316,7 +316,7 @@ async function refreshJob(withResults) {
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
   $("#jd-status").classList.toggle("hidden", !["buildings", "sync"].includes(j.kind));
   $$(".filters").forEach((x) => x.classList.toggle("hidden", j.kind === "train" || j.kind === "ai_masks"));
-  ["#jd-selrand", "#jd-seln", "#jd-todataset", "#jd-selinfo"].forEach((q) => $(q).classList.toggle("hidden", !["buildings", "sync"].includes(j.kind)));
+  ["#jd-selrand", "#jd-seln", "#jd-todataset", "#jd-selinfo", "#jd-target"].forEach((q) => $(q).classList.toggle("hidden", !["buildings", "sync", "area"].includes(j.kind)));
   if (j.kind === "train" || j.kind === "ai_masks") { $("#jd-table").innerHTML = ""; if (j.kind === "train" && (withResults || j.status === "done")) showReport(j.id); else $("#jd-report").innerHTML = ""; }
   else { $("#jd-report").innerHTML = ""; if (withResults || (j.status !== S.lastStatus && j.status === "done")) loadResults(); }
   S.lastStatus = j.status;
@@ -360,9 +360,13 @@ async function loadResults() {
   if (d.geojson.features.length) map.fitBounds(dataLayer.getBounds(), { maxZoom: 18 });
   const t = $("#jd-table");
   if (job.kind === "area") {
-    t.innerHTML = `<tr><th>#</th><th>Fläche m²</th><th>Teilfl.</th><th>Bauform</th><th>Baujahr ≈</th><th>kWp</th><th>Spanne</th><th>Klasse</th><th>Gebäude</th></tr>` +
-      d.rows.map((r) => `<tr class="click" data-lat="${r.lat}" data-lon="${r.lon}"><td>${r.installation_id}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${r.fields || 1}</td><td>${esc(LAYOUT_TXT[r.layout] || "")}</td><td class="num">${r.install_year || ""}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td class="num">${r.kwp_low != null ? fmt(r.kwp_low, 0) + "–" + fmt(r.kwp_high, 0) : ""}</td><td>${r.size_class}</td><td>${esc(r.building_ids)}</td></tr>`).join("");
-    $$("#jd-table tr.click").forEach((tr) => tr.onclick = () => map.setView([+tr.dataset.lat, +tr.dataset.lon], 19));
+    t.innerHTML = `<tr><th><input type="checkbox" id="jd-selall" title="alle angezeigten"></th><th>#</th><th>Fläche m²</th><th>Teilfl.</th><th>Bauform</th><th>Baujahr ≈</th><th>kWp</th><th>Spanne</th><th>Klasse</th><th>Gebäude</th></tr>` +
+      d.rows.map((r) => `<tr class="click" data-lat="${r.lat}" data-lon="${r.lon}"><td><input type="checkbox" class="jd-sel" data-id="${r.installation_id}" ${S.sel && S.sel.has(String(r.installation_id)) ? "checked" : ""}></td><td>${r.installation_id}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${r.fields || 1}</td><td>${esc(LAYOUT_TXT[r.layout] || "")}</td><td class="num">${r.install_year || ""}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td class="num">${r.kwp_low != null ? fmt(r.kwp_low, 0) + "–" + fmt(r.kwp_high, 0) : ""}</td><td>${r.size_class}</td><td>${esc(r.building_ids)}</td></tr>`).join("");
+    $$("#jd-table tr.click").forEach((tr) => tr.onclick = (e) => { if (!e.target.classList.contains("jd-sel")) map.setView([+tr.dataset.lat, +tr.dataset.lon], 19); });
+    S.sel = S.selJob === S.job ? (S.sel || new Set()) : new Set(); S.selJob = S.job;
+    $$("#jd-table .jd-sel").forEach((cb) => cb.onchange = () => { cb.checked ? S.sel.add(cb.dataset.id) : S.sel.delete(cb.dataset.id); selInfo(); });
+    $("#jd-selall").onchange = (e) => { $$("#jd-table .jd-sel").forEach((cb) => { cb.checked = e.target.checked; cb.onchange(); }); };
+    fillTargets(); selInfo();
     return;
   }
   S.rows = Object.fromEntries(d.rows.map((r) => [r.id, r]));
@@ -376,9 +380,12 @@ async function loadResults() {
   $$("#jd-table .jd-sel").forEach((cb) => cb.onchange = () => { cb.checked ? S.sel.add(cb.dataset.id) : S.sel.delete(cb.dataset.id); selInfo(); });
   $("#jd-selall").onchange = (e) => { $$("#jd-table .jd-sel").forEach((cb) => { cb.checked = e.target.checked; cb.onchange(); }); };
   selInfo();
-  api("/api/datasets").then((ds) => { const cur = $("#jd-target").value;
-    $("#jd-target").innerHTML = `<option value="">neuer Datensatz</option>` + ds.map((x) => `<option value="${x.id}">an „${esc(x.name)}“ anhängen (${fmt(x.stats.total)} Bilder)</option>`).join("");
-    $("#jd-target").value = cur; }).catch(() => {});
+  fillTargets();
+}
+function fillTargets(sel = "#jd-target") {
+  api("/api/datasets").then((ds) => { const cur = $(sel).value;
+    $(sel).innerHTML = `<option value="">neuer Datensatz</option>` + ds.map((x) => `<option value="${x.id}">an „${esc(x.name)}“ anhängen (${fmt(x.stats.total)} Bilder)</option>`).join("");
+    $(sel).value = cur; }).catch(() => {});
 }
 function selInfo() { $("#jd-selinfo").textContent = S.sel && S.sel.size ? `${S.sel.size} ausgewählt` : ""; }
 $("#jd-selrand").onclick = () => {
@@ -388,9 +395,9 @@ $("#jd-selrand").onclick = () => {
   selInfo();
 };
 $("#jd-todataset").onclick = async () => {
-  if (!S.sel || !S.sel.size) { alert("Erst Gebäude auswählen (Häkchen oder „Zufällig wählen“)."); return; }
+  if (!S.sel || !S.sel.size) { alert("Erst Gebäude oder Anlagen auswählen (Häkchen oder „Zufällig wählen“)."); return; }
   const target = $("#jd-target").value;
-  const name = target ? null : prompt("Name des Datensatzes", `Prüfung ${S.job} – ${S.sel.size} Gebäude`); if (!target && name === null) return;
+  const name = target ? null : prompt("Name des Datensatzes", `${(S.jobs.find((x) => x.id === S.job) || {}).kind === "area" ? "Fläche" : "Prüfung"} ${S.job} – ${S.sel.size} Auswahl`); if (!target && name === null) return;
   try { const j = await api("/api/jobs", { json: { kind: "train", params: { from_job: S.job, ids: [...S.sel], name, append_to: target || null } } });
     S.sel = new Set(); openJob(j.id); loadJobs(); }
   catch (e) { alert(e.message); }
@@ -431,10 +438,25 @@ function showBuilding(id) {
 $("#chipclose").onclick = () => $("#chipview").classList.add("hidden");
 
 // ------------------------------------------------------------------ probe
+$("#p-todataset").onclick = async () => {
+  const P = S.probe; if (!P) return;
+  const target = $("#p-target").value;
+  const name = target ? null : prompt("Name des Datensatzes", `Probe ${P.lat.toFixed(4)} ${P.lon.toFixed(4)}`); if (!target && name === null) return;
+  const inst = (P.d.installations && P.d.installations.features) || [];
+  const big = inst.reduce((a, f) => (!a || (f.properties.outline_area_m2 || 0) > (a.outline_area_m2 || 0) ? f.properties : a), null);
+  try {
+    const j = await api("/api/probe/dataset", { json: { lat: P.lat, lon: P.lon, radius_m: P.radius_m, source: P.source, profile: P.profile,
+      polygons: P.d.polygons, kwp_est: P.d.kwp_est, layout: P.d.layout, install_year: big ? big.install_year : null, name, append_to: target || null } });
+    $("#p-out").insertAdjacentHTML("beforeend", `<div class="info">Übernommen – Auftrag ${esc(j.id)}; danach im Reiter „Masken“ prüfen.</div>`);
+    loadJobs();
+  } catch (e) { $("#p-out").insertAdjacentHTML("beforeend", `<div class="info error">${esc(e.message)}</div>`); }
+};
 async function probe(ll) {
   $("#p-out").innerHTML = `<div class="info">Lade Luftbild und analysiere ${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)} …</div>`;
   try {
     const d = await api("/api/probe", { json: { lat: ll.lat, lon: ll.lng, source: $("#p-source").value, profile: $("#p-profile").value, radius_m: +$("#p-radius").value } });
+    S.probe = { lat: ll.lat, lon: ll.lng, radius_m: +$("#p-radius").value, source: $("#p-source").value, profile: $("#p-profile").value, d };
+    $("#p-ds").classList.remove("hidden"); fillTargets("#p-target");
     dataLayer.clearLayers(); instLayer.clearLayers(); showInstLegend(false);
     if (d.polygons) dataLayer.addData({ type: "FeatureCollection", features: d.polygons.features.map((f) => ({ ...f, properties: { kind: "pv" } })) });
     if (d.installations) { instLayer.addData(d.installations); instLayer.bringToFront(); showInstLegend(instLayer.getLayers().length > 0); }
@@ -616,7 +638,7 @@ function info2(extra = "") {
   const ai = m.ai ? ` · KI (${esc(m.ai.provider)}/${esc(m.ai.mode)}): ${m.ai.pv_visible ? "PV" : "keine PV"}${m.ai.confidence != null ? ", Sicherheit " + fmt(m.ai.confidence, 2) : ""}${m.ai.reviewed ? ", geprüft" : ", <b>ungeprüft</b>"}${m.ai.note ? " – " + esc(m.ai.note) : ""}` : "";
   const ty = M.typo && M.typo.installations.length ? " · " + M.typo.installations.map((i) => `${esc(LAYOUT_TXT[i.layout] || i.layout)}${i.azimuth_deg != null ? " " + Math.round(i.azimuth_deg) + "°" + (i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : "") : ""} ${fmt(i.kwp_est, 1)} kWp`).join(", ") +
     ` → <b>${fmt(M.typo.summary.kwp_est, 1)} kWp</b> (${fmt(M.typo.summary.kwp_low, 0)}–${fmt(M.typo.summary.kwp_high, 0)})` : "";
-  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty} · ${negPolys().length} Aufbauten${ai}${extra ? " · " + extra : ""}
+  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty}${m.kwp_detected != null ? " · erkannt " + fmt(m.kwp_detected, 1) + " kWp" : ""}${m.install_year ? " · Baujahr ≈ " + m.install_year : ""}${regText(m)} · ${negPolys().length} Aufbauten${ai}${extra ? " · " + extra : ""}
     <span class="hint" style="color:#8f9bb3"> · Ebene <b>${M.layer === "neg" ? "Aufbauten (kein PV)" : "PV"}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
   const hl = $("#e-helplink"); if (hl) hl.onclick = (e) => { e.preventDefault(); toggleHelp(); };
 }
@@ -635,6 +657,24 @@ function typoRefresh() {
     } catch (e) { /* typology is a hint only */ }
   }, 700);
 }
+function regText(m) {
+  const R = m.register; if (!R) return "";
+  const hit = (R.buildings || []).filter((b) => b.register);
+  if (!hit.length) return ` · Register: <span class="muted">nichts (${(R.buildings || []).length ? "Gebäude ohne Register-PV" : "kein PV-Map-Gebäude in der Nähe"})</span>`;
+  return " · Register: " + hit.map((b) => { const r = b.register, yrs = Object.entries(r.by_year || {}).sort().map(([y, k]) => `${y}: ${fmt(k, 1)}`).join(", ");
+    return `<b>${fmt(r.kwp, 1)} kWp</b> (${r.n} Einheit${r.n === 1 ? "" : "en"}${yrs ? "; " + yrs : ""}; Zuordnung ${esc(r.grade || "?")}${b.distance_m ? "; " + fmt(b.distance_m, 0) + " m entfernt" : ""}${b.name ? "; " + esc(b.name) : ""})`; }).join(" + ");
+}
+async function regLookup(names) {
+  $("#m-reg-msg").innerHTML = `<div class="info">frage PV-Map …</div>`;
+  try {
+    const r = await api(`/api/datasets/${M.ds}/register`, { json: { names, radius_m: +$("#m-reg-r").value || 30 } });
+    $("#m-reg-msg").innerHTML = `<div class="info">${fmt(r.images)} Bilder abgefragt, ${fmt(r.with_register)} mit Registerdaten${r.errors ? `, ${r.errors} Fehler` : ""}.</div>`;
+    const d = await api(`/api/datasets/${M.ds}/items`); M.items = d.items;
+    if (M.item) { const it = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(M.item.name)}`); M.item.register = it.meta.register; info2(); }
+  } catch (e) { $("#m-reg-msg").innerHTML = `<div class="info error">${esc(e.message)}</div>`; }
+}
+$("#m-reg-all").onclick = () => regLookup(null);
+$("#m-reg-one").onclick = () => { if (M.item) regLookup([M.item.name]); };
 function toggleHelp(on) { const h = $("#e-help"), show = on === undefined ? h.classList.contains("hidden") : on; h.classList.toggle("hidden", !show); }
 function areaM2() {
   const res = (S.info.profiles.find((p) => p.id === (M.dsProfile || S.info.config.profile)) || { resolution_m: 0.1 }).resolution_m;

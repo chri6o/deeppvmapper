@@ -95,6 +95,12 @@ class Client:
     def queue_count(self, model: str | None = None, recheck_days: int = 365, **filters) -> dict:
         return self._get("/detect/queue/count", {**filters, "model": model, "recheck_days": recheck_days})
 
+    def register(self, ids=None, lat=None, lon=None, radius_m: float = 30) -> list:
+        """register PV (MaStR) of public buildings: by PV-Map building ids or around a point (PV-Map /detect/register)"""
+        if ids:
+            return self._get("/detect/register", {"ids": ",".join(map(str, ids))})["buildings"]
+        return self._get("/detect/register", {"lat": lat, "lon": lon, "radius_m": radius_m})["buildings"]
+
     def send_results(self, items: list, run: str | None = None, model: str | None = None) -> dict:
         return self._get("/detect/results", {}, "POST", {"run": run, "model": model, "items": items})
 

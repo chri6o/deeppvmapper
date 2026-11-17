@@ -179,6 +179,13 @@ Das Register (MaStR-Inbetriebnahmedatum) wird dafür bewusst nicht genutzt; es d
 
 Abschalten: Einstellungen → „Baujahr aus älteren Luftbildern“. Sichtbar in der Vorschau, im Karten-Popup, in der Tabelle bei „Fläche auswerten“ und bei der Probe.
 
+## Funde als Trainingsdaten, Registerdaten
+
+- **Fläche auswerten:** In der Ergebnistabelle Anlagen ankreuzen (oder „Zufällig wählen“), Ziel wählen (neuer Datensatz oder anhängen), „Als Trainingsdatensatz →“. Jede Anlage wird ein Bild (Anlage + 4 m), der erkannte Umriss die Maskenvorlage.
+- **Probe:** unter dem Ergebnis „In Trainingsdatensatz →“ übernimmt den Ausschnitt mit der erkannten PV.
+- **Gebäude prüfen:** wie bisher über die Auswahl in der Ergebnistabelle.
+- **Registerdaten:** Reiter „Masken“ → „Registerdaten (MaStR) über PV-Map“ fragt je Bild ab, was das Anlagenregister zum Gebäude sagt. Das sind kWp, Einheiten, kWp je Inbetriebnahmejahr und Zuordnungsgüte. Bilder aus PV-Map-Gebäudelisten werden über die Gebäude-ID abgefragt, andere im Umkreis der Bildmitte. Die Infozeile des Editors zeigt Register, erkannte kWp und Baujahr nebeneinander. PV-Map kennt nur öffentliche Gebäude und keine einzelnen Einheiten (Ausrichtung, Neigung).
+
 ## Abgleich mit PV-Map (Nachtbetrieb)
 
 Unter **Einstellungen → PV-Map-Abgleich** Nachtbetrieb an, Zeitfenster und Gebäudefilter (z. B. `cc=DE&nuts3=DEA2`) setzen. Im Zeitfenster

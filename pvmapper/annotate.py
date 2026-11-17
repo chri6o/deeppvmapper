@@ -298,3 +298,60 @@ def review_result(d, name, meta, kwp_per_m2: float = 0.2, cfg: dict | None = Non
         except Exception:                                        # noqa: BLE001 – the review itself must go through
             pass
     return out
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# register data (MaStR via PV-Map) for the images of a dataset
+
+def _synthetic(bid: str) -> bool:
+    """ids PV-Mapper made up itself (area installations 'AREA-…', probe cut-outs 'PROBE-…') are no PV-Map building ids"""
+    return bid.startswith(("AREA-", "PROBE-"))
+
+
+def register_lookup(d: str, client, names: list | None = None, radius_m: float = 30.0, log=None) -> dict:
+    """asks PV-Map what the register says about the building(s) of each image and stores it in the image's meta
+    (`register`: {buildings: [{id, name, distance_m, register: {kwp, n, by_year, first_year, grade, …} | None}], checked})
+    – by building id where the image came from PV-Map, else around the image centre. Returns counts."""
+    import datetime as _dt
+    from shapely.geometry import Point
+    from . import geo
+    items = [m for m in list_items(d) if not names or m["name"] in names]
+    today = _dt.date.today().isoformat()
+    out = {"images": 0, "with_register": 0, "errors": 0}
+    by_id = [m for m in items if not _synthetic(str(m.get("id") or ""))]
+    found = {}
+    for i in range(0, len(by_id), 200):
+        chunk = by_id[i:i + 200]
+        try:
+            for b in client.register(ids=[m["id"] for m in chunk]):
+                found[str(b["id"])] = b
+        except Exception as e:                                       # noqa: BLE001
+            out["errors"] += 1
+            if log:
+                log(f"PV-Map: {e}"[:200])
+    for m in items:
+        meta = read_meta(d, m["name"])
+        hit = found.get(str(meta.get("id")))
+        if hit is not None:
+            res = [hit]
+        else:
+            lon, lat = meta.get("lon"), meta.get("lat")
+            if lon is None and meta.get("window"):
+                w, _ = _window(meta)
+                c = geo.reproject(Point((w.minx + w.maxx) / 2, (w.miny + w.maxy) / 2), w.crs, "EPSG:4326")
+                lon, lat = c.x, c.y
+            if lon is None:
+                continue
+            try:
+                res = client.register(lat=lat, lon=lon, radius_m=radius_m)
+            except Exception as e:                                   # noqa: BLE001
+                out["errors"] += 1
+                if log and out["errors"] <= 3:
+                    log(f"PV-Map: {e}"[:200])
+                continue
+        meta["register"] = {"buildings": res, "checked": today}
+        with open(os.path.join(d, m["name"] + ".json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        out["images"] += 1
+        out["with_register"] += any(b.get("register") for b in res)
+    return out

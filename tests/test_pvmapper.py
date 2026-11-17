@@ -999,6 +999,7 @@ def test_typology_in_area_probe_and_editor(tmp_path, monkeypatch):
     poly = [[[20, 20], [180, 20], [180, 120], [20, 120]]]                                   # 160 × 100 px = 160 m²
     t = annotate.typology_of(str(d), "b", meta, poly, cfg)
     assert t["summary"]["kwp_est"] > 0 and t["installations"][0]["outline_px"]
+    json.dumps(t["installations"])                                     # plain JSON for the editor
     assert abs(t["installations"][0]["outline_area_m2"] - 160) < 10
     m = annotate.save_annotation(str(d), "b", poly)
     r = annotate.review_result(str(d), "b", m, 0.2, dict(cfg, typology_push=True))
@@ -1177,3 +1178,72 @@ def test_area_fields_on_one_building_are_one_installation(tmp_path, monkeypatch)
     fc = json.load(open(os.path.join(job.dir, "installations.geojson"), encoding="utf-8"))
     assert len(fc["features"]) == 1, [f["properties"] for f in fc["features"]]
     assert fc["features"][0]["properties"]["fields"] == 2 and fc["features"][0]["properties"]["building_ids"] == "TESTH"
+
+
+def test_area_and_probe_to_dataset_and_register_lookup(tmp_path, monkeypatch):
+    """installations from 'Fläche auswerten' and the probe become training images; the register (MaStR via PV-Map) is asked per image"""
+    from fastapi.testclient import TestClient
+    from pvmapper import annotate, area_mode, pvmap
+    from pvmapper.web.app import create_app
+
+    class FakeSrc:
+        id = "fake-2023"
+        name = "Fake"
+        attribution = ""
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 90, np.uint8)
+        h, w = img.shape[:2]
+        img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    monkeypatch.setattr(models, "get_profile", lambda *_a, **_k: fake_profile())
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), fetch_workers=1,
+               area_cell_px=256, pvmap_token="pvm_x")
+    area = Job(cfg["jobs_dir"], "area", {"bbox": [13.4000, 52.5200, 13.4004, 52.5203]})
+    area.run(lambda j: area_mode.run(j, cfg))
+    assert area.status == "done", area.error
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(cfg, str(cfgp))
+    app = create_app(str(cfgp))
+    c = TestClient(app)
+
+    def wait(jid):
+        for _ in range(300):
+            j = c.get(f"/api/jobs/{jid}").json()
+            if j["status"] not in ("queued", "running"):
+                return j
+            import time as _t
+            _t.sleep(0.1)
+        raise AssertionError("job did not finish")
+    first = json.load(open(os.path.join(area.dir, "installations.geojson")))["features"][0]["properties"]["installation_id"]
+    j = c.post("/api/jobs", json={"kind": "train", "params": {"from_job": area.id, "ids": [str(first)], "name": "TEST area"}}).json()
+    j = wait(j["id"])
+    assert j["status"] == "done", j.get("error")
+    d = annotate.ds_dir(os.path.join(cfg["jobs_dir"], j["id"]))
+    items = annotate.list_items(d)
+    assert len(items) == 1 and items[0]["id"] == f"AREA-{area.id}-{first}" and items[0]["has_mask"] and items[0]["label"] == 1
+    assert items[0]["lat"] and items[0]["kwp_detected"]
+    # probe cut-out appended to the same dataset
+    p = c.post("/api/probe", json={"lat": 52.52, "lon": 13.40, "radius_m": 15, "age": False}).json()
+    j2 = c.post("/api/probe/dataset", json={"lat": 52.52, "lon": 13.40, "radius_m": 15, "polygons": p["polygons"],
+                                           "kwp_est": p["kwp_est"], "append_to": j["id"]}).json()
+    assert wait(j2["id"])["status"] == "done"
+    items = annotate.list_items(d)
+    assert len(items) == 2 and any(m["id"].startswith("PROBE-") and m["has_mask"] for m in items)
+    # register: synthetic ids are asked around the image centre, PV-Map ids by id
+    asked = []
+
+    def register(self, ids=None, lat=None, lon=None, radius_m=30):
+        asked.append(("ids", tuple(ids)) if ids else ("point", round(lat, 3), round(lon, 3), radius_m))
+        return [] if ids else [{"id": "DE_TEST1", "name": "TEST Schule", "distance_m": 4.2,
+                                "register": {"kwp": 24.6, "n": 2, "by_year": {"2014": 9.9, "2019": 14.7}, "grade": "A"}}]
+    monkeypatch.setattr(pvmap.Client, "register", register)
+    r = c.post(f"/api/datasets/{j['id']}/register", json={"radius_m": 40}).json()
+    assert r == {"images": 2, "with_register": 2, "errors": 0}
+    assert all(a[0] == "point" and a[3] == 40 for a in asked)
+    m = annotate.read_meta(d, items[0]["name"])
+    assert m["register"]["buildings"][0]["register"]["by_year"]["2019"] == 14.7

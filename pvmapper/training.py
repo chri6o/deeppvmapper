@@ -58,6 +58,15 @@ def load_sample(job, cfg) -> list[dict]:
         return feats
     if p.get("from_job"):
         return _from_check_job(job, cfg)
+    if p.get("features"):                                      # given directly (e.g. from the probe)
+        feats = p["features"]
+        for ft in feats:
+            pr = ft.setdefault("properties", {})
+            pr.setdefault("label_kind", "det_pv" if int(pr.get("label", 0)) else "det_none")
+            pr.setdefault("size_bin", "?")
+            pr.setdefault("sub", "?")
+        job.log(f"{len(feats)} Ausschnitt(e) übernommen.")
+        return feats
     from . import pvmap
     cl = pvmap.Client.from_config(cfg)
     flt = {k: p.get(k) for k in pvmap.FILTER_KEYS if p.get(k)}
@@ -127,6 +136,8 @@ def _from_check_job(job, cfg) -> list[dict]:
     from .jobs import Job
     src = Job.load(cfg["jobs_dir"], job.params["from_job"])
     ids = [str(i) for i in job.params.get("ids") or []]
+    if src.kind == "area":
+        return _from_area_job(job, src, ids, cfg)
     con = sqlite3.connect(os.path.join(src.dir, "results.sqlite"))
     q = "SELECT id,status,kwp_est,size_class,props,footprint_wkt,pv_wkt,lon,lat FROM results WHERE status != 'fehler'"
     rows = con.execute(q).fetchall()
@@ -149,6 +160,35 @@ def _from_check_job(job, cfg) -> list[dict]:
             "source_job": src.id, "source_model": src.params.get("profile") or cfg.get("profile"), "nacharbeit": _nacharbeit(status, kwp, pr, None)}})
     job.log(f"{len(feats)} Gebäude aus Prüfauftrag {src.id} übernommen "
             f"({sum(f['properties']['label'] for f in feats)} mit erkannter PV).")
+    return feats
+
+
+def _from_area_job(job, src, ids, cfg) -> list[dict]:
+    """installations selected in an area job → dataset items: the installation (+ 4 m) as the image area, its detected outline as
+    the mask suggestion (label 1, det_pv)"""
+    from shapely.geometry import mapping, shape
+    with open(os.path.join(src.dir, "installations.geojson"), encoding="utf-8") as f:
+        fc = json.load(f)
+    want = set(ids)
+    feats = []
+    for ft in fc["features"]:
+        pr = ft["properties"]
+        k = str(pr["installation_id"])
+        if want and k not in want:
+            continue
+        g = shape(ft["geometry"])
+        c = g.centroid
+        utm = f"EPSG:{geo.utm_epsg(c.x, c.y)}"
+        area = geo.reproject(geo.reproject(g, "EPSG:4326", utm).envelope.buffer(4, join_style=2), utm, "EPSG:4326")
+        bids = [b for b in (pr.get("building_ids") or "").split(";") if b]
+        feats.append({"type": "Feature", "id": f"AREA-{src.id}-{k}", "geometry": mapping(area), "properties": {
+            "id": f"AREA-{src.id}-{k}", "label": 1, "label_kind": "det_pv", "sub": "?", "size_bin": pr.get("size_class") or "?",
+            "kwp_detected": pr.get("kwp_est"), "pv_geometry": ft["geometry"], "mask_source": "model",
+            "source_job": src.id, "source_model": src.params.get("profile") or cfg.get("profile"),
+            "extra": {"building_ids": bids, "install_year": pr.get("install_year"), "layout": pr.get("layout"),
+                      "kwp_low": pr.get("kwp_low"), "kwp_high": pr.get("kwp_high"),
+                      "lon": round(c.x, 7), "lat": round(c.y, 7)}}})
+    job.log(f"{len(feats)} Anlagen aus Flächenauswertung {src.id} übernommen.")
     return feats
 
 
@@ -212,6 +252,7 @@ def build_dataset(job, cfg, feats, prof, ds_dir: str | None = None) -> list[dict
                 "status": "open", "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy,
                                                                      win.width, win.height],
                 "val": is_val(bid, float(job.params.get("val_share", 0.25)))}
+        meta.update({k: v for k, v in (pr.get("extra") or {}).items() if k not in meta})
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f)
         return meta

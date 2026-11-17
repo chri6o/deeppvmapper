@@ -426,6 +426,48 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         mgr.submit(job)
         return job.as_dict()
 
+    @app.post("/api/datasets/{jid}/register")
+    def dataset_register(jid: str, body: dict = Body(default={})):
+        """register data (MaStR via PV-Map) for all images of a dataset or the given ones (`names`)"""
+        from .. import pvmap
+        job = _job(jid)
+        d = annotate.ds_dir(job.dir)
+        if not os.path.isdir(d):
+            raise HTTPException(404, "Datensatz nicht gefunden")
+        try:
+            cl = pvmap.Client.from_config(cfg())
+        except Exception as e:                                   # noqa: BLE001
+            raise HTTPException(400, str(e))
+        return annotate.register_lookup(d, cl, body.get("names"), float(body.get("radius_m") or 30))
+
+    @app.post("/api/probe/dataset")
+    def probe_dataset(body: dict = Body(...)):
+        """the probe cut-out with its detected PV as an image of a training dataset (new dataset or appended)"""
+        from shapely.geometry import shape, mapping
+        from shapely.ops import unary_union
+        lat, lon, radius = float(body["lat"]), float(body["lon"]), float(body.get("radius_m", 40))
+        utm = f"EPSG:{geo.utm_epsg(lon, lat)}"
+        area = geo.reproject(geo.reproject(Point(lon, lat), "EPSG:4326", utm).buffer(radius, cap_style=3), utm, "EPSG:4326")
+        polys = [shape(f["geometry"]) for f in ((body.get("polygons") or {}).get("features") or [])]
+        pv = unary_union(polys) if polys else None
+        bid = f"PROBE-{lat:.5f}_{lon:.5f}"
+        c = cfg()
+        params = {"prepare_only": True, "profile": body.get("profile") or c.get("profile"),
+                  "sources": [body["source"]] if body.get("source") and body["source"] != "auto" else None,
+                  "name": body.get("name") or f"Probe {lat:.4f} {lon:.4f}", "append_to": body.get("append_to") or None,
+                  "features": [{"type": "Feature", "id": bid, "geometry": mapping(area), "properties": {
+                      "id": bid, "label": int(pv is not None), "label_kind": "det_pv" if pv is not None else "det_none",
+                      "pv_geometry": mapping(pv) if pv is not None else None, "mask_source": "model",
+                      "kwp_detected": body.get("kwp_est"), "source_model": body.get("profile") or c.get("profile"),
+                      "extra": {"lon": lon, "lat": lat, "install_year": body.get("install_year"), "layout": body.get("layout")}}}]}
+        if params["append_to"]:
+            tgt = _job(params["append_to"])
+            if not os.path.isdir(annotate.ds_dir(tgt.dir)):
+                raise HTTPException(400, "Ziel-Datensatz nicht gefunden")
+        job = Job(c["jobs_dir"], "train", params)
+        mgr.submit(job)
+        return job.as_dict()
+
     @app.post("/api/datasets/{jid}/items/{name}/typology")
     def dataset_typology(jid: str, name: str, body: dict = Body(default={})):
         """installation typology of the mask currently drawn in the editor (not saved)"""
@@ -464,8 +506,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             raise HTTPException(400, "Keine Gebäudedatei gewählt")
         if kind == "train" and params.get("from_job"):
             src = _job(params["from_job"])
-            if src.kind not in ("buildings", "sync"):
-                raise HTTPException(400, "Nur Ergebnisse von „Gebäude prüfen“ lassen sich übernehmen.")
+            if src.kind not in ("buildings", "sync", "area"):
+                raise HTTPException(400, "Nur Ergebnisse von „Gebäude prüfen“ oder „Fläche auswerten“ lassen sich übernehmen.")
             params.setdefault("profile", src.params.get("profile") or cfg().get("profile"))   # the model that found these
             params.setdefault("sources", src.params.get("sources"))
             params["prepare_only"] = True

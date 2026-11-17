@@ -529,7 +529,7 @@ def analyse(img: np.ndarray, mask: np.ndarray, res_m: float, clip: np.ndarray | 
         cnts, _ = cv2.findContours(outline.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         c = max(cnts, key=cv2.contourArea)
         c = cv2.approxPolyDP(c, 1.5, True).reshape(-1, 2)
-        att["outline_px"] = [[int(px) + sl[1].start, int(py) + sl[0].start] for px, py in c]
+        att["outline_px"] = [[int(px + sl[1].start), int(py + sl[0].start)] for px, py in c]   # plain ints (JSON)
         out.append(att)
     out.sort(key=lambda a: -a["outline_area_m2"])
     for k, a in enumerate(out):

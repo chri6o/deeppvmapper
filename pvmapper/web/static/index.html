@@ -161,6 +161,12 @@
       <button id="m-ai-batch" class="secondary">KI-Vorschläge erzeugen</button>
       <p class="hint">KI-Masken gelten als <b>ungeprüft</b>, bis du sie hier gespeichert hast. Das Training nutzt standardmäßig nur geprüfte.</p>
     </details>
+    <details><summary>Registerdaten (MaStR) über PV-Map</summary>
+      <p class="hint">Fragt für jedes Bild bei PV-Map nach, was das Anlagenregister zum Gebäude sagt (kWp, Einheiten, Inbetriebnahmejahre, Zuordnungsgüte) – zum Gegenprüfen von Leistung und Baujahr. Nur öffentliche Gebäude aus PV-Map; einzelne Einheiten mit Ausrichtung und Neigung hält PV-Map nicht vor.</p>
+      <div class="row"><button id="m-reg-all" class="secondary">Für alle Bilder abfragen</button><button id="m-reg-one" class="secondary">Nur aktuelles Bild</button>
+        <label style="margin:0">Umkreis m<input id="m-reg-r" type="number" value="30" min="5" max="300" style="width:5em"></label></div>
+      <div id="m-reg-msg"></div>
+    </details>
     <details><summary>Training mit diesem Datensatz</summary>
       <div class="grid2">
         <label>Ausgangsmodell<select id="m-profile" class="profile-select"></select></label>
@@ -183,6 +189,8 @@
       <label>Radius (m)<input id="p-radius" type="number" value="40" min="10" max="200"></label>
     </div>
     <div id="p-out"></div>
+    <div id="p-ds" class="row hidden"><select id="p-target" title="Neuer Datensatz oder an einen bestehenden anhängen"><option value="">neuer Datensatz</option></select>
+      <button id="p-todataset" class="secondary" title="Diesen Ausschnitt mit der erkannten PV als Trainingsbild übernehmen">In Trainingsdatensatz →</button></div>
   </div>
 
   <!-- ===================================================== Quellen -->
