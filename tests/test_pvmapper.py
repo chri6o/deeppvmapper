@@ -943,3 +943,64 @@ def test_calibrate_fits_fill_factor():
     assert out["layouts"]["flush_flat"]["f_median"] == pytest.approx(0.92, abs=0.01)
     assert out["layouts"]["flush_flat"]["current"] == 0.92
     assert out["register_inside_range"] == 1.0 and out["typology"]["n"] == 5
+
+
+def test_typology_in_area_probe_and_editor(tmp_path, monkeypatch):
+    """the typology wherever installations are found: area jobs, probe, mask editor (and hand-checked results for PV-Map)"""
+    from PIL import Image as PImage
+    from fastapi.testclient import TestClient
+    from pvmapper import annotate, area_mode
+    from pvmapper.web.app import create_app
+
+    class FakeSrc:
+        id = "fake-2023"
+        name = "Fake"
+        attribution = ""
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 90, np.uint8)
+        h, w = img.shape[:2]
+        img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    monkeypatch.setattr(models, "get_profile", lambda *_a, **_k: fake_profile())
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), fetch_workers=1,
+               area_cell_px=256)
+    # area job: installations get layout, kWp range, outlines
+    job = Job(cfg["jobs_dir"], "area", {"bbox": [13.4000, 52.5200, 13.4004, 52.5203]})
+    job.run(lambda j: area_mode.run(j, cfg))
+    assert job.status == "done", job.error
+    fc = json.load(open(os.path.join(job.dir, "installations.geojson"), encoding="utf-8"))
+    pr = fc["features"][0]["properties"]
+    assert pr["kwp_method"] == "typology" and pr["layout"] and pr["kwp_low"] <= pr["kwp_est"] <= pr["kwp_high"]
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(cfg, str(cfgp))
+    c = TestClient(create_app(str(cfgp)))
+    res = c.get(f"/api/jobs/{job.id}/results").json()
+    assert res["installations"]["features"] and res["installations"]["features"][0]["properties"]["kind"] == "inst"
+    # probe
+    p = c.post("/api/probe", json={"lat": 52.52, "lon": 13.40, "radius_m": 15}).json()
+    assert p["kwp_method"] == "typology" and p["installations"]["features"] and p["kwp_low"] <= p["kwp_est"] <= p["kwp_high"]
+    # mask editor: typology of the drawn (unsaved) mask, pixel outlines
+    d = tmp_path / "ds"
+    d.mkdir()
+    win = geo.window_around(box(13.4, 52.52, 13.4003, 52.5202), "EPSG:25833", 0.1, 3, 64)
+    img = np.full((win.height, win.width, 3), 150, np.uint8)
+    PImage.fromarray(img).save(d / "b.jpg")
+    fp = np.zeros((win.height, win.width), np.uint8)
+    fp[5:-5, 5:-5] = 255
+    PImage.fromarray(fp).save(d / "b.fp.png")
+    meta = {"id": "TESTB1", "name": "b", "label": 1, "status": "open", "source": "de-nw-2024",
+            "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy, win.width, win.height]}
+    json.dump(meta, open(d / "b.json", "w"))
+    poly = [[[20, 20], [180, 20], [180, 120], [20, 120]]]                                   # 160 × 100 px = 160 m²
+    t = annotate.typology_of(str(d), "b", meta, poly, cfg)
+    assert t["summary"]["kwp_est"] > 0 and t["installations"][0]["outline_px"]
+    assert abs(t["installations"][0]["outline_area_m2"] - 160) < 10
+    m = annotate.save_annotation(str(d), "b", poly)
+    r = annotate.review_result(str(d), "b", m, 0.2, dict(cfg, typology_push=True))
+    assert r["kwp"] == t["summary"]["kwp_est"] and r["installations"][0]["review_status"] == "confirmed_manual"
+    assert r["installations"][0]["geometry"]["type"] == "Polygon" and r["installations"][0]["imagery_year"] == 2024

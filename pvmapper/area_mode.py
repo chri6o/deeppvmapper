@@ -26,12 +26,13 @@ from shapely.strtree import STRtree
 
 from . import buildings as bld
 from . import config as cfgmod
-from . import geo, inference, postproc, runtime, sources
+from . import geo, inference, postproc, runtime, sources, typology
 
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS cells (id TEXT PRIMARY KEY, status TEXT, source TEXT, "
     "n_polys INTEGER, max_prob REAL, error TEXT)",
     "CREATE TABLE IF NOT EXISTS polys (cell TEXT, wkt TEXT)",
+    "CREATE TABLE IF NOT EXISTS typo (cell TEXT, json TEXT)",       # installation typology per cell (typology.py)
 ]
 
 MAX_CELLS = 200_000
@@ -157,9 +158,17 @@ def run(job, cfg: dict):
         mask, _ = postproc.clean(img, r.mask, det.p.resolution_m, None, dict(cfg, postproc_complete=False), prob=r.prob)
         r.mask = mask
         polys = inference.mask_to_polygons(r.mask, win)
+        tfeats = []
+        if polys and cfg.get("typology", True):
+            try:
+                tfeats = typology.for_window(img, r.mask, win, det.p.resolution_m, src, f"z{cid}", None, None, cfg)
+            except Exception as e:                               # noqa: BLE001 – keep the detection
+                job.log(f"Zelle {cid}: Typologie fehlgeschlagen ({type(e).__name__}: {e})"[:200])
         db.execute("BEGIN")
         db.execute("DELETE FROM polys WHERE cell=?", (cid,))
+        db.execute("DELETE FROM typo WHERE cell=?", (cid,))
         db.executemany("INSERT INTO polys VALUES (?,?)", [(cid, pg.wkt) for pg in polys])
+        db.executemany("INSERT INTO typo VALUES (?,?)", [(cid, json.dumps(f, ensure_ascii=False)) for f in tfeats])
         db.execute("INSERT OR REPLACE INTO cells VALUES (?,?,?,?,?,?)",
                    (cid, "ok", src.id, len(polys), r.max_prob, None))
         db.execute("COMMIT")
@@ -198,7 +207,18 @@ def export(job, cfg, db, utm, region):
                   if b.geometry.geom_type in ("Polygon", "MultiPolygon")]
         bindex = STRtree([g for _, g in bitems]) if bitems else None
 
-    feats, rows = [], []
+    # typology parts (per cell) → assigned to the merged installation that contains their centre
+    from shapely.geometry import shape
+    tparts = []
+    try:
+        for (js,) in db.execute("SELECT json FROM typo"):
+            f = json.loads(js)
+            tparts.append((geo.reproject(shape(f["geometry"]), "EPSG:4326", utm).representative_point(), f))
+    except Exception:                                            # noqa: BLE001 – older jobs without the table
+        tparts = []
+    ttree = STRtree([pt for pt, _ in tparts]) if tparts else None
+
+    feats, rows, outlines = [], [], []
     min_area = float(cfg["min_pv_area_m2"])
     for k, g in enumerate(groups):
         bids = []
@@ -211,7 +231,17 @@ def export(job, cfg, db, utm, region):
             continue
         kwp = round(area * float(cfg["kwp_per_m2"]), 1)
         cw = geo.reproject(g.centroid, utm, "EPSG:4326")
+        sm, method = {}, "area_factor"
+        if ttree is not None:
+            gb = g.buffer(1.0)
+            mine = [tparts[i][1] for i in ttree.query(gb) if gb.contains(tparts[i][0])]
+            if mine:
+                sm, method = typology.summarise([f["properties"] for f in mine]), "typology"
+                kwp = sm["kwp_est"]
+                outlines += typology.map_features(mine, f"#{k}")
         props = {"installation_id": k, "pv_area_m2": round(area, 1), "kwp_est": kwp,
+                 "kwp_low": sm.get("kwp_low"), "kwp_high": sm.get("kwp_high"), "layout": sm.get("layout"),
+                 "kwp_method": method,
                  "size_class": cfgmod.size_class(kwp, cfg["size_classes"]),
                  "in_range": int(cfgmod.in_kwp_range(kwp, cfg)),
                  "lon": round(cw.x, 7), "lat": round(cw.y, 7), "building_ids": ";".join(map(str, bids))}
@@ -221,9 +251,11 @@ def export(job, cfg, db, utm, region):
 
     with open(os.path.join(job.dir, "installations.geojson"), "w", encoding="utf-8") as f:
         json.dump({"type": "FeatureCollection", "features": feats}, f, ensure_ascii=False)
+    with open(os.path.join(job.dir, "installation_outlines.geojson"), "w", encoding="utf-8") as f:
+        json.dump({"type": "FeatureCollection", "features": outlines}, f, ensure_ascii=False)
     with open(os.path.join(job.dir, "installations.csv"), "w", newline="", encoding="utf-8") as f:
-        cols = ["installation_id", "pv_area_m2", "kwp_est", "size_class", "in_range", "lon", "lat",
-                "building_ids"]
+        cols = ["installation_id", "pv_area_m2", "kwp_est", "kwp_low", "kwp_high", "layout", "kwp_method",
+                "size_class", "in_range", "lon", "lat", "building_ids"]
         w = csv.DictWriter(f, cols)
         w.writeheader()
         w.writerows(rows)
@@ -238,4 +270,4 @@ def export(job, cfg, db, utm, region):
         json.dump({"anlagen": len(rows), "kwp_sum": job.counters["kwp_sum"], "nach_klasse": by_class},
                   f, ensure_ascii=False, indent=1)
     job.log(f"Fertig: {len(rows)} Anlagen, ≈ {job.counters['kwp_sum']} kWp. "
-            "Exporte: installations.geojson, installations.csv, summary.json")
+            "Exporte: installations.geojson, installations.csv, installation_outlines.geojson, summary.json")

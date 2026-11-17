@@ -146,7 +146,14 @@ Für jede erkannte Anlage bestimmt `pvmapper/typology.py` aus Maske und Luftbild
 
 Was von oben nicht sichtbar ist (gebäudeintegriert, Befestigung, Unterkonstruktion, Modultechnik), bleibt `unknown`. Jedes Merkmal trägt eine Konfidenz.
 
-Ausgabe: Spalten `kwp_low`, `kwp_high`, `layout`, `kwp_method` (`typology` oder `area_factor`) in `buildings.csv`, dazu `installations.geojson` mit einem Umriss je Anlage, allen Merkmalen sowie OSM-Tags (`osm`) und MaStR-Feldern (`mastr`). In der Ergebnisliste zeigt die Vorschau je Anlage Bauform, Ausrichtung, Belegung und kWp.
+Die Typologie läuft überall, wo Anlagen gefunden werden:
+
+- **Gebäude prüfen** und **Aufträge** (Nachtabgleich): je Gebäude.
+- **Fläche auswerten:** je Zelle, in der Anlagenliste mit Bauform und Spanne; Umrisse in `installation_outlines.geojson`.
+- **Probe:** Bauform und kWp je Anlage unter dem Bild, Umrisse auf der Karte.
+- **Masken:** Der Editor zeigt Bauform und kWp der gerade gezeichneten Maske und ihre Umrisse gestrichelt. Von Hand geprüfte Masken gehen mit dieser Schätzung an PV-Map (mit `typology_push` auch mit den Anlagen).
+
+Ausgabe beim Gebäude-Prüfen: Spalten `kwp_low`, `kwp_high`, `layout`, `kwp_method` (`typology` oder `area_factor`) in `buildings.csv`, dazu `installations.geojson` mit einem Umriss je Anlage, allen Merkmalen sowie OSM-Tags (`osm`) und MaStR-Feldern (`mastr`). In der Ergebnisliste zeigt die Vorschau je Anlage Bauform, Ausrichtung, Belegung und kWp.
 
 Abschalten: Einstellungen → „Anlagentyp und Leistung je Anlage“ (dann wie bisher Modulfläche × `kwp_per_m2`). An PV-Map gehen die Anlagen mit `typology_push: true` in `pvmapper.yml` (PV-Map ab Migration 137 speichert sie und zeigt sie dem Owner im Steckbrief).
 

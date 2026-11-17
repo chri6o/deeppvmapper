@@ -11,7 +11,6 @@ interrupted job resumes where it stopped.
 from __future__ import annotations
 
 import json
-import re
 import os
 import queue
 import threading
@@ -35,12 +34,7 @@ CREATE TABLE IF NOT EXISTS results (
 
 
 def _year(src) -> int | None:
-    """year of the imagery, from the source (`year`) or its id (de-nw-2024, nl-pdok-hr-2025)"""
-    y = getattr(src, "year", None)
-    if y:
-        return int(y)
-    m = re.search(r"(?:^|-)(20\d\d)(?:-|$)", getattr(src, "id", "") or "")
-    return int(m.group(1)) if m else None
+    return typology.imagery_year(src)
 
 
 def apply_typology(row: dict, img, mask, win, clip, src, props: dict, res_m: float, cfg: dict) -> list:
@@ -49,22 +43,15 @@ def apply_typology(row: dict, img, mask, win, clip, src, props: dict, res_m: flo
     if not row["has_pv"] or not cfg.get("typology", True):
         return []
     try:
-        insts = typology.analyse(img, mask, res_m, clip, props, cfg, year=_year(src))
+        feats = typology.for_window(img, mask, win, res_m, src, row["id"], clip, props, cfg)
     except Exception as e:                          # never lose the detection over the classification
         row["error"] = f"Typologie: {type(e).__name__}: {e}"[:300]
         return []
-    feats = typology.to_wgs84(insts, win, row["id"], {"source": src.id, "year": _year(src)})
     if not feats:
         return []
-    P = [f["properties"] for f in feats]
-    kwp = round(sum(p["kwp_est"] for p in P), 1)
-    row.update(kwp_est=kwp, kwp_low=round(sum(p["kwp_low"] for p in P), 1),
-               kwp_high=round(sum(p["kwp_high"] for p in P), 1), kwp_method="typology",
-               installations=json.dumps(feats, ensure_ascii=False, separators=(",", ":")))
-    by = {}
-    for p in P:
-        by[p["layout"]] = by.get(p["layout"], 0) + p["outline_area_m2"]
-    row["layout"] = max(by, key=by.get) if len(by) == 1 or max(by.values()) >= 0.8 * sum(by.values()) else "mixed"
+    sm = typology.summarise([f["properties"] for f in feats])
+    kwp = sm["kwp_est"]
+    row.update(sm, kwp_method="typology", installations=json.dumps(feats, ensure_ascii=False, separators=(",", ":")))
     row["size_class"] = cfgmod.size_class(kwp, cfg["size_classes"])
     row["in_range"] = int(cfgmod.in_kwp_range(kwp, cfg))
     return feats

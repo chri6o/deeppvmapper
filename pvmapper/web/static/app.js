@@ -326,8 +326,8 @@ async function loadResults() {
   if (d.geojson.features.length) map.fitBounds(dataLayer.getBounds(), { maxZoom: 18 });
   const t = $("#jd-table");
   if (job.kind === "area") {
-    t.innerHTML = `<tr><th>#</th><th>Fläche m²</th><th>kWp</th><th>Klasse</th><th>Gebäude</th></tr>` +
-      d.rows.map((r) => `<tr class="click" data-lat="${r.lat}" data-lon="${r.lon}"><td>${r.installation_id}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td>${r.size_class}</td><td>${esc(r.building_ids)}</td></tr>`).join("");
+    t.innerHTML = `<tr><th>#</th><th>Fläche m²</th><th>Bauform</th><th>kWp</th><th>Spanne</th><th>Klasse</th><th>Gebäude</th></tr>` +
+      d.rows.map((r) => `<tr class="click" data-lat="${r.lat}" data-lon="${r.lon}"><td>${r.installation_id}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td>${esc(LAYOUT_TXT[r.layout] || "")}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td class="num">${r.kwp_low != null ? fmt(r.kwp_low, 0) + "–" + fmt(r.kwp_high, 0) : ""}</td><td>${r.size_class}</td><td>${esc(r.building_ids)}</td></tr>`).join("");
     $$("#jd-table tr.click").forEach((tr) => tr.onclick = () => map.setView([+tr.dataset.lat, +tr.dataset.lon], 19));
     return;
   }
@@ -388,8 +388,9 @@ async function probe(ll) {
     const d = await api("/api/probe", { json: { lat: ll.lat, lon: ll.lng, source: $("#p-source").value, profile: $("#p-profile").value, radius_m: +$("#p-radius").value } });
     dataLayer.clearLayers(); instLayer.clearLayers(); showInstLegend(false);
     if (d.polygons) dataLayer.addData({ type: "FeatureCollection", features: d.polygons.features.map((f) => ({ ...f, properties: { kind: "pv" } })) });
+    if (d.installations) { instLayer.addData(d.installations); instLayer.bringToFront(); showInstLegend(instLayer.getLayers().length > 0); }
     $("#p-out").innerHTML = `<div class="info"><b>${esc(d.source_name)}</b><br>
-      Score max ${fmt(d.max_prob, 2)} · ${d.n_positive}/${d.n_patches} Ausschnitte positiv · PV ${fmt(d.pv_area_m2, 1)} m² ≈ ${fmt(d.kwp_est, 1)} kWp<br>
+      Score max ${fmt(d.max_prob, 2)} · ${d.n_positive}/${d.n_patches} Ausschnitte positiv · PV ${fmt(d.pv_area_m2, 1)} m² ≈ ${fmt(d.kwp_est, 1)} kWp${d.kwp_low != null ? ` (${fmt(d.kwp_low, 0)}–${fmt(d.kwp_high, 0)})` : ""}${d.layout ? " · " + esc(LAYOUT_TXT[d.layout] || d.layout) : ""}${instText({ installations: (d.installations ? d.installations.features : []).map((f) => f.properties) })}<br>
       Bild ${d.px[0]}×${d.px[1]} px in ${d.fetch_s}s · Analyse ${d.detect_s}s</div>
       <img src="data:image/jpeg;base64,${d.image}"><div class="hint">${esc(d.attribution)}</div>`;
   } catch (e) { $("#p-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
@@ -551,6 +552,7 @@ async function openItem(i) {
   M.item = { ...m, ...d.meta, width: d.width, height: d.height, footprint: d.footprint };
   M.polys = d.polygons; M.other = d.negatives || []; M.layer = "pv"; setLayerButtons();
   M.hist = []; M.cur = []; M.sel = -1; M.vsel = -1; M.label = d.effective_label; M.dirty = false; M.corners = [];
+  M.typo = null; M.typoKey = null;
   $("#e-label").checked = !!M.label;
   M.img = new Image();
   M.img.onload = () => { showEditor(true); fitView(); draw(); };
@@ -563,9 +565,26 @@ const TOOL_TXT = { poly: "Polygon", rect: "Rechteck", rrect: "gedrehtes Rechteck
 function info2(extra = "") {
   const m = M.item; if (!m) return;
   const ai = m.ai ? ` · KI (${esc(m.ai.provider)}/${esc(m.ai.mode)}): ${m.ai.pv_visible ? "PV" : "keine PV"}${m.ai.confidence != null ? ", Sicherheit " + fmt(m.ai.confidence, 2) : ""}${m.ai.reviewed ? ", geprüft" : ", <b>ungeprüft</b>"}${m.ai.note ? " – " + esc(m.ai.note) : ""}` : "";
-  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m² · ${negPolys().length} Aufbauten${ai}${extra ? " · " + extra : ""}
+  const ty = M.typo && M.typo.installations.length ? " · " + M.typo.installations.map((i) => `${esc(LAYOUT_TXT[i.layout] || i.layout)}${i.azimuth_deg != null ? " " + Math.round(i.azimuth_deg) + "°" + (i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : "") : ""} ${fmt(i.kwp_est, 1)} kWp`).join(", ") +
+    ` → <b>${fmt(M.typo.summary.kwp_est, 1)} kWp</b> (${fmt(M.typo.summary.kwp_low, 0)}–${fmt(M.typo.summary.kwp_high, 0)})` : "";
+  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty} · ${negPolys().length} Aufbauten${ai}${extra ? " · " + extra : ""}
     <span class="hint" style="color:#8f9bb3"> · Ebene <b>${M.layer === "neg" ? "Aufbauten (kein PV)" : "PV"}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
   const hl = $("#e-helplink"); if (hl) hl.onclick = (e) => { e.preventDefault(); toggleHelp(); };
+}
+// installation typology of the drawn mask (layout, orientation, kWp), refreshed shortly after every change
+function typoRefresh() {
+  const m = M.item; if (!m) return;
+  const polys = pvPolys(), key = m.name + JSON.stringify(polys);
+  if (key === M.typoKey) return;
+  M.typoKey = key; clearTimeout(M.typoT);
+  if (!polys.length) { M.typo = null; return; }
+  M.typoT = setTimeout(async () => {
+    try {
+      const t = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/typology`, { json: { polygons: polys } });
+      if (M.typoKey !== key) return;
+      M.typo = t; draw(); info2();
+    } catch (e) { /* typology is a hint only */ }
+  }, 700);
 }
 function toggleHelp(on) { const h = $("#e-help"), show = on === undefined ? h.classList.contains("hidden") : on; h.classList.toggle("hidden", !show); }
 function areaM2() {
@@ -618,6 +637,9 @@ function draw() {
   cx.drawImage(M.img, M.view.x, M.view.y, M.img.width * M.view.s, M.img.height * M.view.s);
   const lw = 2 * devicePixelRatio;
   cx.lineWidth = lw; cx.strokeStyle = "#ffdc00"; cx.setLineDash([6, 4]); M.item.footprint.forEach((p) => { path(p); cx.stroke(); }); cx.setLineDash([]);
+  if (M.typo && M.showTypo !== false) M.typo.installations.forEach((i) => { if (!i.outline_px || i.outline_px.length < 3) return;
+    path(i.outline_px); cx.strokeStyle = LAYOUT_COL[i.layout] || "#94a3b8"; cx.lineWidth = lw * 1.2; cx.setLineDash([3, 3]); cx.stroke(); cx.setLineDash([]); });
+  typoRefresh();
   const ai = M.item.mask_source === "ai" && !(M.item.ai && M.item.ai.reviewed);
   const drawNeg = (p, act, sel) => { path(p); cx.fillStyle = "rgba(0,200,255,.22)"; cx.fill(); cx.setLineDash([5, 3]);
     cx.strokeStyle = sel ? "#fff" : "#38d6ff"; cx.lineWidth = act ? lw * 1.3 : lw * 0.8; cx.stroke(); cx.setLineDash([]); };

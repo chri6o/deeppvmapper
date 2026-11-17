@@ -215,7 +215,53 @@ def corner_points(d, name, max_corners: int = 2500) -> list:
     return [[round(float(x), 1), round(float(y), 1)] for x, y in pts.reshape(-1, 2)]
 
 
-def review_result(d, name, meta, kwp_per_m2: float = 0.2) -> dict | None:
+def _window(meta):
+    from shapely.geometry import Point
+    from . import geo
+    win = meta.get("window")
+    if not win:
+        return None, None
+    w = geo.Window(win[0], *win[1:5], int(win[5]), int(win[6]))
+    c = geo.reproject(Point((w.minx + w.maxx) / 2, (w.miny + w.maxy) / 2), w.crs, "EPSG:4326")
+    res = (w.maxx - w.minx) / w.width / geo.scale_factor(w.crs, c.x, c.y)
+    return w, res
+
+
+def typology_of(d, name, meta, polygons=None, cfg=None) -> dict:
+    """installation typology of an image in the mask editor, for the drawn mask (polygons in px; None = saved mask):
+    {summary, installations: [attributes + outline_px]} – pixel outlines for the editor, nothing stored"""
+    from . import typology
+    win, res = _window(meta)
+    if win is None:
+        return {"summary": {}, "installations": []}
+    w, h = image_size(d, name)
+    m = polygons_to_mask(polygons, w, h) if polygons is not None else (
+        np.asarray(Image.open(os.path.join(d, name + ".mask.png"))) > 0 if os.path.isfile(os.path.join(d, name + ".mask.png"))
+        else np.zeros((h, w), bool))
+    if not m.any():
+        return {"summary": {}, "installations": []}
+    img = np.asarray(Image.open(os.path.join(d, name + ".jpg")).convert("RGB"))
+    fpp = os.path.join(d, name + ".fp.png")
+    clip = None
+    if os.path.isfile(fpp):
+        fp = (np.asarray(Image.open(fpp)) > 0).astype(np.uint8)
+        k = max(3, int(round(3.0 / res)))                       # footprint + 1.5 m, as in the building check
+        clip = cv2.dilate(fp, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))).astype(bool) if fp.any() else None
+
+    class _Src:
+        id = meta.get("source") or ""
+    insts = typology.analyse(img, m, res, clip, {}, cfg, year=typology.imagery_year(_Src),
+                             review_status="confirmed_manual")
+    keep = ("layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source", "outline_area_m2",
+            "kwp_est", "kwp_low", "kwp_high", "outline_px")
+    sm = typology.summarise(insts)
+    if sm:
+        sm["year"] = typology.imagery_year(_Src)
+    return {"summary": sm, "installations": [{k: a.get(k) for k in keep} for a in insts],
+            "_insts": insts, "_win": win}
+
+
+def review_result(d, name, meta, kwp_per_m2: float = 0.2, cfg: dict | None = None) -> dict | None:
     """result for PV-Map from an image checked by hand: PV polygons in WGS84 (from the stored window) or 'none'"""
     from shapely.geometry import Polygon, mapping
     from shapely.ops import unary_union
@@ -235,5 +281,20 @@ def review_result(d, name, meta, kwp_per_m2: float = 0.2) -> dict | None:
     c = geo.reproject(g.centroid, w.crs, "EPSG:4326")
     k = geo.scale_factor(w.crs, c.x, c.y)
     area = g.area / (k * k)
-    return {"id": meta["id"], "result": "pv", "tier": 1, "reviewed": True, "area_m2": round(area, 1),
-            "kwp": round(area * kwp_per_m2, 1), "polygons": mapping(geo.reproject(g, w.crs, "EPSG:4326"))}
+    out = {"id": meta["id"], "result": "pv", "tier": 1, "reviewed": True, "area_m2": round(area, 1),
+           "kwp": round(area * kwp_per_m2, 1), "polygons": mapping(geo.reproject(g, w.crs, "EPSG:4326"))}
+    if cfg is not None and cfg.get("typology", True):            # the hand-drawn mask is the best basis for the typology
+        try:
+            from . import typology
+            t = typology_of(d, name, meta, cfg=cfg)
+            if t["summary"]:
+                out.update(kwp=t["summary"]["kwp_est"])
+                if cfg.get("typology_push"):
+                    feats = typology.to_wgs84(t["_insts"], t["_win"], meta["id"],
+                                              {"source": meta.get("source"), "year": t["summary"].get("year")})
+                    out.update(kwp_low=t["summary"]["kwp_low"], kwp_high=t["summary"]["kwp_high"],
+                               layout=t["summary"]["layout"],
+                               installations=[{**f["properties"], "geometry": f["geometry"]} for f in feats])
+        except Exception:                                        # noqa: BLE001 – the review itself must go through
+            pass
+    return out

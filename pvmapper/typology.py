@@ -534,6 +534,50 @@ def analyse(img: np.ndarray, mask: np.ndarray, res_m: float, clip: np.ndarray | 
     return out
 
 
+def imagery_year(src) -> int | None:
+    """year of the imagery, from the source (`year`) or its id (de-nw-2024, nl-pdok-hr-2025)"""
+    import re
+    y = getattr(src, "year", None)
+    if y:
+        return int(y)
+    m = re.search(r"(?:^|-)(20\d\d)(?:-|$)", getattr(src, "id", "") or "")
+    return int(m.group(1)) if m else None
+
+
+def for_window(img, mask, win, res_m, src, owner_id: str, clip=None, props=None, cfg=None) -> list[dict]:
+    """analyse() + to_wgs84() for one image window: GeoJSON features of the installations ([] if none)"""
+    y = imagery_year(src)
+    insts = analyse(img, mask, res_m, clip, props, cfg, year=y)
+    return to_wgs84(insts, win, owner_id, {"source": getattr(src, "id", None), "year": y})
+
+
+def summarise(props_list: list[dict]) -> dict:
+    """installations of one building / field → kwp_est, kwp_low, kwp_high, layout (dominant ≥ 80 % or 'mixed')"""
+    if not props_list:
+        return {}
+    by: dict = {}
+    for p in props_list:
+        by[p["layout"]] = by.get(p["layout"], 0) + (p.get("outline_area_m2") or 0)
+    tot = sum(by.values()) or 1
+    main = max(by, key=by.get)
+    return {"kwp_est": round(sum(p["kwp_est"] for p in props_list), 1),
+            "kwp_low": round(sum(p["kwp_low"] for p in props_list), 1),
+            "kwp_high": round(sum(p["kwp_high"] for p in props_list), 1),
+            "layout": main if len(by) == 1 or by[main] >= 0.8 * tot else "mixed"}
+
+
+def map_features(feats: list[dict], owner_id: str) -> list[dict]:
+    """installation features → slim features for the map layer 'Anlagen nach Bauform' (kind 'inst')"""
+    out = []
+    for k, f in enumerate(feats):
+        p = f["properties"]
+        out.append({"type": "Feature", "geometry": f["geometry"], "properties": {
+            "id": owner_id, "kind": "inst", "n": k + 1, **{x: p.get(x) for x in (
+                "layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source",
+                "outline_area_m2", "kwp_est", "kwp_low", "kwp_high")}}})
+    return out
+
+
 def to_wgs84(insts: list[dict], win, building_id: str, imagery: dict | None = None) -> list[dict]:
     """pixel outlines → GeoJSON features (WGS84) with installation_id / building_id"""
     from shapely.geometry import Polygon, mapping

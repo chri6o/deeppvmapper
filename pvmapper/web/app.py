@@ -19,7 +19,7 @@ from shapely import wkt as shp_wkt
 from shapely.geometry import Point, mapping
 
 from .. import area_mode, building_mode, buildings as bld, config as cfgmod
-from .. import ai_label, annotate, geo, inference, models, runtime, sources
+from .. import ai_label, annotate, geo, inference, models, runtime, postproc, sources, typology
 from ..jobs import Job, runner
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
@@ -226,12 +226,24 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             det = runtime.detector(c, prof.id)
             t1 = time.time()
             r = det.run([("p", img)])["p"]
-            polys = inference.mask_to_polygons(r.mask, win)
             mask = r.mask
+            if c.get("postproc", True):
+                mask, _ = postproc.clean(img, mask, prof.resolution_m, None, dict(c, postproc_complete=False), prob=r.prob)
+            polys = inference.mask_to_polygons(mask, win)
             area_m2 = sum(geo.ground_area_m2(p) for p in polys)
+            kwp = round(area_m2 * float(c["kwp_per_m2"]), 1)
+            tf, sm = [], {}
+            if polys and c.get("typology", True):
+                try:
+                    tf = typology.for_window(img, mask, win, prof.resolution_m, src, "Probe", None, None, c)
+                    sm = typology.summarise([f["properties"] for f in tf])
+                except Exception as e:                           # noqa: BLE001
+                    out["typology_error"] = f"{type(e).__name__}: {e}"[:200]
             out.update(detect_s=round(time.time() - t1, 2), max_prob=round(r.max_prob, 3),
                        n_patches=r.n_patches, n_positive=r.n_positive, pv_area_m2=round(area_m2, 1),
-                       kwp_est=round(area_m2 * float(c["kwp_per_m2"]), 1),
+                       kwp_est=sm.get("kwp_est", kwp), kwp_low=sm.get("kwp_low"), kwp_high=sm.get("kwp_high"),
+                       layout=sm.get("layout"), kwp_method="typology" if sm else "area_factor",
+                       installations={"type": "FeatureCollection", "features": typology.map_features(tf, "Probe")},
                        polygons={"type": "FeatureCollection",
                                  "features": [{"type": "Feature", "geometry": mapping(p), "properties": {}}
                                               for p in polys]})
@@ -373,7 +385,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         """a mask checked by hand → PV-Map as a reviewed result (confirmed PV or no PV); buildings PV-Map does not know are ignored there"""
         try:
             from .. import pvmap
-            item = annotate.review_result(d, name, meta, float(cfg().get("kwp_per_m2") or 0.2))
+            item = annotate.review_result(d, name, meta, float(cfg().get("kwp_per_m2") or 0.2), cfg())
             if item:
                 pvmap.Client.from_config(cfg()).send_results([item], run="review", model="review")
         except Exception:                                        # noqa: BLE001
@@ -409,6 +421,13 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         job = Job(cfg()["jobs_dir"], "sync", p)
         mgr.submit(job)
         return job.as_dict()
+
+    @app.post("/api/datasets/{jid}/items/{name}/typology")
+    def dataset_typology(jid: str, name: str, body: dict = Body(default={})):
+        """installation typology of the mask currently drawn in the editor (not saved)"""
+        d, name = _item(jid, name)
+        t = annotate.typology_of(d, name, annotate.read_meta(d, name), body.get("polygons"), cfg())
+        return {"summary": t["summary"], "installations": t["installations"]}
 
     @app.get("/api/datasets/{jid}/items/{name}/corners")
     def dataset_corners(jid: str, name: str):
@@ -564,8 +583,17 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                     feats.append({"type": "Feature", "geometry": mapping(shp_wkt.loads(w)), "properties": {}})
             chips = [{"cell": r[0], "chip": f"cell_{r[0]}.jpg"} for r in
                      con.execute("SELECT id FROM cells WHERE n_polys>0 LIMIT 200")]
+            outl = []
+            po = os.path.join(job.dir, "installation_outlines.geojson")
+            if os.path.isfile(po):
+                with open(po, encoding="utf-8") as f:
+                    outl = json.load(f)["features"]
+                if size_class:
+                    keep = {f"#{r['installation_id']}" for r in rows}
+                    outl = [o for o in outl if o["properties"]["id"] in keep]
             return {"rows": rows[offset:offset + limit], "total": len(rows),
-                    "geojson": {"type": "FeatureCollection", "features": feats[:20000]}, "chips": chips}
+                    "geojson": {"type": "FeatureCollection", "features": feats[:20000]}, "chips": chips,
+                    "installations": {"type": "FeatureCollection", "features": outl[:20000]}}
         where, args = [], []
         nach = status == "nacharbeit"                            # incomplete or missed detections (batch rework)
         if status and not nach:
@@ -621,12 +649,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                 feats.append({"type": "Feature", "geometry": mapping(shp_wkt.loads(r[14])),
                               "properties": {"id": d["id"], "kind": "pv"}})
             # installation outlines from the typology (rows with their gaps), own map layer
-            for k, f in enumerate(json.loads(r[22] or "[]")):
-                p = f["properties"]
-                insts.append({"type": "Feature", "geometry": f["geometry"], "properties": {
-                    "id": d["id"], "kind": "inst", "n": k + 1, **{x: p.get(x) for x in (
-                        "layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source",
-                        "outline_area_m2", "kwp_est", "kwp_low", "kwp_high")}}})
+            insts += typology.map_features(json.loads(r[22] or "[]"), d["id"])
         return {"rows": rows, "total": total, "geojson": {"type": "FeatureCollection", "features": feats},
                 "installations": {"type": "FeatureCollection", "features": insts}}
 
