@@ -105,6 +105,19 @@ def _negative_filter(cfg, sp: dict, metas) -> dict:
     return flt
 
 
+def _nacharbeit(status, kwp, props, max_prob):
+    """why a checked building probably needs a better mask (None = looks complete):
+    PV in the register but nothing found, much less found than registered, or the classifier saw PV but no area survived"""
+    reg = float((props or {}).get("pv_kwp") or 0)
+    if status == "kein_pv" and reg > 0:
+        return "verpasst"                                          # register says PV, detection found none
+    if status == "pv" and reg > 5 and reg > 1.5 * float(kwp or 0):
+        return "unvollständig"                                     # much less module area than registered
+    if status == "kein_pv" and max_prob is not None and max_prob >= 0.5:
+        return "verdacht"                                          # the classifier saw PV, no area survived
+    return None
+
+
 def _from_check_job(job, cfg) -> list[dict]:
     """buildings selected in the results of a 'check buildings' job → dataset items to review in the mask editor.
     The detected PV polygons are a *suggestion* (mask_source 'model', not used for training until a user saves the
@@ -132,7 +145,8 @@ def _from_check_job(job, cfg) -> list[dict]:
             "id": bid, "label": int(pos), "label_kind": "det_pv" if pos else "det_none",
             "sub": pr.get("sub") or "?", "size_bin": size_class or ("none" if not pos else "?"),
             "pv_kwp": pr.get("pv_kwp"), "kwp_detected": kwp,
-            "pv_geometry": mapping(shp_wkt.loads(pv_wkt)) if pv_wkt else None, "mask_source": "model"}})
+            "pv_geometry": mapping(shp_wkt.loads(pv_wkt)) if pv_wkt else None, "mask_source": "model",
+            "source_job": src.id, "source_model": src.params.get("profile") or cfg.get("profile"), "nacharbeit": _nacharbeit(status, kwp, pr, None)}})
     job.log(f"{len(feats)} Gebäude aus Prüfauftrag {src.id} übernommen "
             f"({sum(f['properties']['label'] for f in feats)} mit erkannter PV).")
     return feats
@@ -155,8 +169,8 @@ def _rasterize(geom_wgs84, win: geo.Window) -> np.ndarray:
     return np.asarray(m, dtype=np.uint8)
 
 
-def build_dataset(job, cfg, feats, prof) -> list[dict]:
-    ds_dir = os.path.join(job.dir, "dataset")
+def build_dataset(job, cfg, feats, prof, ds_dir: str | None = None) -> list[dict]:
+    ds_dir = ds_dir or os.path.join(job.dir, "dataset")
     os.makedirs(ds_dir, exist_ok=True)
     cat = runtime.catalog(cfg)
     src_filter = runtime.source_filter(cfg, job.params.get("sources"))
@@ -194,6 +208,7 @@ def build_dataset(job, cfg, feats, prof) -> list[dict]:
                 "source": src.id, "has_mask": has_mask,
                 "mask_source": (pr.get("mask_source") or "pvmap") if has_mask else None,
                 "kwp_detected": pr.get("kwp_detected"),
+                "source_job": pr.get("source_job"), "source_model": pr.get("source_model"), "nacharbeit": pr.get("nacharbeit"),
                 "status": "open", "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy,
                                                                      win.width, win.height],
                 "val": is_val(bid, float(job.params.get("val_share", 0.25)))}
@@ -449,7 +464,10 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
     pos = [m for m in train if m["label"] == 1]
     neg = [m for m in train if m["label"] == 0]
     job.log(f"Training Klassifikator: {len(pos)} positiv, {len(neg)} negativ, {epochs} Epochen")
-    cache, hard = {}, {}
+    cache, hard, plab = {}, {}, {}
+    n_mask = sum(1 for m in train if m.get("has_mask"))
+    if n_mask:
+        job.log(f"{n_mask} Gebäude mit Maske: der Klassifikator lernt dort je Bildausschnitt (PV ja/nein) statt nur je Gebäude")
     n_hard = sum(1 for m in train if m.get("has_neg"))
     if n_hard:
         job.log(f"{n_hard} Gebäude mit „Kein PV“-Markierungen (Gauben, Fenster …) – als harte Gegenbeispiele")
@@ -467,8 +485,14 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
                 job.log(f"Epoche {ep + 1}/{epochs}: {k}/{len(order)} Gebäude")
             if m["id"] not in cache:
                 img, fp, mask = load_arrays(ds_dir, m)
-                cache[m["id"]] = np.stack([img[y:y + size, x:x + size]
-                                           for x, y in _patches_for(det, img, fp, mask, max_patches, size)])
+                spots = _patches_for(det, img, fp, mask, max_patches, size)
+                cache[m["id"]] = np.stack([img[y:y + size, x:x + size] for x, y in spots])
+                if mask is not None and m.get("has_mask"):
+                    # patch labels from the mask: ≥ 3 m² of modules → PV, none → no PV, a sliver in between → ignored
+                    px3 = 3.0 / det.p.resolution_m ** 2
+                    n_pv = [int(mask[y:y + size, x:x + size].sum()) for x, y in spots]
+                    plab[m["id"]] = (np.array([1.0 if n >= px3 else 0.0 for n in n_pv], np.float32),
+                                     np.array([1.0 if (n >= px3 or n == 0) else 0.0 for n in n_pv], np.float32))
                 hp = _hard_negative_patches(img, load_neg(ds_dir, m), mask, size)
                 hard[m["id"]] = np.stack(hp) if hp else None
             x = det._to_tensor(list(cache[m["id"]]))
@@ -478,13 +502,16 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
             logits = model((x - det.mean) / det.std)
             if isinstance(logits, tuple):
                 logits = logits[0]
-            z = logits[:, 1] - logits[:, 0] if det.p.cls_outputs == 2 else logits[:, 0]
-            z = z.max()                                            # multiple-instance: building = max over patches
+            zp = logits[:, 1] - logits[:, 0] if det.p.cls_outputs == 2 else logits[:, 0]
+            z = zp.max()                                           # multiple-instance: building = max over patches
             y = torch.tensor(float(m["label"]), device=z.device)
             wgt = weak_weight if m["label_kind"] == "neg_weak" else 1.0
             # balance classes
             wgt *= (len(train) / (2 * max(1, len(pos)))) if m["label"] == 1 else (len(train) / (2 * max(1, len(neg))))
             loss = F.binary_cross_entropy_with_logits(z, y) * wgt
+            if m["id"] in plab:                                    # every patch with its own label (much stronger signal)
+                yl, wl = (torch.from_numpy(a).to(zp.device) for a in plab[m["id"]])
+                loss = loss + (F.binary_cross_entropy_with_logits(zp, yl, reduction="none") * wl).sum() / wl.sum().clamp_min(1)
             if hard.get(m["id"]) is not None:                    # marked confusers must score "no PV"
                 xh = _augment(det._to_tensor(list(hard[m["id"]])))
                 if xh.shape[-1] != det.p.cls_input_px:
@@ -622,8 +649,14 @@ def run(job, cfg: dict):
                 "(siehe Zeile „PV-Map lieferte …“ oben). Im Reiter Training zeigt „Verfügbare Beispiele anzeigen“, "
                 "was es für die gewählten Filter gibt.")
         job.log("Lade Luftbilder …")
-        metas = build_dataset(job, cfg, feats, prof)
         ds_dir = os.path.join(job.dir, "dataset")
+        if p.get("append_to"):                                   # add to an existing dataset (iterative training)
+            from .jobs import Job
+            target = Job.load(cfg["jobs_dir"], p["append_to"])
+            ds_dir = annotate.ds_dir(target.dir)
+            before = len(annotate.list_items(ds_dir))
+            job.log(f"Ergänze Datensatz {target.id} ({target.params.get('name') or ''}, bisher {before} Bilder).")
+        metas = build_dataset(job, cfg, feats, prof, ds_dir)
         if p.get("prepare_only"):
             job.counters["datensatz"] = len(metas)
             job.log(f"Datensatz angelegt: {len(metas)} Gebäude, "

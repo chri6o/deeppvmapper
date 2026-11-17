@@ -28,6 +28,8 @@ DEFAULTS = {
     "postproc_contrast": 8,          # module field must be this much darker than the roof around it …
     "postproc_blue": 6,              # … or this much bluer (B−R)
     "postproc_max_v": 205,           # brighter on average: never modules
+    "postproc_confident": 0.75,      # mean segmentation probability from which the colour/shape rules do not apply
+                                     # (bright, silvery modules are as light as the roof – the model knows them better)
     "postproc_fill": 0.7,            # share of its rotated bounding rectangle a field must fill …
     "postproc_strong": 25,           # … unless it is this much darker than the roof (L-shaped arrays)
     "postproc_repeat_m2": 4.0,       # "small" for the dormer-row rule
@@ -35,7 +37,8 @@ DEFAULTS = {
     "postproc_complete": True,
     "postproc_complete_contrast": 14,  # completion only when modules stand out this much from the roof
     "postproc_lookalike_m2": 4.0,    # minimum size of an added look-alike field (≥ 2 modules; skylights are smaller)
-    "postproc_rectify": 0.8,         # fill ratio above which a field becomes its rotated rectangle (0 = off)
+    "postproc_rectify": 0.9,         # fill ratio above which a field becomes its rotated rectangle (0 = off)
+    "postproc_max_hole_m2": 2.0,     # holes up to this size are glare and get filled; larger ones are roof structures
 }
 
 
@@ -71,11 +74,19 @@ def _rect(comp):
     return r, comp.sum() / max(r[1][0] * r[1][1], 1.0)
 
 
-def _fill_holes(m):
+def _fill_holes(m, max_hole_px=None):
+    """fill holes (glare spots inside a field); with max_hole_px only small ones – larger holes are roof structures
+    (skylights, vents) the modules go around and must not count as module area"""
+    m = m.astype(bool)
     cnts, _ = cv2.findContours(m.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    out = np.zeros(m.shape, np.uint8)
-    cv2.drawContours(out, cnts, -1, 1, -1)
-    return out.astype(bool)
+    full = np.zeros(m.shape, np.uint8)
+    cv2.drawContours(full, cnts, -1, 1, -1)
+    holes = full.astype(bool) & ~m
+    if max_hole_px is None or not holes.any():
+        return full.astype(bool)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(holes.astype(np.uint8), connectivity=4)
+    small = np.isin(lab, [i for i in range(1, n) if st[i, 4] <= max_hole_px])
+    return m | small
 
 
 def _components(m, pad: int = 0):
@@ -103,7 +114,7 @@ def _paste(sl_dst, sl_src, comp):
 
 
 def clean(img: np.ndarray, mask: np.ndarray, res_m: float, clip: np.ndarray | None = None,
-          cfg: dict | None = None) -> tuple[np.ndarray, dict]:
+          cfg: dict | None = None, prob: np.ndarray | None = None) -> tuple[np.ndarray, dict]:
     """img (H,W,3) uint8 RGB, mask (H,W) {0,1}, clip (H,W) bool or None.
     Returns (cleaned mask uint8, info {removed: [(reason, m²)], added_m2})."""
     s = settings(cfg)
@@ -134,7 +145,16 @@ def clean(img: np.ndarray, mask: np.ndarray, res_m: float, clip: np.ndarray | No
                     tiny.append((a, cen))
                 info["removed"].append(("klein", round(a * px_m2, 1)))
                 continue
-            ft = _features(V, B, sl, comp, m, clip, r_px)
+            ft = None
+            if prob is not None:
+                pc = prob[sl][comp].astype(np.float32)
+                hi = pc >= 0.5                                   # pixels the model found (completion adds others)
+                if hi.mean() >= 0.3 and float(pc[hi].mean()) >= s["postproc_confident"]:
+                    ft = _features(V, B, sl, comp, m, clip, r_px)
+                    if not (ft["v"] > s["postproc_max_v"] - 15 and ft["sv"] < 6):   # flat white surfaces are never modules
+                        stats.append((sl, comp, a, cen))         # the model is sure: no colour/shape veto
+                        continue
+            ft = ft or _features(V, B, sl, comp, m, clip, r_px)
             darker = ft["rv"] - ft["v"]
             bluer = ft["b"] - ft["rb"]
             if ft["v"] > s["postproc_max_v"] and bluer < 3 * s["postproc_blue"]:
@@ -177,7 +197,7 @@ def clean(img: np.ndarray, mask: np.ndarray, res_m: float, clip: np.ndarray | No
 
     out = np.zeros_like(m)
     for sl, comp, a, _ in _components(m, 1):
-        comp = _fill_holes(comp)
+        comp = _fill_holes(comp, s["postproc_max_hole_m2"] / px_m2)
         if s["postproc_rectify"] and a * px_m2 >= 2.0:
             r, fill = _rect(comp)
             if fill >= s["postproc_rectify"]:
@@ -192,6 +212,20 @@ def clean(img: np.ndarray, mask: np.ndarray, res_m: float, clip: np.ndarray | No
     return out.astype(np.uint8), info
 
 
+def _row_band(comp, sl, u, px_per_m):
+    """the field's rotated rectangle, extended along its long axis (rows cut by glare or the patch grid continue there) but
+    only 1 m wider across – colour look-alikes beside the field (parapets, roof edges) are not added"""
+    r, _ = _rect(comp)
+    (cx, cy), (w, h), ang = r
+    if w < h:
+        w, h, ang = h, w, ang + 90
+    band = np.zeros((u[0].stop - u[0].start, u[1].stop - u[1].start), np.uint8)
+    ox, oy = sl[1].start - u[1].start, sl[0].start - u[0].start
+    box = cv2.boxPoints(((cx + ox, cy + oy), (w + 2 * max(band.shape), h + 2 * px_per_m), ang))
+    cv2.fillPoly(band, [box.round().astype(np.int32)], 1)
+    return band.astype(bool)
+
+
 def _complete(m, V, B, clip, s, min_px, r_px, pad, px_m2):
     """grow detected fields along same-coloured pixels; add same-coloured rectangular fields on the roof"""
     area_all = int(clip.sum()) if clip is not None else m.size
@@ -200,8 +234,8 @@ def _complete(m, V, B, clip, s, min_px, r_px, pad, px_m2):
     k5 = np.ones((5, 5), np.uint8)
     for sl, comp, a, _ in list(_components(m, pad)):
         ft = _features(V, B, sl, comp, m, clip, r_px)
-        if ft["rv"] - ft["v"] < s["postproc_complete_contrast"] and ft["b"] - ft["rb"] < 2 * s["postproc_blue"]:
-            continue                                   # modules not distinguishable from the roof by colour
+        if ft["rv"] - ft["v"] < s["postproc_complete_contrast"]:
+            continue                                   # modules not clearly darker than the roof: colour cannot tell them apart
         tv, tb = max(10.0, 2 * ft["sv"]), max(8.0, 2 * ft["sb"])
         cand = (np.abs(V - ft["v"]) < tv) & (np.abs(B - ft["b"]) < tb)
         if clip is not None:
@@ -216,10 +250,13 @@ def _complete(m, V, B, clip, s, min_px, r_px, pad, px_m2):
                 continue
             u = _union_slice(sl, sc)
             cu, nu = _paste(u, sc, c), _paste(u, sl, near)
-            if (cu & nu).any():                        # extension of this field
-                _, fill = _rect(cu | _paste(u, sl, comp))
-                if fill >= 0.55:
-                    add[sc] |= c
+            if (cu & nu).any():                        # extension of this field: only along its rows (long axis)
+                band = _row_band(comp, sl, u, 1.0 / max(px_m2 ** 0.5, 1e-6))
+                cb = cu & band
+                if cb.sum() >= min_px:
+                    _, fill = _rect(cb | _paste(u, sl, comp))
+                    if fill >= 0.7:
+                        add[u] |= cb
             else:                                      # look-alike field elsewhere on the roof
                 if ca < s["postproc_lookalike_m2"] / px_m2:
                     continue
@@ -230,7 +267,7 @@ def _complete(m, V, B, clip, s, min_px, r_px, pad, px_m2):
                 sp = (slice(max(0, sc[0].start - pad), min(H, sc[0].stop + pad)),
                       slice(max(0, sc[1].start - pad), min(W, sc[1].stop + pad)))
                 f2 = _features(V, B, sp, _paste(sp, sc, c), m | add, clip, r_px)
-                if f2["rv"] - f2["v"] >= s["postproc_complete_contrast"] or f2["b"] - f2["rb"] >= 2 * s["postproc_blue"]:
+                if f2["rv"] - f2["v"] >= s["postproc_complete_contrast"]:
                     add[sc] |= c
     if add.sum() > budget + min_px * 4:
         # too much: keep only extensions touching existing fields

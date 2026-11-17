@@ -144,6 +144,19 @@ Gegenprobe mit dem zweiten Luftbild sie bestätigt und der Score über der Schwe
 (gespeicherte Masken gehen automatisch an PV-Map). „Jetzt abgleichen“ startet einen Lauf von zwei Stunden. Details und die Sichtbarkeit in
 PV-Map: PV-Map `docs/pvmapper-ergebnisse.md`.
 
+### Iteratives Training mit unvollständigen Ergebnissen
+
+1. In den Ergebnissen einer Prüfung den Filter **„Nacharbeit: verpasst / unvollständig“** wählen. Gelistet werden Gebäude mit
+   PV im Register, aber ohne Fund („verpasst“), mit deutlich weniger erkannter Leistung als registriert („unvollständig“) und
+   ohne Fund trotz hohem Score („Verdacht“).
+2. Gebäude anhaken (oder „Zufällig wählen“) und **„Als Trainingsdatensatz →“**: neuer Datensatz oder an einen bestehenden anhängen,
+   so wachsen die geprüften Beispiele von Runde zu Runde.
+3. Im Reiter **Masken** die vorgeschlagenen Flächen ergänzen und speichern.
+4. „Training mit diesem Datensatz“: Ausgangsmodell ist vorausgewählt das Modell, das die Ergebnisse geliefert hat; der Name
+   schlägt die nächste Version vor (`…-v2`, `…-v3`). Danach mit dem neuen Modell erneut prüfen und wieder bei 1 beginnen.
+
+Mit Masken lernt der Klassifikator je Bildausschnitt (PV ja/nein) statt nur je Gebäude – das ist das stärkere Signal.
+
 ## Kommandozeile
 
 ```bash

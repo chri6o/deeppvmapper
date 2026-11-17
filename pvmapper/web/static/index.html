@@ -89,13 +89,14 @@
         <span id="jd-files"></span>
       </div>
       <div class="row filters">
-        <select id="jd-status"><option value="">alle</option><option value="pv" selected>mit PV</option><option value="kein_pv">ohne PV</option><option value="fehler">Fehler</option></select>
+        <select id="jd-status"><option value="">alle</option><option value="pv" selected>mit PV</option><option value="kein_pv">ohne PV</option><option value="fehler">Fehler</option><option value="nacharbeit">Nacharbeit: verpasst / unvollständig</option></select>
         <select id="jd-class"><option value="">alle Größen</option></select>
         <button id="jd-reload" class="secondary">Aktualisieren</button>
         <span class="sp"></span>
         <span id="jd-selinfo" class="hint"></span>
         <button id="jd-selrand" class="secondary" title="Zufällige Auswahl aus der angezeigten Liste">Zufällig wählen</button>
         <input id="jd-seln" type="number" value="40" min="1" style="width:5em" title="Anzahl">
+        <select id="jd-target" title="Neuer Datensatz oder an einen bestehenden anhängen (iteratives Training)"><option value="">neuer Datensatz</option></select>
         <button id="jd-todataset" class="primary" title="Ausgewählte Gebäude als Trainingsdatensatz anlegen und im Reiter „Masken“ prüfen">Als Trainingsdatensatz →</button>
       </div>
       <div id="jd-report"></div>

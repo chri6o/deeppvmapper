@@ -43,7 +43,8 @@ DEFAULTS = {
     "ai_prompt_hint": "",             # extra instruction appended to the AI prompt (e.g. regional roof types)
     "seg_tta": True,                  # average segmentation over flipped images
     "precision": "auto",              # auto = half precision (fp16) on the GPU, fp32 on the CPU; fp32 forces full precision
-    "neighbor_factor": 0.5,           # in images with PV also segment patches scoring ≥ this × threshold
+    "neighbor_factor": 0.2,           # segment every patch scoring ≥ this × classification threshold: the classifier misses
+                                      # many PV roofs (scores of 0.2–0.3 on obvious arrays), the segmentation decides
     "cross_check": True,              # second aerial image (other year) as cross-check, where the source has one
     "postproc": True,                 # mask post-processing (see pvmapper/postproc.py; postproc_* thresholds)
     "sync_enabled": False,            # night sync with PV-Map: fetch the work list, check, send results (PV-Map docs/pvmapper-ergebnisse.md)
@@ -55,6 +56,7 @@ DEFAULTS = {
     "sync_confirm_score": 0.9,        # cross-check confirmed and score ≥ this → "confirmed" (tier 1) in PV-Map
     "sync_chunk": 500,                # buildings per request to the work list
     "sync_push_reviews": True,        # masks checked in the editor go to PV-Map as "checked by hand"
+    "config_version": 2,
     "web_password": "",               # if set: the web UI asks for this password (any user name)
     "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",
 }
@@ -73,7 +75,13 @@ def load(path: str = "pvmapper.yml") -> dict:
     cfg = copy.deepcopy(DEFAULTS)
     if path and os.path.isfile(path):
         with open(path, encoding="utf-8") as f:
-            cfg.update(yaml.safe_load(f) or {})
+            stored = yaml.safe_load(f) or {}
+        cfg.update(stored)
+        if int(stored.get("config_version") or 1) < 2:
+            # saved settings carry the old defaults: move them to the new ones (unless changed by hand)
+            if cfg.get("neighbor_factor") == 0.5:
+                cfg["neighbor_factor"] = DEFAULTS["neighbor_factor"]
+            cfg["config_version"] = DEFAULTS["config_version"]
     return cfg
 
 

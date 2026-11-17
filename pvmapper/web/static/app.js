@@ -141,7 +141,7 @@ function trainParams() {
     labels_file: $("#t-file").value.trim() || null, use_medium_positives: !$("#t-secure").checked,
     min_kwp: +$("#t-minkwp").value || null };
 }
-const LBL = { det_pv: "erkannt: PV (geprüft)", det_none: "erkannt: keine PV (geprüft)", pos_high: "PV sicher", pos_medium: "PV wahrscheinlich", neg_high: "keine PV (gemeldet)", neg_weak: "keine PV bekannt" };
+const LBL = { det_pv: "Erkennung: PV", det_none: "Erkennung: keine PV", pos_high: "PV sicher", pos_medium: "PV wahrscheinlich", neg_high: "keine PV (gemeldet)", neg_weak: "keine PV bekannt" };
 $("#t-strata").onclick = async () => {
   $("#t-out").innerHTML = `<div class="info">Frage PV-Map ab …</div>`;
   try {
@@ -305,13 +305,18 @@ async function loadResults() {
   }
   S.rows = Object.fromEntries(d.rows.map((r) => [r.id, r]));
   S.sel = S.selJob === S.job ? (S.sel || new Set()) : new Set(); S.selJob = S.job;
-  t.innerHTML = `<tr><th><input type="checkbox" id="jd-selall" title="alle angezeigten"></th><th>ID</th><th>Status</th><th>PV m²</th><th>kWp</th><th>Klasse</th><th>Score</th><th>Quelle</th></tr>` +
-    d.rows.map((r) => `<tr class="click" data-id="${esc(r.id)}"><td><input type="checkbox" class="jd-sel" data-id="${esc(r.id)}" ${S.sel.has(r.id) ? "checked" : ""}></td><td>${esc(r.id)}</td><td>${r.status}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td>${r.size_class || ""}</td><td class="num">${fmt(r.max_prob, 2)}</td><td>${r.source || esc((r.error || "").slice(0, 40))}</td></tr>`).join("") +
+  const nach = $("#jd-status").value === "nacharbeit";
+  const NA = { verpasst: "verpasst (Register: PV)", "unvollständig": "unvollständig", verdacht: "Verdacht (Score hoch)" };
+  t.innerHTML = `<tr><th><input type="checkbox" id="jd-selall" title="alle angezeigten"></th>${nach ? "<th>Nacharbeit</th><th>Register kWp</th>" : ""}<th>ID</th><th>Status</th><th>PV m²</th><th>kWp</th><th>Klasse</th><th>Score</th><th>Quelle</th></tr>` +
+    d.rows.map((r) => `<tr class="click" data-id="${esc(r.id)}"><td><input type="checkbox" class="jd-sel" data-id="${esc(r.id)}" ${S.sel.has(r.id) ? "checked" : ""}></td>${nach ? `<td>${esc(NA[r.nacharbeit] || "")}</td><td class="num">${fmt(r.pv_kwp_register, 1)}</td>` : ""}<td>${esc(r.id)}</td><td>${r.status}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td>${r.size_class || ""}</td><td class="num">${fmt(r.max_prob, 2)}</td><td>${r.source || esc((r.error || "").slice(0, 40))}</td></tr>`).join("") +
     (d.total > d.rows.length ? `<tr><td colspan="8" class="hint">${fmt(d.rows.length)} von ${fmt(d.total)} angezeigt – vollständige Liste in buildings.csv</td></tr>` : "");
   $$("#jd-table tr.click").forEach((tr) => tr.onclick = (e) => { if (!e.target.classList.contains("jd-sel")) showBuilding(tr.dataset.id); });
   $$("#jd-table .jd-sel").forEach((cb) => cb.onchange = () => { cb.checked ? S.sel.add(cb.dataset.id) : S.sel.delete(cb.dataset.id); selInfo(); });
   $("#jd-selall").onchange = (e) => { $$("#jd-table .jd-sel").forEach((cb) => { cb.checked = e.target.checked; cb.onchange(); }); };
   selInfo();
+  api("/api/datasets").then((ds) => { const cur = $("#jd-target").value;
+    $("#jd-target").innerHTML = `<option value="">neuer Datensatz</option>` + ds.map((x) => `<option value="${x.id}">an „${esc(x.name)}“ anhängen (${fmt(x.stats.total)} Bilder)</option>`).join("");
+    $("#jd-target").value = cur; }).catch(() => {});
 }
 function selInfo() { $("#jd-selinfo").textContent = S.sel && S.sel.size ? `${S.sel.size} ausgewählt` : ""; }
 $("#jd-selrand").onclick = () => {
@@ -322,8 +327,9 @@ $("#jd-selrand").onclick = () => {
 };
 $("#jd-todataset").onclick = async () => {
   if (!S.sel || !S.sel.size) { alert("Erst Gebäude auswählen (Häkchen oder „Zufällig wählen“)."); return; }
-  const name = prompt("Name des Datensatzes", `Prüfung ${S.job} – ${S.sel.size} Gebäude`); if (name === null) return;
-  try { const j = await api("/api/jobs", { json: { kind: "train", params: { from_job: S.job, ids: [...S.sel], name } } });
+  const target = $("#jd-target").value;
+  const name = target ? null : prompt("Name des Datensatzes", `Prüfung ${S.job} – ${S.sel.size} Gebäude`); if (!target && name === null) return;
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: { from_job: S.job, ids: [...S.sel], name, append_to: target || null } } });
     S.sel = new Set(); openJob(j.id); loadJobs(); }
   catch (e) { alert(e.message); }
 };
@@ -448,6 +454,12 @@ $("#m-ds").onchange = () => openDataset($("#m-ds").value);
 
 async function openDataset(id) {
   M.ds = id; M.dsProfile = ((M.dsList || []).find((d) => d.id === id) || {}).profile;
+  // iterative training: start from the model that produced the detections, next version as the name
+  if (M.dsProfile && [...$("#m-profile").options].some((o) => o.value === M.dsProfile)) {
+    $("#m-profile").value = M.dsProfile;
+    const base = M.dsProfile.startsWith("custom:") ? M.dsProfile.slice(7) : "de-" + M.dsProfile, m = base.match(/^(.*?)(?:-v(\d+))?$/);
+    if (!$("#m-name").value) $("#m-name").placeholder = `${m[1]}-v${(+m[2] || 1) + 1}`;
+  }
   const d = await api(`/api/datasets/${id}/items`);
   M.items = d.items;
   const subs = [...new Set(d.items.map((x) => x.sub))].sort(), sizes = [...new Set(d.items.map((x) => x.size_bin))].sort();
@@ -829,7 +841,7 @@ $("#m-ai-batch").onclick = async () => {
 $("#m-train").onclick = async () => {
   if (!M.ds) return;
   try { const j = await api("/api/jobs", { json: { kind: "train", params: { dataset_from: M.ds, profile: $("#m-profile").value, epochs: +$("#m-epochs").value,
-      name: $("#m-name").value.trim() || null, ai_masks: $("#m-aiuse").value, min_seg_samples: 20 } } });
+      name: $("#m-name").value.trim() || $("#m-name").placeholder || null, ai_masks: $("#m-aiuse").value, min_seg_samples: 20 } } });
     tab("jobs"); openJob(j.id); }
   catch (e) { $("#m-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };

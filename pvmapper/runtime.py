@@ -33,7 +33,7 @@ def detector(cfg: dict, profile_id: str | None = None) -> inference.Detector:
                               batch_size=int(cfg.get("batch_size") or 32),
                               overlap=float(cfg.get("patch_overlap", 0.25) or 0),
                               tta=bool(cfg.get("seg_tta", True)),
-                              neighbor_factor=float(cfg.get("neighbor_factor", 0.5) or 0),
+                              neighbor_factor=float(cfg.get("neighbor_factor", 0.2) or 0),
                               precision=str(cfg.get("precision") or "auto"))
 
 

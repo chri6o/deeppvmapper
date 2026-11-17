@@ -154,7 +154,7 @@ def run(job, cfg: dict):
             continue
         r = det.run([(cid, img)])[cid]
         # no footprints here: only the filters (contrast, dormer rows, rectangles), no colour completion
-        mask, _ = postproc.clean(img, r.mask, det.p.resolution_m, None, dict(cfg, postproc_complete=False))
+        mask, _ = postproc.clean(img, r.mask, det.p.resolution_m, None, dict(cfg, postproc_complete=False), prob=r.prob)
         r.mask = mask
         polys = inference.mask_to_polygons(r.mask, win)
         db.execute("BEGIN")

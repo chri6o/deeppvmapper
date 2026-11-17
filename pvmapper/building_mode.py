@@ -218,7 +218,7 @@ def run(job, cfg: dict):
         masks, infos, clips = {}, {}, {}
         for i, (b, search, fp, img, win, src, _) in enumerate(group):
             clips[i] = runtime.clip_mask(fp, win, img.shape) if fp is not None else None
-            masks[i], infos[i] = postproc.clean(img, res[i].mask, prof.resolution_m, clips[i], pp_cfg)
+            masks[i], infos[i] = postproc.clean(img, res[i].mask, prof.resolution_m, clips[i], pp_cfg, prob=res[i].prob)
         # cross-check only where the first image shows PV: a second year of imagery for the hits
         seconds = {}
         hits = [i for i, item in enumerate(group) if cross and masks[i].any() and getattr(item[5], "alt", None)]
@@ -235,7 +235,7 @@ def run(job, cfg: dict):
             img2, src2 = seconds.get(i, (None, None))
             check = "ohne"
             if img2 is not None:
-                mask2, _ = postproc.clean(img2, res2[i].mask, prof.resolution_m, clips[i], pp_cfg)
+                mask2, _ = postproc.clean(img2, res2[i].mask, prof.resolution_m, clips[i], pp_cfg, prob=res2[i].prob)
                 mask, check = postproc.fuse(mask, mask2, prof.resolution_m)
             polys = inference.mask_to_polygons(mask, win)
             row = _summarise(b, polys, fp, search, win, src, r.max_prob, cfg)

@@ -42,6 +42,7 @@ class ImageResult:
     max_prob: float         # highest patch classification score
     n_patches: int
     n_positive: int
+    prob: np.ndarray | None = None   # (H, W) float16 segmentation probability (0 where not segmented)
 
 
 class Detector:
@@ -114,7 +115,13 @@ class Detector:
         with self._amp():
             return self._segment_impl(x)
 
-    def _segment_impl(self, x: torch.Tensor) -> torch.Tensor:
+    @torch.no_grad()
+    def _segment_prob(self, x: torch.Tensor) -> torch.Tensor:
+        with self._amp():
+            return self._segment_impl(x, prob=True)
+
+    def _segment_impl(self, x: torch.Tensor, prob: bool = False) -> torch.Tensor:
+        want_prob = prob
         xn = (x - self.mean) / self.std
         prob = torch.sigmoid(self.seg(xn)["out"][:, 0].float())
         if self.tta:
@@ -122,7 +129,7 @@ class Detector:
             prob = prob + torch.sigmoid(self.seg(xn.flip(-1))["out"][:, 0].float()).flip(-1)
             prob = prob + torch.sigmoid(self.seg(xn.flip(-2))["out"][:, 0].float()).flip(-2)
             prob = prob / 3
-        return prob >= self.seg_threshold
+        return prob if want_prob else prob >= self.seg_threshold
 
     # ------------------------------------------------------------------
 
@@ -138,7 +145,7 @@ class Detector:
                 pad[:h, :w] = img
                 img = pad
             grid = patch_grid(img.shape[1], img.shape[0], size, self.overlap)
-            results[key] = ImageResult(np.zeros((h, w), np.uint8), 0.0, len(grid), 0)
+            results[key] = ImageResult(np.zeros((h, w), np.uint8), 0.0, len(grid), 0, np.zeros((h, w), np.float16))
             for x, y in grid:
                 index.append((key, x, y, h, w))
                 patches.append(img[y:y + size, x:x + size])
@@ -156,15 +163,16 @@ class Detector:
             r.max_prob = max(r.max_prob, float(p))
         # pass 2: segment positive patches; in images with a positive patch also the borderline ones, so a
         # module field reaching into a weaker neighbouring patch is segmented completely
+        # every patch scoring at least the lower bound is segmented: the classifier alone misses many PV roofs just below its
+        # threshold (e.g. 0.67 against 0.68); whether there is PV is then decided by the segmented area
         low = self.cls_threshold * self.neighbor_factor if self.neighbor_factor else self.cls_threshold
-        sel = [i for i, (key, *_) in enumerate(index)
-               if probs[i] >= self.cls_threshold
-               or (probs[i] >= low and results[key].max_prob >= self.cls_threshold)]
+        sel = [i for i in range(len(index)) if probs[i] >= low]
         for b in range(0, len(sel), bs):
             ids = sel[b:b + bs]
             x = self._to_tensor([patches[i] for i in ids])
-            masks = self._segment(self._pad(x, self._bucket(len(ids), bs))).cpu().numpy()[:len(ids)]
-            for i, m in zip(ids, masks):
+            pm = self._segment_prob(self._pad(x, self._bucket(len(ids), bs))).float().cpu().numpy()[:len(ids)]
+            for i, pr in zip(ids, pm):
+                m = pr >= self.seg_threshold
                 key, px, py, h, w = index[i]
                 r = results[key]
                 r.n_positive += int(probs[i] >= self.cls_threshold)
@@ -173,6 +181,8 @@ class Detector:
                     continue
                 region = r.mask[py:py + hh, px:px + ww]
                 np.maximum(region, m[:hh, :ww].astype(np.uint8), out=region)
+                preg = r.prob[py:py + hh, px:px + ww]
+                np.maximum(preg, pr[:hh, :ww].astype(np.float16), out=preg)
         self.stats["patches"] += len(patches)
         self.stats["segmented"] += len(sel)
         self.stats["gpu_s"] += _t.time() - t0

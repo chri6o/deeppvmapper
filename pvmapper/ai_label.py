@@ -285,7 +285,7 @@ def _postprocess(img, polys, fp, res_m, expect_px, cfg):
     if fp:
         clip = cv2.dilate(annotate.polygons_to_mask(fp, w, h),
                           np.ones((2 * int(1.5 / res_m) + 1,) * 2, np.uint8)).astype(bool)
-    out, _ = postproc.clean(img, m, res_m, clip, cfg)
+    out, _ = postproc.clean(img, m, res_m, clip, cfg, prob=m.astype(np.float16))   # drawn areas count as certain
     a = int(out.sum())
     if a == 0:
         return polys

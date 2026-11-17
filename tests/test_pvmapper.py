@@ -740,3 +740,68 @@ def test_review_result_to_wgs84(tmp_path):
     assert 13.39 < lon < 13.41 and 52.51 < lat < 52.53
     m = annotate.save_annotation(str(d), "b", [], label=0)
     assert annotate.review_result(str(d), "b", m) == {"id": "B1", "result": "none", "reviewed": True}
+
+
+def test_confident_fields_survive_colour_rules_and_gate_below_threshold():
+    """bright, silvery modules (as light as the roof) are kept when the model is sure; a roof whose best patch scores just
+    below the classification threshold is still segmented (lower bound = threshold × neighbor_factor)"""
+    from pvmapper import postproc
+    img, clip = _roof(v=150)
+    img[40:90, 30:150] = (154, 156, 158)                         # silvery modules, no contrast to the roof
+    mask = np.zeros(img.shape[:2], np.uint8)
+    mask[40:90, 30:150] = 1
+    out, info = postproc.clean(img, mask, 0.1, clip)
+    assert out.sum() == 0 and info["removed"][0][0] == "kein Kontrast zum Dach"
+    prob = (mask * 0.93).astype(np.float16)
+    out, _ = postproc.clean(img, mask, 0.1, clip, prob=prob)
+    assert out[40:90, 30:150].mean() > 0.95
+
+    class HalfCls(nn.Module):                                    # every patch scores 0.45, threshold 0.5
+        def forward(self, x):
+            return torch.stack([torch.zeros(x.shape[0]), torch.full((x.shape[0],), -0.2)], 1)
+    prof = fake_profile()
+    imgb = np.full((128, 128, 3), 90, np.uint8)
+    imgb[40:90, 40:90] = (40, 120, 250)
+    for nf, expect in ((0.0, 0), (0.5, 1)):
+        det = inference.Detector(prof, HalfCls(), BrightSeg(), "cpu", batch_size=8, overlap=0.0, neighbor_factor=nf, tta=False)
+        r = det.run([("x", imgb)])["x"]
+        assert (r.mask.sum() > 0) == bool(expect) and abs(r.max_prob - 0.45) < 0.01
+        assert r.prob.dtype == np.float16 and (r.prob > 0.5).sum() == r.mask.sum()
+
+
+def test_nacharbeit_and_append_to_dataset(tmp_path, monkeypatch):
+    """incomplete/missed detections are listed for rework and can be added to an existing dataset (iterative training);
+    items remember the model that produced them"""
+    from pvmapper import annotate, training
+    assert training._nacharbeit("kein_pv", 0, {"pv_kwp": 30}, 0.2) == "verpasst"
+    assert training._nacharbeit("pv", 8, {"pv_kwp": 30}, 0.9) == "unvollständig"
+    assert training._nacharbeit("pv", 25, {"pv_kwp": 30}, 0.9) is None
+    assert training._nacharbeit("kein_pv", 0, {}, 0.6) == "verdacht"
+    assert training._nacharbeit("kein_pv", 0, {}, 0.1) is None
+    cx, cy = 13.40, 52.52
+    feats = [{"type": "Feature", "geometry": box(cx + i * 0.001, cy, cx + i * 0.001 + 0.0003, cy + 0.0002).__geo_interface__,
+              "properties": {"id": f"TEST{i}", "sub": "Education", "pv_kwp": 20 if i < 2 else None}} for i in range(4)]
+    inp = tmp_path / "in.geojson"
+    inp.write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
+
+    class FakeSrc:
+        id = "fake"
+        alt = []
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        return np.full((win.height, win.width, 3), 90, np.uint8), win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), fetch_workers=1, profile="nrw")
+    chk = Job(cfg["jobs_dir"], "buildings", {"input": str(inp), "save_chips": "none"})
+    chk.run(lambda j: building_mode.run(j, cfg))
+    first = Job(cfg["jobs_dir"], "train", {"from_job": chk.id, "ids": ["TEST0"], "prepare_only": True, "name": "TEST it"})
+    first.run(lambda j: training.run(j, cfg))
+    more = Job(cfg["jobs_dir"], "train", {"from_job": chk.id, "ids": ["TEST1", "TEST2"], "prepare_only": True, "append_to": first.id})
+    more.run(lambda j: training.run(j, cfg))
+    assert more.status == "done", more.error
+    items = {m["id"]: m for m in annotate.list_items(annotate.ds_dir(first.dir))}
+    assert set(items) == {"TEST0", "TEST1", "TEST2"}
+    assert items["TEST1"]["source_model"] == "nrw" and items["TEST1"]["nacharbeit"] == "verpasst" and items["TEST2"]["nacharbeit"] is None

@@ -443,9 +443,13 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             src = _job(params["from_job"])
             if src.kind not in ("buildings", "sync"):
                 raise HTTPException(400, "Nur Ergebnisse von „Gebäude prüfen“ lassen sich übernehmen.")
-            params.setdefault("profile", src.params.get("profile"))
+            params.setdefault("profile", src.params.get("profile") or cfg().get("profile"))   # the model that found these
             params.setdefault("sources", src.params.get("sources"))
             params["prepare_only"] = True
+            if params.get("append_to"):
+                tgt = _job(params["append_to"])
+                if not os.path.isdir(annotate.ds_dir(tgt.dir)):
+                    raise HTTPException(400, "Ziel-Datensatz nicht gefunden")
         if kind == "area":
             try:
                 params["estimate"] = area_mode.estimate(params, cfg())
@@ -563,25 +567,44 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             return {"rows": rows[offset:offset + limit], "total": len(rows),
                     "geojson": {"type": "FeatureCollection", "features": feats[:20000]}, "chips": chips}
         where, args = [], []
-        if status:
+        nach = status == "nacharbeit"                            # incomplete or missed detections (batch rework)
+        if status and not nach:
             where.append("status=?")
             args.append(status)
+        if nach:
+            where.append("status!='fehler'")
         if size_class:
             where.append("size_class=?")
             args.append(size_class)
         sql_where = (" WHERE " + " AND ".join(where)) if where else ""
         total = con.execute("SELECT count(*) FROM results" + sql_where, args).fetchone()[0]
-        from .. import building_mode
+        from .. import building_mode, training
         building_mode.ensure_columns(con)
         cur = con.execute(
             "SELECT id,status,pv_area_m2,kwp_est,size_class,in_range,max_prob,footprint_m2,source,lon,lat,"
-            'error,chip,footprint_wkt,pv_wkt,"check",source2,removed FROM results' + sql_where +
-            " ORDER BY kwp_est DESC, rowid LIMIT ? OFFSET ?", args + [limit, offset])
+            'error,chip,footprint_wkt,pv_wkt,"check",source2,removed,props FROM results' + sql_where +
+            (" ORDER BY kwp_est DESC, rowid" if nach else " ORDER BY kwp_est DESC, rowid LIMIT ? OFFSET ?"),
+            args if nach else args + [limit, offset])
+        allr = cur.fetchall()
+        if nach:
+            order = {"verpasst": 0, "unvollständig": 1, "verdacht": 2}
+            tagged = []
+            for r in allr:
+                pr = json.loads(r[18] or "{}")
+                why = training._nacharbeit(r[1], r[3], pr, r[6])
+                if why:
+                    tagged.append((order[why], -float(pr.get("pv_kwp") or 0), -(r[6] or 0), why, r))
+            tagged.sort(key=lambda t: t[:3])
+            total = len(tagged)
+            allr = [t[4] for t in tagged][offset:offset + limit]
+            whys = {t[4][0]: t[3] for t in tagged}
         rows, feats = [], []
-        for r in cur:
+        for r in allr:
             d = dict(zip(["id", "status", "pv_area_m2", "kwp_est", "size_class", "in_range", "max_prob",
                           "footprint_m2", "source", "lon", "lat", "error", "chip"], r[:13]))
-            d.update(check=r[15], source2=r[16], removed=json.loads(r[17]) if r[17] else [])
+            pr = json.loads(r[18] or "{}")
+            d.update(check=r[15], source2=r[16], removed=json.loads(r[17]) if r[17] else [],
+                     pv_kwp_register=pr.get("pv_kwp"), nacharbeit=whys.get(r[0]) if nach else None)
             rows.append(d)
             if r[13]:
                 feats.append({"type": "Feature", "geometry": mapping(shp_wkt.loads(r[13])),
