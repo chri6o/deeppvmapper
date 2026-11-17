@@ -687,7 +687,8 @@ def test_sync_job_sends_results_and_skips_unchanged_images(tmp_path, monkeypatch
     monkeypatch.setattr(pvmap.Client, "finish", lambda self: calls.__setitem__("finish", calls["finish"] + 1) or {})
     monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
     monkeypatch.setattr(runtime, "detector", fake_detector)
-    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), fetch_workers=1, pvmap_token="pvm_x", sync_filter="cc=DE&nuts3=DEA2")
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), fetch_workers=1, pvmap_token="pvm_x", sync_filter="cc=DE&nuts3=DEA2",
+               typology_push=True)
     job = Job(cfg["jobs_dir"], "sync", {})
     job.run(lambda j: sync.run(j, cfg))
     assert job.status == "done", job.error
@@ -695,6 +696,11 @@ def test_sync_job_sends_results_and_skips_unchanged_images(tmp_path, monkeypatch
     assert sent["TESTsame"]["result"] == "unchanged" and sent["TESTnone"]["result"] == "none"
     assert sent["TESTpv"]["result"] == "pv" and sent["TESTpv"]["tier"] == 2 and sent["TESTpv"]["polygons"]["type"] in ("Polygon", "MultiPolygon")
     assert sent["TESTpv"]["img_hash"] and calls["finish"] == 1
+    inst = sent["TESTpv"]["installations"]          # typology for PV-Map (migration 137): installations with geometry
+    assert inst and inst[0]["geometry"]["type"] == "Polygon" and inst[0]["installation_id"] == "TESTpv#i0"
+    assert sent["TESTpv"]["kwp_low"] <= sent["TESTpv"]["kwp"] <= sent["TESTpv"]["kwp_high"]
+    assert "installations" not in sent["TESTnone"]
+    json.dumps(calls["sent"])                        # the payload must be plain JSON
     assert calls["q"]["nuts3"] == "DEA2" and calls["q"]["model"] == "nrw"
     assert job.counters["unveraendert"] == 1 and job.counters["gesendet"] == 3
 

@@ -25,7 +25,7 @@ Ausgaben: `installations.geojson` (je Anlage Umriss, Merkmale, Konfidenzen, OSM-
 2. **Stichprobe mit Handlabels** (Bauform, Ausrichtung) für eine echte Trefferquote – 100 Gebäude NRW, 100 NL.
 3. **Dachflächen für Steildächer** (Ausrichtung flächiger Anlagen, geeignete Dachfläche für Gebäude ohne PV): eigener Schritt.
 
-## Vorschlag für PV-Map (nicht umgesetzt – wartet auf Freigabe)
+## PV-Map (umgesetzt: PV-Map #367, Migration 137, `docs/pvmapper-typologie.md`)
 
 Das bestehende Format `/detect/results` bleibt gültig. Neu und optional je Gebäude:
 
@@ -38,7 +38,7 @@ Das bestehende Format `/detect/results` bleibt gültig. Neu und optional je Geb�
    "imagery_year": 2024, "review_status": "unreviewed"}]}
 ```
 
-Migration `137_pv_installation.sql` (Entwurf):
+Migration `137_pv_installation.sql` (Kern):
 
 ```sql
 ALTER TABLE detect_scan ADD COLUMN IF NOT EXISTS kwp_low real, ADD COLUMN IF NOT EXISTS kwp_high real,

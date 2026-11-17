@@ -381,7 +381,7 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
   "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
-const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews" };
+const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push" };
 Object.assign(SET, { "#s-sync-filter": "sync_filter", "#s-sync-start": "sync_start", "#s-sync-end": "sync_end", "#s-sync-profile": "sync_profile",
   "#s-sync-recheck": "sync_recheck_days", "#s-sync-score": "sync_confirm_score" });
 const PRIO = { 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };

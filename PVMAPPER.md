@@ -148,7 +148,7 @@ Was von oben nicht sichtbar ist (gebäudeintegriert, Befestigung, Unterkonstrukt
 
 Ausgabe: Spalten `kwp_low`, `kwp_high`, `layout`, `kwp_method` (`typology` oder `area_factor`) in `buildings.csv`, dazu `installations.geojson` mit einem Umriss je Anlage, allen Merkmalen sowie OSM-Tags (`osm`) und MaStR-Feldern (`mastr`). In der Ergebnisliste zeigt die Vorschau je Anlage Bauform, Ausrichtung, Belegung und kWp.
 
-Abschalten: Einstellungen → „Anlagentyp und Leistung je Anlage“ (dann wie bisher Modulfläche × `kwp_per_m2`). An PV-Map gehen die Anlagen erst mit `typology_push: true`, wenn PV-Map sie annehmen kann (`docs/typology.md`).
+Abschalten: Einstellungen → „Anlagentyp und Leistung je Anlage“ (dann wie bisher Modulfläche × `kwp_per_m2`). An PV-Map gehen die Anlagen mit `typology_push: true` in `pvmapper.yml` (PV-Map ab Migration 137 speichert sie und zeigt sie dem Owner im Steckbrief).
 
 **Kalibrierung** an den Registerleistungen (PV-Map liefert `pv_kwp` je Gebäude):
 
