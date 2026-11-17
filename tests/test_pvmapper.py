@@ -805,3 +805,125 @@ def test_nacharbeit_and_append_to_dataset(tmp_path, monkeypatch):
     items = {m["id"]: m for m in annotate.list_items(annotate.ds_dir(first.dir))}
     assert set(items) == {"TEST0", "TEST1", "TEST2"}
     assert items["TEST1"]["source_model"] == "nrw" and items["TEST1"]["nacharbeit"] == "verpasst" and items["TEST2"]["nacharbeit"] is None
+
+
+# --------------------------------------------------------------- installation typology
+
+def test_typology_formulas_and_exports():
+    from pvmapper import typology as T
+    # prompt example: 100 m² outline, real fill factor 0.52, 22 % modules → 11.44 kWp
+    assert T.capacity_kwp(100, 0.52, 0.22) == pytest.approx(11.44)
+    # rows: 1.72 m modules at 15°, pitch 3.0 m; 1.13 m wide with 2 cm gaps
+    f = T.fill_factor_pitch(1.72, 15, 3.0, 1.13, 0.02)
+    assert f == pytest.approx(1.72 * np.cos(np.radians(15)) / 3.0 * 1.13 / 1.15)
+    assert T.real_from_plan(0.5, 60) == pytest.approx(1.0)
+    assert T.tilt_class(12) == "5-20" and T.tilt_class(90) == "90" and T.tilt_class_legacy("5-20") == "<20"
+    ew = {"layout": "east_west", "azimuth_deg": 272, "azimuth2_deg": 92, "tilt_class": "5-20", "module_count": 120}
+    assert T.osm_tags(ew)["generator:orientation"] == "W;E"
+    m = T.mastr_fields(ew)
+    assert m["Hauptausrichtung"] == "Ost" and m["Nebenausrichtung"] == "West"
+    assert m["Neigungswinkel der Nebenausrichtung"] == "5-20" and m["Anzahl der Module"] == 120
+    assert T.validate({**ew, "layout": "zigzag"})
+
+
+def _rows_image(period_px, two_level, n_rows=10, row_px=None, angle=0):
+    """synthetic flat roof (gray 150) with module rows along x; east-west: two brightness levels per period"""
+    H, W = 260, 300
+    img = np.full((H, W, 3), 150, np.uint8)
+    mask = np.zeros((H, W), bool)
+    row_px = row_px or period_px
+    y0 = 20
+    for r in range(n_rows):
+        y = y0 + r * period_px
+        if two_level:
+            img[y:y + row_px // 2, 30:270] = (50, 60, 110)
+            img[y + row_px // 2:y + row_px, 30:270] = (90, 100, 150)
+        else:
+            img[y:y + row_px, 30:270] = (50, 60, 110)
+        mask[y:y + row_px, 30:270] = True
+    clip = np.zeros((H, W), bool)
+    clip[5:H - 5, 5:W - 5] = True
+    return img, mask, clip
+
+
+def test_typology_classifies_east_west_mono_and_flush():
+    from pvmapper import typology as T
+    res = 0.1
+    # east-west: rows along x → faces point north/south… turn the picture: rows along y (faces east and west)
+    img, mask, clip = _rows_image(22, True)
+    img, mask, clip = np.ascontiguousarray(img.transpose(1, 0, 2)), mask.T.copy(), clip.T.copy()
+    ew = T.analyse(img, mask, res, clip, {"roof:shape": "flat"})
+    assert ew and ew[0]["layout"] == "east_west", ew[0]
+    assert {round(ew[0]["azimuth_deg"] / 90) % 4, round(ew[0]["azimuth2_deg"] / 90) % 4} == {1, 3}
+    assert ew[0]["fill_factor_source"] == "derived_pitch"
+    # mono rows: 1 m of modules every 3 m → tilted towards the sun, fill factor from the row geometry
+    img, mask, clip = _rows_image(30, False, n_rows=7, row_px=10)
+    mono = T.analyse(img, mask, res, clip, {"roof:shape": "flat"})
+    assert mono and mono[0]["layout"] == "tilted_mono", mono[0]
+    assert 0.25 <= mono[0]["fill_factor"] <= 0.45
+    # one dense field without rows: flush
+    img, mask, clip = _rows_image(200, False, n_rows=1, row_px=200)
+    fl = T.analyse(img, mask, res, clip, {"roof:shape": "gabled"})
+    assert fl[0]["layout"] == "flush" and fl[0]["fill_factor_source"] == "type_default"
+    assert fl[0]["kwp_low"] <= fl[0]["kwp_est"] <= fl[0]["kwp_high"]
+    assert not T.validate(fl[0]) and not T.validate(ew[0]) and not T.validate(mono[0])
+
+
+def test_typology_in_building_job_and_calibration(tmp_path, monkeypatch):
+    from pvmapper import typology as T
+    from pvmapper.jobs import open_db
+    cx, cy = 13.40, 52.52
+    b1 = box(cx, cy, cx + 0.0003, cy + 0.0002)
+    fc = {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": b1.__geo_interface__, "properties": {"id": "TEST1", "pv_kwp": 30}}]}
+    inp = tmp_path / "in.geojson"
+    inp.write_text(json.dumps(fc))
+
+    class FakeSrc:
+        id = "fake-2024"
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 90, np.uint8)
+        h, w = img.shape[:2]
+        img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), fetch_workers=2, cross_check=False)
+    job = Job(cfg["jobs_dir"], "buildings", {"input": str(inp)})
+    job.run(lambda j: building_mode.run(j, cfg))
+    assert job.status == "done", job.error
+    db = open_db(os.path.join(job.dir, "results.sqlite"))
+    kwp, lo, hi, lay, meth, inst = db.execute(
+        "SELECT kwp_est, kwp_low, kwp_high, layout, kwp_method, installations FROM results").fetchone()
+    assert meth == "typology" and lo <= kwp <= hi and lay
+    feats = json.loads(inst)
+    assert feats[0]["properties"]["installation_id"] == "TEST1#i0"
+    assert feats[0]["properties"]["imagery_year"] == 2024
+    assert feats[0]["geometry"]["type"] == "Polygon"
+    gj = json.load(open(os.path.join(job.dir, "installations.geojson"), encoding="utf-8"))
+    assert gj["features"][0]["properties"]["osm"]["generator:source"] == "solar"
+    cal = T.calibrate_job(db)
+    assert cal["typology"]["n"] == 1 and sum(v["n"] for v in cal["layouts"].values()) <= 1
+    # switched off: the old area factor
+    cfg2 = dict(cfg, typology=False)
+    job2 = Job(cfg["jobs_dir"], "buildings", {"input": str(inp)})
+    job2.run(lambda j: building_mode.run(j, cfg2))
+    db2 = open_db(os.path.join(job2.dir, "results.sqlite"))
+    assert db2.execute("SELECT kwp_method FROM results").fetchone()[0] == "area_factor"
+
+
+def test_calibrate_fits_fill_factor():
+    from pvmapper import typology as T
+    rows = []
+    for k in range(5):
+        # flat-roof flush field 100 m², register 19.32 kWp at 21 % → f_plan 0.92
+        rows.append({"kwp_register": 19.32, "kwp_est": 19.0 + k * 0.2, "kwp_area": 20.0,
+                     "installations": [{"layout": "flush", "roof_shape": "flat", "outline_area_m2": 100, "tilt_deg": 0,
+                                        "module_efficiency": 0.21, "kwp_low": 17, "kwp_high": 21}]})
+    out = T.calibrate(rows)
+    assert out["layouts"]["flush_flat"]["f_median"] == pytest.approx(0.92, abs=0.01)
+    assert out["layouts"]["flush_flat"]["current"] == 0.92
+    assert out["register_inside_range"] == 1.0 and out["typology"]["n"] == 5

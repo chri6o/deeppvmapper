@@ -1,0 +1,45 @@
+# Installation typology, fill factor and capacity (docs: PVMAPPER.md "Anlagentypologie").
+# Values are rule-of-thumb starting points; `python -m pvmapper calibrate <job>` fits the fill factor defaults against MaStR.
+
+module:
+  length_m: 1.72          # long side of a standard module
+  width_m: 1.13
+  efficiency: 0.21        # module efficiency if the installation year is unknown (kWp per m² real module area)
+  efficiency_range: [0.19, 0.23]
+  efficiency_by_year:     # first year → efficiency (used when the installation year is known, e.g. from MaStR)
+    2005: 0.14
+    2011: 0.16
+    2016: 0.18
+    2020: 0.20
+    2023: 0.215
+
+# installation fill factor in plan view (module area / outline area), by layout
+fill_factor:
+  flush_pitched: {f: 0.93, range: [0.90, 0.97]}
+  flush_flat:    {f: 0.92, range: [0.90, 0.95]}
+  east_west:     {f: 0.85, range: [0.80, 0.90]}    # no aisles; with aisles the measured value is used
+  east_west_aisles: {f: 0.72, range: [0.65, 0.80]}
+  tilted_mono:   {f: 0.50, range: [0.40, 0.60]}
+  vertical_bifacial: {f: 0.18, range: [0.10, 0.25]}
+  unknown:       {f: 0.80, range: [0.50, 0.95]}
+  measured_tolerance: 0.05      # ± around a fill factor measured from the row geometry
+  f_cross: 0.97                 # module width / (width + gap) within a row (gaps are below the image resolution)
+
+# typical tilt by layout when it cannot be measured (degrees); confidence of that guess
+tilt:
+  east_west: {deg: 12, confidence: 0.6}
+  tilted_mono: {deg: 15, confidence: 0.4}
+  vertical_bifacial: {deg: 90, confidence: 0.8}
+  flush_flat: {deg: 2, confidence: 0.7}
+
+classify:
+  group_gap_m: 3.0              # fields closer than this belong to one installation
+  min_rows: 3                   # a row pattern needs at least this many periods
+  min_periodicity: 0.25         # autocorrelation peak of the coverage profile
+  period_range_m: [1.9, 8.0]     # row / pair pitch; shorter periods are the module grid itself, not rows
+  flush_coverage: 0.80          # no row pattern and coverage above this → flush
+  east_west_coverage: 0.65      # row pattern with coverage above this → east-west pairs (or dense rows, see brightness)
+  vertical_coverage: 0.30       # row pattern with coverage below this → vertical bifacial
+  aligned_deg: 10               # rows within this angle of a building edge → aligned
+  min_confidence: 0.5           # below: the attribute is 'unknown'
+  two_level: 0.35               # first harmonic of the brightness within one period / pixel std: two faces (east-west)

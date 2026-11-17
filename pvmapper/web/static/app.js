@@ -333,14 +333,21 @@ $("#jd-todataset").onclick = async () => {
     S.sel = new Set(); openJob(j.id); loadJobs(); }
   catch (e) { alert(e.message); }
 };
+const LAYOUT_TXT = { flush: "flächig", tilted_mono: "aufgeständert (Süd)", east_west: "Ost-West", vertical_bifacial: "senkrecht bifazial", mixed: "gemischt", unknown: "unbestimmt" };
+function instText(r) {
+  if (!r.installations || !r.installations.length) return "";
+  const az = (a) => (a == null ? "" : ` ${Math.round(a)}°`);
+  return "<br>" + r.installations.map((i, k) => `Anlage ${k + 1}: ${esc(LAYOUT_TXT[i.layout] || i.layout)}${az(i.azimuth_deg)}${i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : ""}` +
+    `${i.tilt_class ? " · Neigung " + esc(i.tilt_class) + "°" : ""} · ${fmt(i.outline_area_m2, 0)} m² × Belegung ${fmt(i.fill_factor, 2)}${i.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""} → ${fmt(i.kwp_est, 1)} kWp (${fmt(i.kwp_low, 0)}–${fmt(i.kwp_high, 0)})`).join("<br>");
+}
 function showBuilding(id) {
   const r = S.rows && S.rows[id];
   if (!r) return;
   map.setView([r.lat, r.lon], 19);
   if (r.chip) {
     $("#chipimg").src = `/api/jobs/${S.job}/chips/${encodeURIComponent(r.chip)}`;
-    $("#chipcap").innerHTML = `<b>${esc(r.id)}</b> · ${r.status} · ${fmt(r.pv_area_m2, 1)} m² · ≈ ${fmt(r.kwp_est, 1)} kWp · Klasse ${r.size_class || "–"} · Score ${fmt(r.max_prob, 2)} · ${r.source}` +
-      (r.check && r.check !== "ohne" ? `<br>Gegenprobe ${esc(r.source2 || "")}: ${esc(CHECK_TXT[r.check] || r.check)}` : "") +
+    $("#chipcap").innerHTML = `<b>${esc(r.id)}</b> · ${r.status} · ${fmt(r.pv_area_m2, 1)} m² · ≈ ${fmt(r.kwp_est, 1)} kWp${r.kwp_low != null ? ` (${fmt(r.kwp_low, 0)}–${fmt(r.kwp_high, 0)})` : ""} · Klasse ${r.size_class || "–"} · Score ${fmt(r.max_prob, 2)} · ${r.source}` +
+      instText(r) + (r.check && r.check !== "ohne" ? `<br>Gegenprobe ${esc(r.source2 || "")}: ${esc(CHECK_TXT[r.check] || r.check)}` : "") +
       (r.removed && r.removed.length ? `<br><span class="muted">Verworfen: ${r.removed.map((x) => `${esc(x[0])} ${fmt(x[1], 1)} m²`).join(", ")}</span>` : "");
     $("#chipview").classList.remove("hidden");
   }
@@ -374,7 +381,7 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
   "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
-const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews" };
+const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews" };
 Object.assign(SET, { "#s-sync-filter": "sync_filter", "#s-sync-start": "sync_start", "#s-sync-end": "sync_end", "#s-sync-profile": "sync_profile",
   "#s-sync-recheck": "sync_recheck_days", "#s-sync-score": "sync_confirm_score" });
 const PRIO = { 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };

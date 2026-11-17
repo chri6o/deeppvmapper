@@ -582,7 +582,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         building_mode.ensure_columns(con)
         cur = con.execute(
             "SELECT id,status,pv_area_m2,kwp_est,size_class,in_range,max_prob,footprint_m2,source,lon,lat,"
-            'error,chip,footprint_wkt,pv_wkt,"check",source2,removed,props FROM results' + sql_where +
+            'error,chip,footprint_wkt,pv_wkt,"check",source2,removed,props,kwp_low,kwp_high,layout,installations '
+            'FROM results' + sql_where +
             (" ORDER BY kwp_est DESC, rowid" if nach else " ORDER BY kwp_est DESC, rowid LIMIT ? OFFSET ?"),
             args if nach else args + [limit, offset])
         allr = cur.fetchall()
@@ -604,7 +605,11 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                           "footprint_m2", "source", "lon", "lat", "error", "chip"], r[:13]))
             pr = json.loads(r[18] or "{}")
             d.update(check=r[15], source2=r[16], removed=json.loads(r[17]) if r[17] else [],
-                     pv_kwp_register=pr.get("pv_kwp"), nacharbeit=whys.get(r[0]) if nach else None)
+                     pv_kwp_register=pr.get("pv_kwp"), nacharbeit=whys.get(r[0]) if nach else None,
+                     kwp_low=r[19], kwp_high=r[20], layout=r[21],
+                     installations=[{k: f["properties"].get(k) for k in (
+                         "layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source",
+                         "outline_area_m2", "kwp_est", "kwp_low", "kwp_high")} for f in json.loads(r[22] or "[]")])
             rows.append(d)
             if r[13]:
                 feats.append({"type": "Feature", "geometry": mapping(shp_wkt.loads(r[13])),

@@ -134,6 +134,30 @@ korrigieren und mit Enter speichern; Fehltreffer mit „PV vorhanden“ (L) zum 
 auf der Ebene „Kein PV“ markieren. Ins Training gehen nur gespeicherte (geprüfte) Bilder; Gegenbeispiele lädt das
 Training bei Bedarf aus PV-Map nach.
 
+## Anlagentypologie und Leistung je Anlage
+
+Für jede erkannte Anlage bestimmt `pvmapper/typology.py` aus Maske und Luftbild (ohne weiteres neuronales Netz):
+
+- **Anlage und Umriss:** Modulflächen mit weniger als 3 m Abstand bilden eine Anlage; der Umriss schließt die Lücken zwischen den Reihen.
+- **Bauform:** `flush` (flächig, auch Modulraster ohne Reihen), `tilted_mono` (aufgeständert, Reihen mit Abstand), `east_west` (dichte Paare mit zwei Helligkeitsstufen, Flächen nach Ost und West), `vertical_bifacial`, sonst `unknown`.
+- **Ausrichtung** aus der Reihennormalen (Süd-Reihen: Seite ohne Schattenstreifen), **Neigungsklasse** nach MaStR (`<5`, `5-20`, `21-40` …) als Typ-Standard mit niedriger Konfidenz.
+- **Belegungsgrad:** gemessen aus Reihenabstand und Deckung (`derived_pitch`), sonst Standard der Bauform (`type_default`, siehe `pvmapper/typology.yml`).
+- **Leistung:** Umriss × Belegungsgrad / cos(Neigung) × Modulwirkungsgrad (nach Luftbildjahr). Dazu eine Spanne `kwp_low`–`kwp_high`.
+
+Was von oben nicht sichtbar ist (gebäudeintegriert, Befestigung, Unterkonstruktion, Modultechnik), bleibt `unknown`. Jedes Merkmal trägt eine Konfidenz.
+
+Ausgabe: Spalten `kwp_low`, `kwp_high`, `layout`, `kwp_method` (`typology` oder `area_factor`) in `buildings.csv`, dazu `installations.geojson` mit einem Umriss je Anlage, allen Merkmalen sowie OSM-Tags (`osm`) und MaStR-Feldern (`mastr`). In der Ergebnisliste zeigt die Vorschau je Anlage Bauform, Ausrichtung, Belegung und kWp.
+
+Abschalten: Einstellungen → „Anlagentyp und Leistung je Anlage“ (dann wie bisher Modulfläche × `kwp_per_m2`). An PV-Map gehen die Anlagen erst mit `typology_push: true`, wenn PV-Map sie annehmen kann (`docs/typology.md`).
+
+**Kalibrierung** an den Registerleistungen (PV-Map liefert `pv_kwp` je Gebäude):
+
+```bash
+python -m pvmapper calibrate 20261117-210000-abcd
+```
+
+Das schreibt `calibration.json` in den Job: je Bauform der Belegungsgrad, der die Registerleistung ergäbe (Median, Quartile, aktueller Standard), und der Fehler der Typologie-Schätzung im Vergleich zur alten Flächen-Schätzung. Passende Werte trägt man in eine eigene `typology.yml` ein (`typology_file` in den Einstellungen).
+
 ## Abgleich mit PV-Map (Nachtbetrieb)
 
 Unter **Einstellungen → PV-Map-Abgleich** Nachtbetrieb an, Zeitfenster und Gebäudefilter (z. B. `cc=DE&nuts3=DEA2`) setzen. Im Zeitfenster
@@ -169,6 +193,7 @@ python -m pvmapper sources --test
 python -m pvmapper pvmap --cc DE --strata                      # verfügbare Trainingsbeispiele
 python -m pvmapper buildings "pvmap:cc=DE&nuts3=DEA22&pv=none"
 python -m pvmapper train --cc DE --sub Education --per-stratum 150 --negatives 150 --name de-schulen
+python -m pvmapper calibrate 20261115-013936-688d                # Belegungsgrade gegen Register-kWp
 ```
 
 Die Einstellungen stehen in `pvmapper.yml` im Arbeitsverzeichnis. Die Oberfläche schreibt diese Datei, Optionen auf der Kommandozeile überschreiben sie.

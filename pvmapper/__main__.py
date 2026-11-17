@@ -8,6 +8,7 @@ pvmapper command line.
   python -m pvmapper buildings FILE [...]     check a building list for PV
   python -m pvmapper area --bbox W S E N      wall-to-wall detection for a region
   python -m pvmapper resume JOB_ID            continue an interrupted job
+  python -m pvmapper calibrate JOB_ID         fill factors per layout against the registered kWp (MaStR via PV-Map)
 """
 
 from __future__ import annotations
@@ -101,6 +102,9 @@ def main(argv=None):
     for k in ("nuts3", "lau", "sub", "cls", "tag", "bbox"):
         pm.add_argument(f"--{k}")
     pm.add_argument("--strata", action="store_true", help="show the training strata (label × type × size)")
+    c = sub.add_parser("calibrate", help="fill factors per layout against the registered kWp of a buildings job")
+    c.add_argument("job_id")
+    c.add_argument("--jobs-dir", dest="jobs_dir")
     r = sub.add_parser("resume")
     r.add_argument("job_id")
     r.add_argument("--jobs-dir", dest="jobs_dir")
@@ -120,6 +124,18 @@ def main(argv=None):
         return 0
 
     cfg = _cfg(args)
+
+    if args.cmd == "calibrate":
+        import os
+        from . import typology
+        from .jobs import open_db
+        d = os.path.join(cfg["jobs_dir"], args.job_id)
+        out = typology.calibrate_job(open_db(os.path.join(d, "results.sqlite")), float(cfg["kwp_per_m2"]),
+                                     typology.settings(cfg))
+        with open(os.path.join(d, "calibration.json"), "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=1, ensure_ascii=False)
+        print(json.dumps(out, indent=1, ensure_ascii=False))
+        return 0
 
     if args.cmd == "models":
         from .models import get_profile, weight_path

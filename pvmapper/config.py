@@ -56,6 +56,10 @@ DEFAULTS = {
     "sync_confirm_score": 0.9,        # cross-check confirmed and score ≥ this → "confirmed" (tier 1) in PV-Map
     "sync_chunk": 500,                # buildings per request to the work list
     "sync_push_reviews": True,        # masks checked in the editor go to PV-Map as "checked by hand"
+    "typology": True,                 # classify every detected installation (layout, azimuth, tilt class, fill factor) and
+                                      # estimate kWp from outline × fill factor × efficiency (pvmapper/typology.py)
+    "typology_file": None,            # own typology.yml (defaults, thresholds); None = the one shipped with pvmapper
+    "typology_push": False,           # send the installations to PV-Map (needs the PV-Map side, docs/typology.md)
     "config_version": 2,
     "web_password": "",               # if set: the web UI asks for this password (any user name)
     "user_agent": "pvmapper/0.1 (+https://github.com/chri6o/deeppvmapper)",

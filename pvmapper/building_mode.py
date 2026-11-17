@@ -11,6 +11,7 @@ interrupted job resumes where it stopped.
 from __future__ import annotations
 
 import json
+import re
 import os
 import queue
 import threading
@@ -22,7 +23,7 @@ from shapely.ops import unary_union
 
 from . import buildings as bld
 from . import config as cfgmod
-from . import geo, inference, postproc, runtime, sources
+from . import geo, inference, postproc, runtime, sources, typology
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS results (
@@ -32,10 +33,48 @@ CREATE TABLE IF NOT EXISTS results (
   props TEXT, footprint_wkt TEXT, pv_wkt TEXT
 )"""
 
+
+def _year(src) -> int | None:
+    """year of the imagery, from the source (`year`) or its id (de-nw-2024, nl-pdok-hr-2025)"""
+    y = getattr(src, "year", None)
+    if y:
+        return int(y)
+    m = re.search(r"(?:^|-)(20\d\d)(?:-|$)", getattr(src, "id", "") or "")
+    return int(m.group(1)) if m else None
+
+
+def apply_typology(row: dict, img, mask, win, clip, src, props: dict, res_m: float, cfg: dict) -> list:
+    """installations of one building (typology.py) → row gets kwp_est/low/high, layout, kwp_method, installations"""
+    row.update(kwp_low=None, kwp_high=None, layout=None, kwp_method="area_factor", installations=None)
+    if not row["has_pv"] or not cfg.get("typology", True):
+        return []
+    try:
+        insts = typology.analyse(img, mask, res_m, clip, props, cfg, year=_year(src))
+    except Exception as e:                          # never lose the detection over the classification
+        row["error"] = f"Typologie: {type(e).__name__}: {e}"[:300]
+        return []
+    feats = typology.to_wgs84(insts, win, row["id"], {"source": src.id, "year": _year(src)})
+    if not feats:
+        return []
+    P = [f["properties"] for f in feats]
+    kwp = round(sum(p["kwp_est"] for p in P), 1)
+    row.update(kwp_est=kwp, kwp_low=round(sum(p["kwp_low"] for p in P), 1),
+               kwp_high=round(sum(p["kwp_high"] for p in P), 1), kwp_method="typology",
+               installations=json.dumps(feats, ensure_ascii=False, separators=(",", ":")))
+    by = {}
+    for p in P:
+        by[p["layout"]] = by.get(p["layout"], 0) + p["outline_area_m2"]
+    row["layout"] = max(by, key=by.get) if len(by) == 1 or max(by.values()) >= 0.8 * sum(by.values()) else "mixed"
+    row["size_class"] = cfgmod.size_class(kwp, cfg["size_classes"])
+    row["in_range"] = int(cfgmod.in_kwp_range(kwp, cfg))
+    return feats
+
 COLUMNS = ["id", "status", "has_pv", "pv_area_m2", "kwp_est", "size_class", "in_range",
            "max_prob", "n_installations", "footprint_m2", "source", "lon", "lat", "error", "chip",
-           "check", "source2", "removed"]
-EXTRA = [("check", "TEXT"), ("source2", "TEXT"), ("removed", "TEXT")]     # added after the first release
+           "check", "source2", "removed", "kwp_low", "kwp_high", "layout", "kwp_method"]
+EXTRA = [("check", "TEXT"), ("source2", "TEXT"), ("removed", "TEXT"),      # added after the first release
+         ("kwp_low", "REAL"), ("kwp_high", "REAL"), ("layout", "TEXT"), ("kwp_method", "TEXT"),
+         ("installations", "TEXT")]
 
 
 def ensure_columns(db):
@@ -129,6 +168,7 @@ def run(job, cfg: dict):
         until = _dt.datetime.fromisoformat(p["until"])
     max_n = int(p.get("max") or 0)
     confirm = float(cfg.get("sync_confirm_score", 0.9))
+    push_typology = bool(cfg.get("typology_push", False))
 
     def send(force=False):
         if push and pending and (force or len(pending) >= 200):
@@ -199,7 +239,7 @@ def run(job, cfg: dict):
     t = threading.Thread(target=producer, daemon=True)
     t.start()
 
-    keys = COLUMNS + ["props", "footprint_wkt", "pv_wkt"]
+    keys = COLUMNS + ["props", "footprint_wkt", "pv_wkt", "installations"]
     insert = ("INSERT OR REPLACE INTO results (" + ",".join(f'"{k}"' for k in keys) + ") VALUES ("
               + ",".join("?" * len(keys)) + ")")
     group, group_patches = [], 0
@@ -239,6 +279,7 @@ def run(job, cfg: dict):
                 mask, check = postproc.fuse(mask, mask2, prof.resolution_m)
             polys = inference.mask_to_polygons(mask, win)
             row = _summarise(b, polys, fp, search, win, src, r.max_prob, cfg)
+            feats = apply_typology(row, img, mask, win, clips[i], src, b.props, prof.resolution_m, cfg)
             row.update(check=check, source2=src2.id if src2 is not None else None,
                        removed=json.dumps(info["removed"][:20], ensure_ascii=False) if info["removed"] else None)
             job.counters["pruefung_" + check] += 1
@@ -256,6 +297,9 @@ def run(job, cfg: dict):
                                 "source2": src2.id if src2 is not None else None, "img_hash": b.props.get("_img_hash"),
                                 "polygons": mapping(shp_wkt.loads(row["pv_wkt"])) if row["pv_wkt"] else None,
                                 "n_installations": row["n_installations"], "size_class": row["size_class"]})
+                if push_typology and feats:
+                    pending[-1].update(kwp_low=row["kwp_low"], kwp_high=row["kwp_high"], layout=row["layout"],
+                                       installations=[{**f["properties"], "geometry": f["geometry"]} for f in feats])
             job.counters[row["status"]] += 1
             if row["has_pv"]:
                 job.counters["kwp_sum"] = round(job.counters.get("kwp_sum", 0) + row["kwp_est"], 1)
@@ -280,10 +324,11 @@ def run(job, cfg: dict):
         b, search, fp, img, win, src, err = item
         if err:
             c = search.centroid
-            db.execute(insert, (b.id, "fehler", 0, None, None, "", 0, None, None, None, None,
-                                round(c.x, 7), round(c.y, 7), err, None, None, None, None,
-                                json.dumps(b.props, ensure_ascii=False),
-                                fp.wkt if fp is not None else None, None))
+            erow = dict.fromkeys(keys)
+            erow.update(id=b.id, status="fehler", has_pv=0, size_class="", in_range=0, lon=round(c.x, 7),
+                        lat=round(c.y, 7), error=err, props=json.dumps(b.props, ensure_ascii=False),
+                        footprint_wkt=fp.wkt if fp is not None else None)
+            db.execute(insert, tuple(erow[k] for k in keys))
             job.counters["fehler"] += 1
             job.step(1)
             if job.counters["fehler"] <= 20:
@@ -366,13 +411,27 @@ def export(job, db=None):
             if d["pv_wkt"]:
                 yield {"type": "Feature", "geometry": mapping(shp_wkt.loads(d["pv_wkt"])),
                        "properties": {"building_id": d["id"], "pv_area_m2": d["pv_area_m2"],
-                                      "kwp_est": d["kwp_est"], "size_class": d["size_class"],
+                                      "kwp_est": d["kwp_est"], "kwp_low": d.get("kwp_low"),
+                                      "kwp_high": d.get("kwp_high"), "layout": d.get("layout"),
+                                      "size_class": d["size_class"],
                                       "source": d["source"]}}
+
+    def instfeats():
+        if "installations" not in names:
+            return
+        for r in rows():
+            d = dict(zip(names, r))
+            for ft in json.loads(d["installations"] or "[]"):
+                pr = ft["properties"]
+                pr["osm"] = typology.osm_tags(pr)
+                pr["mastr"] = typology.mastr_fields(pr)
+                yield ft
 
     write_fc(os.path.join(job.dir, "buildings.geojson"), bfeats())
     compare_with_known(job, db)
     write_fc(os.path.join(job.dir, "pv_polygons.geojson"), pvfeats())
-    job.log("Exporte geschrieben: buildings.csv, buildings.geojson, pv_polygons.geojson")
+    write_fc(os.path.join(job.dir, "installations.geojson"), instfeats())
+    job.log("Exporte geschrieben: buildings.csv, buildings.geojson, pv_polygons.geojson, installations.geojson")
 
 
 def compare_with_known(job, db):
