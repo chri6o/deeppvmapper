@@ -53,7 +53,7 @@ function showInstLegend(on) { const el = document.querySelector(".legend"); if (
 map.on("overlayadd overlayremove", () => showInstLegend(instLayer.getLayers().length > 0));
 function instPopup(p) {
   const az = p.azimuth_deg == null ? "" : ` · ${Math.round(p.azimuth_deg)}°${p.azimuth2_deg != null ? "/" + Math.round(p.azimuth2_deg) + "°" : ""}`;
-  return `<b>${esc(p.id)} · Anlage ${p.n}</b><br>${esc(LAYOUT_TXT[p.layout] || p.layout)}${az}${p.tilt_class ? " · Neigung " + esc(p.tilt_class) + "°" : ""}<br>` +
+  return `<b>${esc(p.id)} · Anlage ${p.system || p.n}${p.system ? " · Teilfläche " + p.n : ""}</b><br>${esc(LAYOUT_TXT[p.layout] || p.layout)}${az}${p.tilt_class ? " · Neigung " + esc(p.tilt_class) + "°" : ""}<br>` +
     `${fmt(p.outline_area_m2, 0)} m² × Belegung ${fmt(p.fill_factor, 2)}${p.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""}<br>` +
     `<b>${fmt(p.kwp_est, 1)} kWp</b> (${fmt(p.kwp_low, 0)}–${fmt(p.kwp_high, 0)})${yearText(p) ? "<br>" + yearText(p).slice(3) : ""}`;
 }
@@ -360,8 +360,8 @@ async function loadResults() {
   if (d.geojson.features.length) map.fitBounds(dataLayer.getBounds(), { maxZoom: 18 });
   const t = $("#jd-table");
   if (job.kind === "area") {
-    t.innerHTML = `<tr><th>#</th><th>Fläche m²</th><th>Bauform</th><th>Baujahr ≈</th><th>kWp</th><th>Spanne</th><th>Klasse</th><th>Gebäude</th></tr>` +
-      d.rows.map((r) => `<tr class="click" data-lat="${r.lat}" data-lon="${r.lon}"><td>${r.installation_id}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td>${esc(LAYOUT_TXT[r.layout] || "")}</td><td class="num">${r.install_year || ""}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td class="num">${r.kwp_low != null ? fmt(r.kwp_low, 0) + "–" + fmt(r.kwp_high, 0) : ""}</td><td>${r.size_class}</td><td>${esc(r.building_ids)}</td></tr>`).join("");
+    t.innerHTML = `<tr><th>#</th><th>Fläche m²</th><th>Teilfl.</th><th>Bauform</th><th>Baujahr ≈</th><th>kWp</th><th>Spanne</th><th>Klasse</th><th>Gebäude</th></tr>` +
+      d.rows.map((r) => `<tr class="click" data-lat="${r.lat}" data-lon="${r.lon}"><td>${r.installation_id}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${r.fields || 1}</td><td>${esc(LAYOUT_TXT[r.layout] || "")}</td><td class="num">${r.install_year || ""}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td class="num">${r.kwp_low != null ? fmt(r.kwp_low, 0) + "–" + fmt(r.kwp_high, 0) : ""}</td><td>${r.size_class}</td><td>${esc(r.building_ids)}</td></tr>`).join("");
     $$("#jd-table tr.click").forEach((tr) => tr.onclick = () => map.setView([+tr.dataset.lat, +tr.dataset.lon], 19));
     return;
   }
@@ -404,8 +404,17 @@ function yearText(i) {
 function instText(r) {
   if (!r.installations || !r.installations.length) return "";
   const az = (a) => (a == null ? "" : ` ${Math.round(a)}°`);
-  return "<br>" + r.installations.map((i, k) => `Anlage ${k + 1}: ${esc(LAYOUT_TXT[i.layout] || i.layout)}${az(i.azimuth_deg)}${i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : ""}` +
-    `${i.tilt_class ? " · Neigung " + esc(i.tilt_class) + "°" : ""} · ${fmt(i.outline_area_m2, 0)} m² × Belegung ${fmt(i.fill_factor, 2)}${i.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""} → ${fmt(i.kwp_est, 1)} kWp (${fmt(i.kwp_low, 0)}–${fmt(i.kwp_high, 0)})${yearText(i)}`).join("<br>");
+  const part = (i) => `${esc(LAYOUT_TXT[i.layout] || i.layout)}${az(i.azimuth_deg)}${i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : ""}` +
+    `${i.tilt_class ? " · Neigung " + esc(i.tilt_class) + "°" : ""} · ${fmt(i.outline_area_m2, 0)} m² × Belegung ${fmt(i.fill_factor, 2)}${i.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""} → ${fmt(i.kwp_est, 1)} kWp (${fmt(i.kwp_low, 0)}–${fmt(i.kwp_high, 0)})`;
+  // parts that appeared on the same flights form one installation ("system")
+  const sys = {}; r.installations.forEach((i, k) => { (sys[i.system || k + 1] = sys[i.system || k + 1] || []).push(i); });
+  return "<br>" + Object.entries(sys).map(([n, parts]) => {
+    if (parts.length === 1) return `Anlage ${n}: ${part(parts[0])}${yearText(parts[0])}`;
+    const sum = (k) => parts.reduce((a, i) => a + (i[k] || 0), 0);
+    const big = parts.reduce((a, i) => ((i.outline_area_m2 || 0) > (a.outline_area_m2 || 0) ? i : a), parts[0]);
+    return `Anlage ${n} (${parts.length} Teilflächen): ${fmt(sum("kwp_est"), 1)} kWp (${fmt(sum("kwp_low"), 0)}–${fmt(sum("kwp_high"), 0)})${yearText(big)}` +
+      parts.map((i, k) => `<br>&nbsp;&nbsp;– Teil ${k + 1}: ${part(i)}`).join("");
+  }).join("<br>");
 }
 function showBuilding(id) {
   const r = S.rows && S.rows[id];

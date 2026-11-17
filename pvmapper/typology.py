@@ -574,6 +574,49 @@ def summarise(props_list: list[dict]) -> dict:
     return out
 
 
+def group_systems(props_list: list[dict]) -> list[dict]:
+    """parts (fields) on one building → systems ("Anlagen"): parts that appeared on the same flights belong together.
+    Build intervals are half-open (after flight `install_year_low`, at the latest on flight `install_year_high`); parts whose
+    intervals overlap are one system, a part without age information joins the largest system. Sets p["system"] (1, 2, …)
+    and returns per system: parts, kwp_est/low/high, layout, install_year (largest part), install_year_low/high."""
+    INF = 10 ** 6
+    order = sorted(range(len(props_list)), key=lambda k: -(props_list[k].get("outline_area_m2") or 0))
+    systems: list = []
+    undated = []
+    for k in order:
+        p = props_list[k]
+        if p.get("install_year_basis") != "imagery":
+            undated.append(k)
+            continue
+        lo = p.get("install_year_low")
+        lo = -INF if lo is None else lo
+        hi = p.get("install_year_high")
+        hi = INF if hi is None else hi
+        for sy in systems:
+            if max(sy["lo"], lo) < min(sy["hi"], hi):        # appeared between the same two flights
+                sy["lo"], sy["hi"] = max(sy["lo"], lo), min(sy["hi"], hi)
+                sy["parts"].append(k)
+                break
+        else:
+            systems.append({"lo": lo, "hi": hi, "parts": [k]})
+    if undated:
+        if systems:
+            systems[0]["parts"] += undated
+        else:
+            systems.append({"lo": -INF, "hi": INF, "parts": undated})
+    out = []
+    for n, sy in enumerate(systems, 1):
+        parts = [props_list[k] for k in sy["parts"]]
+        for p in parts:
+            p["system"] = n
+        sm = summarise(parts)
+        sm.update(system=n, parts=len(parts), outline_area_m2=round(sum(p.get("outline_area_m2") or 0 for p in parts), 1),
+                  install_year_low=None if sy["lo"] == -INF else sy["lo"],
+                  install_year_high=None if sy["hi"] == INF else sy["hi"])
+        out.append(sm)
+    return out
+
+
 def map_features(feats: list[dict], owner_id: str) -> list[dict]:
     """installation features → slim features for the map layer 'Anlagen nach Bauform' (kind 'inst')"""
     out = []
@@ -583,7 +626,7 @@ def map_features(feats: list[dict], owner_id: str) -> list[dict]:
             "id": owner_id, "kind": "inst", "n": k + 1, **{x: p.get(x) for x in (
                 "layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source",
                 "outline_area_m2", "kwp_est", "kwp_low", "kwp_high", "install_year", "install_year_low",
-                "install_year_high", "module_efficiency")}}})
+                "install_year_high", "module_efficiency", "system")}}})
     return out
 
 

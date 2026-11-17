@@ -228,28 +228,55 @@ def export(job, cfg, db, utm, region):
 
     feats, rows, outlines = [], [], []
     min_area = float(cfg["min_pv_area_m2"])
+    # 1) detected fields with their buildings and typology parts
+    entries = []
     for k, g in enumerate(groups):
         bids = []
         if bindex is not None:
             bids = [bitems[i][0] for i in bindex.query(g) if bitems[i][1].intersects(g)]
             if p.get("only_on_buildings", True) and not bids:
                 continue
-        area = g.area
-        if area < min_area:
+        if g.area < min_area:
             continue
-        kwp = round(area * float(cfg["kwp_per_m2"]), 1)
-        cw = geo.reproject(g.centroid, utm, "EPSG:4326")
-        sm, method = {}, "area_factor"
+        mine = []
         if ttree is not None:
             gb = g.buffer(1.0)
             mine = [tparts[i][1] for i in ttree.query(gb) if gb.contains(tparts[i][0])]
-            if mine:
-                sm, method = typology.summarise([f["properties"] for f in mine]), "typology"
-                kwp = sm["kwp_est"]
-                outlines += typology.map_features(mine, f"#{k}")
+        entries.append({"g": g, "bids": bids, "mine": mine})
+    # 2) fields on the same single building that appeared on the same flights are one installation
+    merged, by_bld = [], {}
+    for e in entries:
+        if len(e["bids"]) == 1 and e["mine"]:
+            by_bld.setdefault(e["bids"][0], []).append(e)
+        else:
+            merged.append(e)
+    for bid, es in by_bld.items():
+        if len(es) == 1:
+            merged.append(es[0])
+            continue
+        parts = [f for e in es for f in e["mine"]]
+        typology.group_systems([f["properties"] for f in parts])
+        sys_of = {}
+        for e in es:
+            big = max(e["mine"], key=lambda f: f["properties"].get("outline_area_m2") or 0)
+            sys_of.setdefault(big["properties"]["system"], []).append(e)
+        for es2 in sys_of.values():
+            merged.append({"g": unary_union([e["g"] for e in es2]), "bids": [bid],
+                           "mine": [f for e in es2 for f in e["mine"]], "fields": len(es2)})
+    merged.sort(key=lambda e: (-e["g"].area))
+    for k, e in enumerate(merged):
+        g, bids, mine = e["g"], e["bids"], e["mine"]
+        area = g.area
+        kwp = round(area * float(cfg["kwp_per_m2"]), 1)
+        cw = geo.reproject(g.centroid, utm, "EPSG:4326")
+        sm, method = {}, "area_factor"
+        if mine:
+            sm, method = typology.summarise([f["properties"] for f in mine]), "typology"
+            kwp = sm["kwp_est"]
+            outlines += typology.map_features(mine, f"#{k}")
         props = {"installation_id": k, "pv_area_m2": round(area, 1), "kwp_est": kwp,
                  "kwp_low": sm.get("kwp_low"), "kwp_high": sm.get("kwp_high"), "layout": sm.get("layout"),
-                 "install_year": sm.get("install_year"),
+                 "install_year": sm.get("install_year"), "fields": e.get("fields", 1),
                  "kwp_method": method,
                  "size_class": cfgmod.size_class(kwp, cfg["size_classes"]),
                  "in_range": int(cfgmod.in_kwp_range(kwp, cfg)),
@@ -263,7 +290,7 @@ def export(job, cfg, db, utm, region):
     with open(os.path.join(job.dir, "installation_outlines.geojson"), "w", encoding="utf-8") as f:
         json.dump({"type": "FeatureCollection", "features": outlines}, f, ensure_ascii=False)
     with open(os.path.join(job.dir, "installations.csv"), "w", newline="", encoding="utf-8") as f:
-        cols = ["installation_id", "pv_area_m2", "kwp_est", "kwp_low", "kwp_high", "layout", "install_year", "kwp_method",
+        cols = ["installation_id", "pv_area_m2", "kwp_est", "kwp_low", "kwp_high", "layout", "install_year", "fields", "kwp_method",
                 "size_class", "in_range", "lon", "lat", "building_ids"]
         w = csv.DictWriter(f, cols)
         w.writeheader()

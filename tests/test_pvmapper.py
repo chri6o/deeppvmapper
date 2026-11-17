@@ -1129,3 +1129,51 @@ def test_age_evidence_verdicts():
     old = cv2.GaussianBlur(cur, (0, 0), 1.5)
     ev = age.evidence(cur, old, mods, np.zeros_like(mods), 0.1, 0.3125)
     assert age.verdict(ev) == "present", ev
+
+
+def test_parts_on_same_flights_are_one_installation():
+    from pvmapper import typology as T
+    P = lambda a, lo, hi, kwp, basis="imagery": {"outline_area_m2": a, "install_year_low": lo, "install_year_high": hi,
+                                                  "install_year": hi, "install_year_basis": basis, "layout": "flush",
+                                                  "kwp_est": kwp, "kwp_low": kwp - 1, "kwp_high": kwp + 1}
+    parts = [P(300, 2016, 2019, 50), P(200, 2016, 2019, 30), P(100, 2019, 2021, 15),     # 2019 → 2021 is a later extension
+             P(50, None, 2019, 8), P(20, None, None, 3, basis=None)]                       # upper bound only; no age at all
+    sy = T.group_systems(parts)
+    assert [p["system"] for p in parts] == [1, 1, 2, 1, 1]
+    assert sy[0]["parts"] == 4 and sy[0]["kwp_est"] == 91 and (sy[0]["install_year_low"], sy[0]["install_year_high"]) == (2016, 2019)
+    assert sy[1]["parts"] == 1 and sy[1]["install_year_low"] == 2019
+    # without any age information all parts on the building are one installation
+    parts = [P(30, None, None, 5, basis=None), P(20, None, None, 3, basis=None)]
+    assert len(T.group_systems(parts)) == 1
+
+
+def test_area_fields_on_one_building_are_one_installation(tmp_path, monkeypatch):
+    from pvmapper import area_mode
+
+    class FakeSrc:
+        id = "fake-2023"
+        name = "Fake"
+        attribution = ""
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 90, np.uint8)
+        h, w = img.shape[:2]
+        img[h - 250: h - 100, w // 16: 3 * w // 16] = (40, 120, 250)          # two fields, ~6 m apart, inside the region
+        img[h - 250: h - 100, 5 * w // 16: 7 * w // 16] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    bb = [13.4000, 52.5200, 13.4004, 52.5203]
+    bl = tmp_path / "b.geojson"
+    bl.write_text(json.dumps({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": box(*bb).__geo_interface__, "properties": {"id": "TESTH"}}]}))
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), fetch_workers=1,
+               area_cell_px=512)
+    job = Job(cfg["jobs_dir"], "area", {"bbox": bb, "buildings": str(bl)})
+    job.run(lambda j: area_mode.run(j, cfg))
+    assert job.status == "done", job.error
+    fc = json.load(open(os.path.join(job.dir, "installations.geojson"), encoding="utf-8"))
+    assert len(fc["features"]) == 1, [f["properties"] for f in fc["features"]]
+    assert fc["features"][0]["properties"]["fields"] == 2 and fc["features"][0]["properties"]["building_ids"] == "TESTH"

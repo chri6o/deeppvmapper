@@ -57,6 +57,8 @@ def apply_typology(row: dict, img, mask, win, clip, src, props: dict, res_m: flo
 def set_from_installations(row: dict, feats: list, cfg: dict):
     """kWp (sum with range), main layout, size class and the installations JSON of a building from its installations"""
     sm = typology.summarise([f["properties"] for f in feats])
+    systems = typology.group_systems([f["properties"] for f in feats])   # parts of one installation on this building
+    row["n_installations"] = len(systems)
     kwp = sm["kwp_est"]
     sm.pop("install_year", None)
     row.update(sm, kwp_method="typology", installations=json.dumps(feats, ensure_ascii=False, separators=(",", ":")))

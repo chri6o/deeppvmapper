@@ -642,7 +642,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                      installations=[{k: f["properties"].get(k) for k in (
                          "layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source",
                          "outline_area_m2", "kwp_est", "kwp_low", "kwp_high", "install_year", "install_year_low",
-                         "install_year_high", "module_efficiency")} for f in json.loads(r[22] or "[]")])
+                         "install_year_high", "module_efficiency", "system")} for f in json.loads(r[22] or "[]")])
             rows.append(d)
             if r[13]:
                 feats.append({"type": "Feature", "geometry": mapping(shp_wkt.loads(r[13])),
