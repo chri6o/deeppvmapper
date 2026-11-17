@@ -665,16 +665,17 @@ function regText(m) {
     return `<b>${fmt(r.kwp, 1)} kWp</b> (${r.n} Einheit${r.n === 1 ? "" : "en"}${yrs ? "; " + yrs : ""}; Zuordnung ${esc(r.grade || "?")}${b.distance_m ? "; " + fmt(b.distance_m, 0) + " m entfernt" : ""}${b.name ? "; " + esc(b.name) : ""})`; }).join(" + ");
 }
 async function regLookup(names) {
-  $("#m-reg-msg").innerHTML = `<div class="info">frage PV-Map …</div>`;
+  $("#m-reg-msg").innerHTML = `<div class="info">frage PV-Map …</div>`; if (names && names.length === 1) info2("Register: frage PV-Map …");
   try {
     const r = await api(`/api/datasets/${M.ds}/register`, { json: { names, radius_m: +$("#m-reg-r").value || 30 } });
     $("#m-reg-msg").innerHTML = `<div class="info">${fmt(r.images)} Bilder abgefragt, ${fmt(r.with_register)} mit Registerdaten${r.errors ? `, ${r.errors} Fehler` : ""}.</div>`;
     const d = await api(`/api/datasets/${M.ds}/items`); M.items = d.items;
     if (M.item) { const it = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(M.item.name)}`); M.item.register = it.meta.register; info2(); }
-  } catch (e) { $("#m-reg-msg").innerHTML = `<div class="info error">${esc(e.message)}</div>`; }
+  } catch (e) { $("#m-reg-msg").innerHTML = `<div class="info error">${esc(e.message)}</div>`; info2(`<span style="color:#ff8a8a">Register: ${esc(e.message)}</span>`); }
 }
 $("#m-reg-all").onclick = () => regLookup(null);
 $("#m-reg-one").onclick = () => { if (M.item) regLookup([M.item.name]); };
+$("#e-reg").onclick = () => { if (M.item) regLookup([M.item.name]); };
 function toggleHelp(on) { const h = $("#e-help"), show = on === undefined ? h.classList.contains("hidden") : on; h.classList.toggle("hidden", !show); }
 function areaM2() {
   const res = (S.info.profiles.find((p) => p.id === (M.dsProfile || S.info.config.profile)) || { resolution_m: 0.1 }).resolution_m;
@@ -966,6 +967,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "-") zoomAt(cv.width / 2, cv.height / 2, 1 / 1.5);
   else if (kl === "m") suggest(null);
   else if (kl === "k") suggest($("#m-provider").value);
+  else if (kl === "r" && M.item) regLookup([M.item.name]);
   else if (kl === "x") saveItem("skip");
   else if (kl === "l") { $("#e-label").checked = !$("#e-label").checked; $("#e-label").onchange(); }
   else if (kl === "f" || k === "0") { fitView(); draw(); }
