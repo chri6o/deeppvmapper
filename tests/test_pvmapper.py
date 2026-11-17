@@ -911,6 +911,16 @@ def test_typology_in_building_job_and_calibration(tmp_path, monkeypatch):
     assert feats[0]["geometry"]["type"] == "Polygon"
     gj = json.load(open(os.path.join(job.dir, "installations.geojson"), encoding="utf-8"))
     assert gj["features"][0]["properties"]["osm"]["generator:source"] == "solar"
+    # web: installation outlines as their own layer in the results
+    from fastapi.testclient import TestClient
+    from pvmapper.web.app import create_app
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(cfg, model_dir=str(tmp_path / "m")), str(cfgp))
+    res = TestClient(create_app(str(cfgp))).get(f"/api/jobs/{job.id}/results?status=&limit=50").json()
+    inst = res["installations"]["features"]
+    assert inst and inst[0]["properties"]["kind"] == "inst" and inst[0]["properties"]["id"] == "TEST1"
+    assert inst[0]["properties"]["layout"] and inst[0]["geometry"]["type"] == "Polygon"
+    assert res["rows"][0]["kwp_low"] <= res["rows"][0]["kwp_est"] <= res["rows"][0]["kwp_high"]
     cal = T.calibrate_job(db)
     assert cal["typology"]["n"] == 1 and sum(v["n"] for v in cal["layouts"].values()) <= 1
     # switched off: the old area factor

@@ -599,7 +599,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             total = len(tagged)
             allr = [t[4] for t in tagged][offset:offset + limit]
             whys = {t[4][0]: t[3] for t in tagged}
-        rows, feats = [], []
+        rows, feats, insts = [], [], []
         for r in allr:
             d = dict(zip(["id", "status", "pv_area_m2", "kwp_est", "size_class", "in_range", "max_prob",
                           "footprint_m2", "source", "lon", "lat", "error", "chip"], r[:13]))
@@ -620,7 +620,15 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             if r[14]:
                 feats.append({"type": "Feature", "geometry": mapping(shp_wkt.loads(r[14])),
                               "properties": {"id": d["id"], "kind": "pv"}})
-        return {"rows": rows, "total": total, "geojson": {"type": "FeatureCollection", "features": feats}}
+            # installation outlines from the typology (rows with their gaps), own map layer
+            for k, f in enumerate(json.loads(r[22] or "[]")):
+                p = f["properties"]
+                insts.append({"type": "Feature", "geometry": f["geometry"], "properties": {
+                    "id": d["id"], "kind": "inst", "n": k + 1, **{x: p.get(x) for x in (
+                        "layout", "azimuth_deg", "azimuth2_deg", "tilt_class", "fill_factor", "fill_factor_source",
+                        "outline_area_m2", "kwp_est", "kwp_low", "kwp_high")}}})
+        return {"rows": rows, "total": total, "geojson": {"type": "FeatureCollection", "features": feats},
+                "installations": {"type": "FeatureCollection", "features": insts}}
 
     @app.post("/api/jobs/{jid}/export")
     def reexport(jid: str):

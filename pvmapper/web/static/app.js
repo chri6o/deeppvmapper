@@ -17,6 +17,7 @@ async function api(path, opts = {}) {
 }
 
 // ------------------------------------------------------------------ state
+const LAYOUT_TXT = { flush: "flächig", tilted_mono: "aufgeständert (Süd)", east_west: "Ost-West", vertical_bifacial: "senkrecht bifazial", mixed: "gemischt", unknown: "unbestimmt" };
 const S = { info: null, sources: [], input: null, jobs: [], job: null, poll: null, drawn: null, srcLayer: null };
 
 // ------------------------------------------------------------------ map
@@ -31,6 +32,31 @@ const dataLayer = L.geoJSON(null, {
   pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 5, color: f.properties.status === "pv" ? "#f2b705" : "#2563eb" }),
   onEachFeature: (f, l) => { if (f.properties.id) l.on("click", () => showBuilding(f.properties.id)); },
 }).addTo(map);
+// installation outlines from the typology, coloured by layout (own overlay, can be switched off)
+const LAYOUT_COL = { flush: "#7c3aed", tilted_mono: "#ea580c", east_west: "#0891b2", vertical_bifacial: "#16a34a", mixed: "#64748b", unknown: "#94a3b8" };
+const instLayer = L.geoJSON(null, {
+  style: (f) => ({ color: LAYOUT_COL[f.properties.layout] || "#94a3b8", weight: 2, dashArray: "5 3", fillOpacity: .12 }),
+  onEachFeature: (f, l) => {
+    l.bindPopup(() => instPopup(f.properties));
+    l.on("click", () => showBuilding(f.properties.id));
+  },
+}).addTo(map);
+layerCtl.addOverlay(instLayer, "Anlagen nach Bauform");
+const instLegend = L.control({ position: "bottomright" });
+instLegend.onAdd = () => {
+  const d = L.DomUtil.create("div", "legend hidden");
+  d.innerHTML = "<b>Anlagen</b><br>" + Object.entries(LAYOUT_COL).map(([k, c]) => `<i style="border-color:${c}"></i>${esc(LAYOUT_TXT[k])}`).join("<br>");
+  return d;
+};
+instLegend.addTo(map);
+function showInstLegend(on) { const el = document.querySelector(".legend"); if (el) el.classList.toggle("hidden", !on || !map.hasLayer(instLayer)); }
+map.on("overlayadd overlayremove", () => showInstLegend(instLayer.getLayers().length > 0));
+function instPopup(p) {
+  const az = p.azimuth_deg == null ? "" : ` · ${Math.round(p.azimuth_deg)}°${p.azimuth2_deg != null ? "/" + Math.round(p.azimuth2_deg) + "°" : ""}`;
+  return `<b>${esc(p.id)} · Anlage ${p.n}</b><br>${esc(LAYOUT_TXT[p.layout] || p.layout)}${az}${p.tilt_class ? " · Neigung " + esc(p.tilt_class) + "°" : ""}<br>` +
+    `${fmt(p.outline_area_m2, 0)} m² × Belegung ${fmt(p.fill_factor, 2)}${p.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""}<br>` +
+    `<b>${fmt(p.kwp_est, 1)} kWp</b> (${fmt(p.kwp_low, 0)}–${fmt(p.kwp_high, 0)})`;
+}
 const drawn = new L.FeatureGroup().addTo(map);
 map.addControl(new L.Control.Draw({
   draw: { polyline: false, circle: false, marker: false, circlemarker: false, polygon: { showArea: true }, rectangle: true },
@@ -105,7 +131,7 @@ function setInput(d) {
   S.input = d;
   info("#b-info", `<b>${fmt(d.count)}</b> Gebäude gelesen.` + (d.count > 300 ? " Karte zeigt die ersten 300." : ""));
   $("#b-id").innerHTML = `<option value="">automatisch</option>` + d.fields.map((f) => `<option>${esc(f)}</option>`).join("");
-  dataLayer.clearLayers(); dataLayer.addData(d.preview);
+  dataLayer.clearLayers(); dataLayer.addData(d.preview); instLayer.clearLayers(); showInstLegend(false);
   if (d.bbox) map.fitBounds([[d.bbox[1], d.bbox[0]], [d.bbox[3], d.bbox[2]]], { maxZoom: 18 });
   $("#b-start").disabled = !d.count;
 }
@@ -295,6 +321,8 @@ async function loadResults() {
   $("#jd-class").innerHTML = `<option value="">alle Größen</option>` + (S.info.config.size_classes || [])
     .map((c) => `<option value="${c.name}" ${c.name === $("#jd-class").value ? "selected" : ""}>${c.name} (${esc(c.label || "")})</option>`).join("");
   dataLayer.clearLayers(); dataLayer.addData(d.geojson);
+  instLayer.clearLayers(); if (d.installations) instLayer.addData(d.installations);
+  instLayer.bringToFront(); showInstLegend(instLayer.getLayers().length > 0);
   if (d.geojson.features.length) map.fitBounds(dataLayer.getBounds(), { maxZoom: 18 });
   const t = $("#jd-table");
   if (job.kind === "area") {
@@ -333,7 +361,6 @@ $("#jd-todataset").onclick = async () => {
     S.sel = new Set(); openJob(j.id); loadJobs(); }
   catch (e) { alert(e.message); }
 };
-const LAYOUT_TXT = { flush: "flächig", tilted_mono: "aufgeständert (Süd)", east_west: "Ost-West", vertical_bifacial: "senkrecht bifazial", mixed: "gemischt", unknown: "unbestimmt" };
 function instText(r) {
   if (!r.installations || !r.installations.length) return "";
   const az = (a) => (a == null ? "" : ` ${Math.round(a)}°`);
@@ -359,7 +386,7 @@ async function probe(ll) {
   $("#p-out").innerHTML = `<div class="info">Lade Luftbild und analysiere ${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)} …</div>`;
   try {
     const d = await api("/api/probe", { json: { lat: ll.lat, lon: ll.lng, source: $("#p-source").value, profile: $("#p-profile").value, radius_m: +$("#p-radius").value } });
-    dataLayer.clearLayers();
+    dataLayer.clearLayers(); instLayer.clearLayers(); showInstLegend(false);
     if (d.polygons) dataLayer.addData({ type: "FeatureCollection", features: d.polygons.features.map((f) => ({ ...f, properties: { kind: "pv" } })) });
     $("#p-out").innerHTML = `<div class="info"><b>${esc(d.source_name)}</b><br>
       Score max ${fmt(d.max_prob, 2)} · ${d.n_positive}/${d.n_patches} Ausschnitte positiv · PV ${fmt(d.pv_area_m2, 1)} m² ≈ ${fmt(d.kwp_est, 1)} kWp<br>

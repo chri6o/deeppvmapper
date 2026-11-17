@@ -91,3 +91,7 @@ body.e-full #panel { display: none; }
 .ehelp { position: absolute; left: 12px; right: 12px; bottom: 44px; background: rgba(15,21,36,.95); color: #dfe5f1; padding: 12px 14px;
   border-radius: 8px; line-height: 1.7; font-size: 13px; z-index: 5; }
 .einfo a { color: #9cc3ff; }
+
+.legend { background: #fff; padding: 6px 8px; border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.3); font-size: 12px; line-height: 18px; }
+.legend i { display: inline-block; width: 14px; height: 10px; border: 2px dashed; margin-right: 6px; vertical-align: middle; }
+.legend.hidden { display: none; }
