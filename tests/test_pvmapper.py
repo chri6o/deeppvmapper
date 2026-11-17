@@ -1084,6 +1084,26 @@ def test_age_bisection_finds_build_year(monkeypatch):
     assert p["kwp_est"] == pytest.approx(k0 * 0.18 / 0.215, abs=0.2)
     assert len(set(fetched)) <= 4                            # bisection, not every flight
     assert all(f["verdict"] in ("present", "absent") for f in p["age_flights"])
+    # a dark patch looks like modules in 2012, but 2014 and 2016 are clearly empty: the later empty flights win
+    years[:] = [2010, 2012, 2014, 2016, 2017, 2019, 2021, 2022]
+
+    class Patchy(Flight):
+        def fetch(self, w):
+            return picture(self.y >= 2017 or self.y == 2012)
+    monkeypatch.setattr(age, "timeline", lambda src, w, cfg=None: [(y, None, 0.1, Patchy(y)) for y in years])
+    feats = T.for_window(img, mask, win, 0.1, Src(), "TESTC", None, {}, cfg)
+    age.estimate([{"img": img, "win": win, "src": Src(), "mask": mask, "feats": feats, "res_m": 0.1}], det, cfg)
+    p = feats[0]["properties"]
+    assert (p["install_year_low"], p["install_year_high"]) == (2016, 2017), p["age_flights"]
+    # only unclear flights below the first one with modules: an upper bound, no build year, kWp unchanged
+    feats = T.for_window(img, mask, win, 0.1, Src(), "TESTD", None, {}, cfg)
+    orig_verdict = age.verdict
+    k0 = feats[0]["properties"]["kwp_est"]
+    monkeypatch.setattr(age, "verdict", lambda ev, cfg=None: "present" if ev.get("coverage", 0) > 0.5 else "unclear")
+    age.estimate([{"img": img, "win": win, "src": Src(), "mask": mask, "feats": feats, "res_m": 0.1}], det, cfg)
+    p = feats[0]["properties"]
+    assert p["install_year"] is None and p["install_year_high"] == 2012 and p["kwp_est"] == k0
+    monkeypatch.setattr(age, "verdict", orig_verdict)
     # already on the oldest flight: "before 2010"
     years[:] = [2018, 2020]
     feats = T.for_window(img, mask, win, 0.1, Src(), "TESTB", None, {}, cfg)

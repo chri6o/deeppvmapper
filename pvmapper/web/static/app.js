@@ -362,7 +362,7 @@ $("#jd-todataset").onclick = async () => {
   catch (e) { alert(e.message); }
 };
 function yearText(i) {
-  if (i.install_year == null) return "";
+  if (i.install_year == null) return i.install_year_high != null ? ` · Baujahr vor ${i.install_year_high} (ältere Flüge unklar)` : "";
   const lo = i.install_year_low, hi = i.install_year_high;
   const span = lo == null ? `vor ${hi}` : (lo === hi ? `${hi}` : `${lo}–${hi}`);
   return ` · Baujahr ≈ ${i.install_year} (${span}${i.module_efficiency ? ", Wirkungsgrad " + Math.round(i.module_efficiency * 1000) / 10 + " %" : ""})`;

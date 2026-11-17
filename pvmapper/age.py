@@ -41,7 +41,7 @@ DEFAULTS = {
     "age_max_res_m": 0.4,          # older flights coarser than this are not used (modules are not recognisable)
     "age_min_year": 2000,          # no PV on public roofs worth dating before this
     "age_present_cov": 0.35,       # model finds ≥ this share of the current modules → present
-    "age_absent_cov": 0.10,
+    "age_absent_cov": 0.20,
 }
 
 
@@ -228,23 +228,28 @@ class _Inst:
     def __init__(self, feat, mods, n_years):
         self.f, self.mods = feat, mods
         self.lo, self.hi = -1, n_years                 # index of last flight without / first flight with modules
+        self.n = n_years
+        self.contradicted = False
         self.skip: set = set()
         self.seen: dict = {}                            # year index → evidence
 
     def next_index(self):
-        cand = [i for i in range(self.lo + 1, self.hi) if i not in self.skip]
+        cand = [i for i in range(self.lo + 1, self.hi) if i not in self.skip and i not in self.seen]
         if not cand:
             return None
         return cand[len(cand) // 2]
 
     def record(self, i, ev, v):
         self.seen[i] = {**ev, "verdict": v}
-        if v == "present":
-            self.hi = min(self.hi, i)
-        elif v == "absent":
-            self.lo = max(self.lo, i)
-        else:
+        if v == "unclear":
             self.skip.add(i)
+        # modules do not disappear and come back: a later flight without modules outweighs an earlier "present"
+        # (dark roof patches, other installations), so the bounds follow from all verdicts so far
+        absent = [k for k, x in self.seen.items() if x["verdict"] == "absent"]
+        self.lo = max(absent) if absent else -1
+        present = [k for k, x in self.seen.items() if x["verdict"] == "present" and k > self.lo]
+        self.hi = min(present) if present else self.n
+        self.contradicted = any(x["verdict"] == "present" and k < self.lo for k, x in self.seen.items())
 
 
 def estimate(items: list, det, cfg: dict | None = None, workers: int = 4, job=None) -> int:
@@ -333,16 +338,20 @@ def estimate(items: list, det, cfg: dict | None = None, workers: int = 4, job=No
             before = tl[inst.hi] if inst.hi < len(tl) else None       # first flight with modules
             y_lo = after[0] if after else None                         # built after this flight (same year possible)
             y_hi = before[0] if before else cy
-            if after is None and before is not None:
-                # modules already on the oldest checked flight: older than that, how much older is open
-                y_est = before[0] - 1
-            elif after is None:
+            flights = [{"year": tl[i][0], "date": tl[i][1], "res_m": tl[i][2], **ev} for i, ev in sorted(inst.seen.items())]
+            if after is None and inst.hi > 0:
+                # no flight clearly without modules (only unclear ones below): just an upper bound, efficiency unchanged
+                p.update(install_year=None, install_year_low=None, install_year_high=y_hi, install_year_basis="imagery",
+                         age_flights=flights)
                 continue
+            if after is None:
+                y_est = before[0] - 1          # modules on the oldest usable flight: older than that, how much is open
             else:
                 y_est = int(round((y_lo + y_hi) / 2))
-            flights = [{"year": tl[i][0], "date": tl[i][1], "res_m": tl[i][2], **ev} for i, ev in sorted(inst.seen.items())]
             _apply_year(p, y_est, y_lo, y_hi, conf)
             p.update(install_year_basis="imagery", age_flights=flights)
+            if inst.contradicted:
+                p["age_note"] = "contradicting flights"
             n += 1
     return n
 
