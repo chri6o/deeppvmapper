@@ -134,6 +134,53 @@ def polygons(mask: np.ndarray, aff: tuple, crs: str, min_px: int = 20) -> list:
     return out
 
 
+def raster_mask(g_wgs84, shape, aff, crs) -> np.ndarray:
+    """polygon (WGS84) → 0/1 mask on the tile grid"""
+    import cv2
+    m = np.zeros(shape, np.uint8)
+    pg = geo.reproject(g_wgs84, "EPSG:4326", crs)
+    for part in getattr(pg, "geoms", [pg]):
+        if part.is_empty:
+            continue
+        ext = np.array([((x - aff[0]) / aff[1], (y - aff[2]) / aff[3]) for x, y in part.exterior.coords], np.int32)
+        cv2.fillPoly(m, [ext], 1)
+        for h in part.interiors:
+            cv2.fillPoly(m, [np.array([((x - aff[0]) / aff[1], (y - aff[2]) / aff[3]) for x, y in h.coords], np.int32)], 0)
+    return m
+
+
+def valid_area(pv: np.ndarray, wc, aff, crs, bbox) -> np.ndarray:
+    """pixels inside the tile (bbox) and, with the WorldCover band, where it has data: outside, the process marks phantom areas"""
+    v = raster_mask(box(*bbox), pv.shape, aff, crs).astype(bool)
+    if wc is not None:
+        v &= np.isfinite(wc)
+    return v
+
+
+def coverage(con, pv: np.ndarray, valid: np.ndarray, aff, crs, bbox, month: str) -> tuple[list, int]:
+    """share of PV pixels inside every known fence in the tile, written to its time series (also 0: seen, not found);
+    fences mostly outside the valid area are left out. Returns the masks (for excluding known areas) and the count."""
+    from shapely import wkb
+    rows = con.execute("SELECT id, ST_AsBinary(geom_zaun), flaeche_zaun_m2 FROM freiflaeche "
+                       "WHERE geom_zaun && ST_MakeEnvelope(%s,%s,%s,%s,4326) AND pruefstatus <> 'verworfen'", list(bbox)).fetchall()
+    masks, n = [], 0
+    px_m2 = abs(aff[1] * aff[3])
+    for fid, gb, area in rows:
+        g = wkb.loads(bytes(gb))
+        m = raster_mask(g, pv.shape, aff, crs).astype(bool)
+        masks.append(m)
+        inside = m & valid
+        if area and inside.sum() * px_m2 < 0.7 * area:
+            continue                                            # mostly in a neighbouring tile: counted there
+        if not inside.any():
+            continue
+        cover = round(float((pv[inside] > 0).mean()), 3)
+        con.execute("UPDATE freiflaeche SET zeitreihe = coalesce(zeitreihe,'{}'::jsonb) || jsonb_build_object(%s::text, %s::jsonb), "
+                    "updated_at = now() WHERE id = %s", [month, json.dumps({"s2": cover}), fid])
+        n += 1
+    return masks, n
+
+
 def worldcover_shares(classes: np.ndarray, mask_poly_px: np.ndarray) -> dict:
     v = classes[mask_poly_px > 0]
     v = v[np.isfinite(v)] if v.dtype.kind == "f" else v             # no-data at the tile edge
@@ -243,13 +290,12 @@ def match(con, polys: list, month: str, cc: str, region: str, cfg: dict, buildin
             [g.wkb_hex]).fetchall()
         known = [h for h in hits if h[2] > 0.3 * min(h[3], a)]
         if known:
-            for fid, _, inter, area in known:
-                if fid in seen:
-                    continue
-                seen.add(fid)
-                cover = round(min(1.0, inter / area), 3) if area else None
-                con.execute("UPDATE freiflaeche SET zeitreihe = coalesce(zeitreihe,'{}'::jsonb) || jsonb_build_object(%s::text, %s::jsonb), "
-                            "updated_at = now() WHERE id = %s", [month, json.dumps({"s2": cover}), fid])
+            for fid, herk, inter, area in known:
+                if herk == "suche" and fid not in seen:          # a candidate seen again
+                    seen.add(fid)
+                    con.execute("UPDATE freiflaeche SET zeitreihe = coalesce(zeitreihe,'{}'::jsonb) || jsonb_build_object(%s::text, "
+                                "%s::jsonb), updated_at = now() WHERE id = %s",
+                                [month, json.dumps({"s2": round(min(1.0, inter / area), 3) if area else 1.0}), fid])
             n["bekannt"] += 1
             continue
         c = g.centroid
@@ -330,17 +376,19 @@ def run(job, cfg: dict):
         pv = arr[0] if arr.ndim == 3 else arr
         pv = np.nan_to_num(pv, nan=0.0)
         wc = arr[1] if arr.ndim == 3 and arr.shape[0] > 1 else None
-        polys = polygons(pv, aff, crs)
+        valid = valid_area(pv, wc, aff, crs, t["bbox"])
+        pv = np.where(valid, pv, 0)
+        known_masks, n_cov = coverage(con, pv, valid, aff, crs, t["bbox"], month)
+        total["anlagen_geprueft"] = total.get("anlagen_geprueft", 0) + n_cov
+        rest = pv.copy()
+        for m in known_masks:
+            rest[m] = 0                                          # known plants are not candidates
+        polys = polygons(rest, aff, crs)
         wc_info = None
         if wc is not None and polys:
-            import cv2
             wc_info = []
             for g in polys:
-                m = np.zeros(pv.shape, np.uint8)
-                pg = geo.reproject(g, "EPSG:4326", crs)
-                for part in getattr(pg, "geoms", [pg]):
-                    pts = np.array([((x - aff[0]) / aff[1], (y - aff[2]) / aff[3]) for x, y in part.exterior.coords], np.int32)
-                    cv2.fillPoly(m, [pts], 1)
+                m = raster_mask(g, pv.shape, aff, crs)
                 wc_info.append(worldcover_shares(wc, m))
         bld = inventory.extract_buildings(pbf, os.path.join(d, t["id"]), polys) if (pbf and polys) else []
         n = match(con, polys, month, cc, key, cfg, bld, wc_info)
@@ -350,7 +398,8 @@ def run(job, cfg: dict):
     confidence(con, key)
     job.counters.update(total)
     cr = [v for v in (state.get("credits") or {}).values() if isinstance(v, (int, float))]
-    job.log(f"Fertig: {total.get('flaechen', 0)} Flächen ab {cfg.get('ground_min_ha', 0.5)} ha, {total.get('bekannt', 0)} bekannt, "
+    job.log(f"Fertig: {total.get('anlagen_geprueft', 0)} bekannte Anlagen geprüft; außerhalb davon {total.get('flaechen', 0)} Flächen "
+            f"ab {cfg.get('ground_min_ha', 0.5)} ha, davon {total.get('bekannt', 0)} schon Kandidaten, "
             f"{total.get('neu', 0)} neue Kandidaten, {total.get('gebaeude', 0)} verworfen (Gebäude)"
             + (f"; verbraucht {sum(cr):.0f} Credits" if cr else "") + (f"; {len(state.get('failed', []))} Kacheln fehlgeschlagen"
                                                                      if state.get("failed") else ""))
@@ -362,10 +411,10 @@ def recall(con, region: str, month: str, log=print) -> dict:
     r = con.execute("""
       SELECT count(*), count(*) FILTER (WHERE (zeitreihe->%s->>'s2')::numeric > 0.3)
       FROM freiflaeche WHERE region = %s AND herkunft <> 'suche' AND pruefstatus <> 'verworfen' AND split = 'test'
-        AND flaeche_zaun_m2 >= 10000""", [month, region]).fetchone()
+        AND flaeche_zaun_m2 >= 10000 AND zeitreihe ? %s""", [month, region, month]).fetchone()
     tot, hit = r
     if tot:
-        log(f"Trefferquote Bestand (Testmenge, ab 1 ha): {hit}/{tot} = {hit / tot:.0%} (Ziel ≥ 90 %; Anlagen nach {month} "
-            f"im Bestand zählen mit)")
+        log(f"Trefferquote Bestand (Testmenge, ab 1 ha, in den gesuchten Kacheln): {hit}/{tot} = {hit / tot:.0%} (Ziel ≥ 90 %; "
+            f"erkannt = mehr als 30 % der Fläche als PV markiert)")
     return {"n": tot, "hits": hit}
 

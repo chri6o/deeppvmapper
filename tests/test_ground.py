@@ -258,8 +258,7 @@ def test_match_known_new_and_buildings(con):
     n = coarse.match(con, [sq(17, 52, 190), new, housing, sq(18, 52, 30)], "2026-10", "PL", "t", CFG,
                      [housing.buffer(-D)], [None, {"wasser": 0.9}, None, None])
     assert n == {"flaechen": 3, "zu_klein": 1, "gebaeude": 1, "bekannt": 1, "neu": 1}
-    z = con.execute("SELECT zeitreihe FROM freiflaeche WHERE id='ff-pl-osm-w1'").fetchone()[0]
-    assert z["2026-10"]["s2"] > 0.8
+    assert con.execute("SELECT zeitreihe FROM freiflaeche WHERE id='ff-pl-osm-w1'").fetchone()[0] is None   # see coverage()
     r = con.execute("SELECT herkunft, first_seen::text, typ, methode, quellen FROM freiflaeche WHERE herkunft='suche'").fetchone()
     assert r[:4] == ("suche", "2026-10-01", "floating", "s2_polygon") and r[4]["worldcover_2021"] == {"wasser": 0.9}
     # seen again next month: same id, confidence from the time series
@@ -267,8 +266,31 @@ def test_match_known_new_and_buildings(con):
     coarse.confidence(con, "t")
     rows = con.execute("SELECT id, konfidenz, zeitreihe FROM freiflaeche WHERE herkunft='suche'").fetchall()
     assert len(rows) == 1 and rows[0][1] == 1.0 and set(rows[0][2]) == {"2026-10", "2026-11"}
+
+
+def test_coverage_per_plant_on_the_raster(con):
+    """a park split into many blobs: coverage from all PV pixels in its fence; tile edge without data ignored"""
+    import numpy as np
+    from pvmapper import geo as g
+    fence = sq(17, 52, 400)                                               # 16 ha
+    store.upsert(con, [_row(geom_zaun=fence, flaeche_zaun_m2=160000, split="test")])
+    c = g.reproject(fence.centroid, "EPSG:4326", "EPSG:32633")
+    x0, y0 = round(c.x) - 1000, round(c.y) + 1000
+    aff, crs = (x0, 10.0, y0, -10.0), "EPSG:32633"
+    pv = np.zeros((200, 200), np.float32)
+    pv[80:120, 80:120] = 1
+    pv[90:110, 90:110] = 0                                                # holes: one plant, several fragments
+    pv[:, 190:] = 1                                                       # phantom strip at the edge without data
+    wc = np.full((200, 200), 40, np.float32)
+    wc[:, 190:] = np.nan
+    bbox = list(box(*g.reproject(box(x0, y0 - 2000, x0 + 2000, y0), crs, "EPSG:4326").bounds).bounds)
+    valid = coarse.valid_area(pv, wc, aff, crs, bbox)
+    assert not valid[:, 195].any() and valid[100, 100]
+    masks, n = coarse.coverage(con, np.where(valid, pv, 0), valid, aff, crs, bbox, "2026-10")
+    z = con.execute("SELECT zeitreihe FROM freiflaeche WHERE id='ff-pl-osm-w1'").fetchone()[0]
+    assert n == 1 and z["2026-10"]["s2"] == pytest.approx(0.75, abs=0.05)
     assert coarse.recall(con, "t", "2026-10") == {"n": 1, "hits": 1}
-    assert coarse.recall(con, "t", "2026-09") == {"n": 1, "hits": 0}
+    assert coarse.recall(con, "t", "2026-09") == {"n": 0, "hits": 0}          # not looked at in that month
 
 
 def test_scan_job_with_mocked_openeo(con, tmp_path, monkeypatch):
