@@ -414,7 +414,17 @@ def extract_osm(pbf: str, d: str, log=print) -> tuple[list[dict], list]:
     log(f"OSM: {len(feats)} Solarflächen (ohne Dachanlagen)")
     if not feats:
         return feats, []
-    zone = unary_union([x["geom"].buffer(50 / 111320) for x in feats]).simplify(5 / 111320)
+    bld = extract_buildings(pbf, d, [x["geom"] for x in feats])
+    log(f"OSM: {len(bld)} Gebäude im Umkreis von 50 m")
+    return feats, bld
+
+
+def extract_buildings(pbf: str, d: str, geoms: list) -> list:
+    """OSM buildings within 50 m of the given geometries (osmium extract on the zone, then building filter)"""
+    if not geoms:
+        return []
+    os.makedirs(d, exist_ok=True)
+    zone = unary_union([g.buffer(50 / 111320) for g in geoms]).simplify(5 / 111320)
     zone_js = os.path.join(d, "zone.geojson")
     with open(zone_js, "w") as f:
         json.dump({"type": "Feature", "properties": {}, "geometry": geo.mapping(zone)}, f)
@@ -423,9 +433,7 @@ def extract_osm(pbf: str, d: str, log=print) -> tuple[list[dict], list]:
     osmium("tags-filter", near, "wr/building", "-o", b_pbf, "--overwrite")
     osmium("export", b_pbf, "-f", "geojsonseq", "--geometry-types=polygon", "-o", b_js, "--overwrite")
     with open(b_js) as f:
-        bld = building_geoms(f)
-    log(f"OSM: {len(bld)} Gebäude im Umkreis von 50 m")
-    return feats, bld
+        return building_geoms(f)
 
 
 # -- job ---------------------------------------------------------------------------------------------------------------

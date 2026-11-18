@@ -269,6 +269,13 @@ GeoPackage von Hand in `jobs/_ground/tzsam/` legen) und speichert alles ab 0,5 h
 Starten: `curl -X POST localhost:8765/api/jobs -H 'Content-Type: application/json' -d '{"kind":"ground_inventory","params":{"region":"pl-wielkopolskie"}}'`;
 Ergebnis: `GET /api/ground/stats`, `GET /api/ground/features`.
 
+Schritt 3, **Grobsuche** (`ground_scan`, monatlich ab `ground_scan_day` nachts, wenn `ground_scan_enabled`): openEO im Copernicus
+Data Space rechnet den Eurac-Prozess `eurac_pv_farm_detection` (Sentinel-2, Median über 3 Monate) je 20-km-Kachel; nur die Karte
+(GeoTIFF) kommt auf den PC. Bekannte Anlagen erhalten einen Punkt in der Zeitreihe, Neues wird Kandidat. Winterfenster (Dez–Feb)
+werden übersprungen. Zugang: `/etc/pvmapper/openeo.env` mit `OPENEO_AUTH_CLIENT_ID`, `OPENEO_AUTH_CLIENT_SECRET` (nur root lesbar).
+Testlauf: `{"kind":"ground_scan","params":{"month":"2026-09","max_tiles":1}}`, nur Schätzung: `"dry_run":true`.
+Grobsuche und Ausgangsbestand laufen in einer eigenen Warteschlange neben der GPU.
+
 ## Kommandozeile
 
 ```bash

@@ -25,15 +25,21 @@ from ..jobs import Job, runner
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 
+CPU_KINDS = ("ground_inventory", "ground_scan")     # no GPU, mostly waiting for downloads/openEO: own lane
+
+
 class JobManager:
-    """Runs one job at a time (the GPU is the shared resource)."""
+    """Runs one GPU job at a time (the GPU is the shared resource); ground-mounted PV jobs run one at a time in a second lane."""
 
     def __init__(self, get_cfg):
         self.get_cfg = get_cfg
         self.jobs: dict[str, Job] = {}
         self.q: queue.Queue = queue.Queue()
+        self.q_cpu: queue.Queue = queue.Queue()
         self.current: Job | None = None
+        self.current_cpu: Job | None = None
         threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._worker, args=(True,), daemon=True).start()
 
     def load_existing(self):
         jd = self.get_cfg()["jobs_dir"]
@@ -53,20 +59,21 @@ class JobManager:
         job.status = "queued"
         job.save()
         self.jobs[job.id] = job
-        self.q.put(job)
+        (self.q_cpu if job.kind in CPU_KINDS else self.q).put(job)
 
-    def _worker(self):
+    def _worker(self, cpu: bool = False):
+        q = self.q_cpu if cpu else self.q
         while True:
-            job = self.q.get()
+            job = q.get()
             if job._cancel.is_set():
                 job.status = "cancelled"
                 job.save()
                 continue
-            self.current = job
+            setattr(self, "current_cpu" if cpu else "current", job)
             cfg = self.get_cfg()
             fn = runner(job.kind)
             job.run(lambda j: fn(j, cfg))
-            self.current = None
+            setattr(self, "current_cpu" if cpu else "current", None)
 
 
 def _coords(g):
@@ -118,17 +125,38 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         mgr.submit(job)
         return job
 
+    def ground_tick(now=None):
+        """monthly coarse search for ground-mounted PV: once per month from `ground_scan_day`, at night (01–05 h)"""
+        import datetime as _dt
+        from ..ground import coarse
+        c = cfg()
+        if not c.get("ground_scan_enabled"):
+            return None
+        now = now or _dt.datetime.now()
+        if now.day < int(c.get("ground_scan_day") or 5) or not 1 <= now.hour < 5:
+            return None
+        month = coarse.last_month(now.date())
+        key = f"{c.get('ground_pilot')}:{month}"
+        if state.get("ground_scan") == key or coarse.skipped(month, c) or mgr.current_cpu is not None:
+            return None
+        state["ground_scan"] = key
+        job = Job(c["jobs_dir"], "ground_scan", {"region": c.get("ground_pilot"), "month": month, "auto": True})
+        mgr.submit(job)
+        return job
+
     def sync_loop():
         import time as _t
         while True:
             _t.sleep(60)
-            try:
-                sync_tick()
-            except Exception:                                    # noqa: BLE001
-                pass
+            for tick in (sync_tick, ground_tick):
+                try:
+                    tick()
+                except Exception:                                # noqa: BLE001
+                    pass
     if not os.environ.get("PVMAPPER_NO_SCHEDULER"):
         threading.Thread(target=sync_loop, name="sync", daemon=True).start()
     app.state.sync_tick = sync_tick
+    app.state.ground_tick = ground_tick
 
     @app.middleware("http")
     async def password_gate(request, call_next):
@@ -661,7 +689,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory"):
+        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory", "ground_scan"):
             raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")

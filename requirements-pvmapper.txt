@@ -25,3 +25,5 @@ python-multipart>=0.0.9
 pyogrio>=0.7          # read GeoPackage / Shapefile without GDAL Python bindings; TZ-SAM
 psycopg[binary]>=3.1  # PostGIS: ground-mounted PV (pvmapper/ground), buildings directly from PostGIS
 # pytest              # run tests/test_pvmapper.py
+openeo>=0.30           # coarse search for ground-mounted PV on the Copernicus Data Space
+tifffile>=2023.1       # GeoTIFF results without GDAL

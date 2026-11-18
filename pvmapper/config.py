@@ -53,6 +53,15 @@ DEFAULTS = {
     "ground_regions": {},             # extra regions: {key: {cc, name, geofabrik: "europe/<path>"}}
     "ground_min_ha": 0.5,             # smaller ground-mounted installations are ignored
     "ground_max_building_share": 0.2, # candidates covered by OSM buildings beyond this share are discarded
+    "ground_scan_enabled": False,     # monthly coarse search (openEO, Copernicus Data Space) for the pilot region
+    "ground_scan_day": 5,             # day of the month (Sentinel-2 L2A of the last month is complete by then)
+    "ground_scan_months": 3,          # window length: temporal median over the last … months
+    "ground_scan_skip_months": [12, 1, 2],   # windows ending in these months are skipped (snow, clouds, low sun)
+    "ground_scan_worldcover": True,   # second band with ESA WorldCover 2021 per pixel (confidence, not a hard mask)
+    "ground_tile_km": 20,             # tile edge (the Eurac process was validated up to 20 km)
+    "ground_openeo_parallel": 2,      # batch jobs at the same time (CDSE free tier: 2)
+    "ground_openeo_poll_s": 30,
+    "openeo_backend": "https://openeo.dataspace.copernicus.eu",
     "sync_enabled": False,            # night sync with PV-Map: fetch the work list, check, send results (PV-Map docs/pvmapper-ergebnisse.md)
     "sync_start": "22:00",            # time window, local time
     "sync_end": "06:00",

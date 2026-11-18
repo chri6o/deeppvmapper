@@ -191,3 +191,132 @@ def test_inventory_job_end_to_end(con, tmp_path, monkeypatch):
     ids = [r[0] for r in con.execute("SELECT id FROM freiflaeche ORDER BY id")]
     assert ids == ["ff-pl-osm-w1", "ff-pl-tz-8"] and job.counters["test"] + 0 >= 0
     assert any("2 aktualisiert" in ln for ln in job.log_lines)
+
+
+# -- step 3: coarse search ---------------------------------------------------------------------------------------------
+
+from pvmapper.ground import coarse  # noqa: E402
+
+
+def write_tif(path, bands, x0, y0, res=10.0, epsg=32633):
+    import numpy as np
+    import tifffile
+    arr = np.stack(bands).astype("uint8")
+    extra = [(33550, "d", 3, (res, res, 0.0)), (33922, "d", 6, (0.0, 0.0, 0.0, x0, y0, 0.0)),
+             (34735, "H", 16, (1, 1, 0, 3, 1024, 0, 1, 1, 1025, 0, 1, 1, 3072, 0, 1, epsg))]
+    tifffile.imwrite(path, arr if len(bands) > 1 else arr[0], extratags=extra, planarconfig="separate" if len(bands) > 1 else None)
+
+
+def test_tiles_window_skip():
+    reg = box(16.9, 52.0, 17.3, 52.25)                                   # ~27 × 28 km
+    ts = coarse.tiles(reg, 20)
+    assert 4 <= len(ts) <= 9 and all(t["id"].startswith("E") for t in ts)
+    assert sum(t["km2"] for t in ts) == pytest.approx(geo_area(reg) / 1e6, rel=0.02)
+    assert coarse.window("2026-10") == ("2026-08-01", "2026-11-01")
+    assert coarse.window("2026-01") == ("2025-11-01", "2026-02-01")
+    assert coarse.window("2026-12") == ("2026-10-01", "2027-01-01")
+    assert coarse.skipped("2026-01", {}) and not coarse.skipped("2026-06", {})
+    import datetime as dt
+    assert coarse.last_month(dt.date(2026, 1, 5)) == "2025-12"
+
+
+def geo_area(g):
+    from pvmapper import geo
+    return geo.ground_area_m2(g)
+
+
+def test_geotiff_and_polygons(tmp_path):
+    import numpy as np
+    pv = np.zeros((200, 200), np.uint8)
+    pv[20:80, 30:130] = 1                                                # 60 × 100 px = 60 ha at 10 m
+    pv[40:50, 60:70] = 0                                                 # hole 1 ha
+    pv[150:152, 150:152] = 1                                             # noise
+    wc = np.full((200, 200), 40, np.uint8)
+    wc[20:80, 30:80] = 10
+    f = str(tmp_path / "t.tif")
+    write_tif(f, [pv, wc], 500000.0, 5800000.0)
+    arr, aff, crs = coarse.read_geotiff(f)
+    assert arr.shape == (2, 200, 200) and crs == "EPSG:32633" and aff == (500000.0, 10.0, 5800000.0, -10.0)
+    ps = coarse.polygons(arr[0], aff, crs)
+    assert len(ps) == 1
+    assert geo_area(ps[0]) == pytest.approx(60e4 - 1e4, rel=0.03)
+    import cv2
+    m = np.zeros((200, 200), np.uint8)
+    m[20:80, 30:130] = 1
+    sh = coarse.worldcover_shares(arr[1], m)
+    assert sh["baum"] == pytest.approx(0.5, abs=0.01) and sh["acker"] == pytest.approx(0.5, abs=0.01)
+
+
+def test_match_known_new_and_buildings(con):
+    known = _row(geom_zaun=sq(17, 52, 200), flaeche_zaun_m2=40000, split="test")
+    store.upsert(con, [known])
+    new = sq(17.5, 52, 150)
+    housing = sq(17.8, 52, 100)
+    n = coarse.match(con, [sq(17, 52, 190), new, housing, sq(18, 52, 30)], "2026-10", "PL", "t", CFG,
+                     [housing.buffer(-D)], [None, {"wasser": 0.9}, None, None])
+    assert n == {"flaechen": 3, "zu_klein": 1, "gebaeude": 1, "bekannt": 1, "neu": 1}
+    z = con.execute("SELECT zeitreihe FROM freiflaeche WHERE id='ff-pl-osm-w1'").fetchone()[0]
+    assert z["2026-10"]["s2"] > 0.8
+    r = con.execute("SELECT herkunft, first_seen::text, typ, methode, quellen FROM freiflaeche WHERE herkunft='suche'").fetchone()
+    assert r[:4] == ("suche", "2026-10-01", "floating", "s2_polygon") and r[4]["worldcover_2021"] == {"wasser": 0.9}
+    # seen again next month: same id, confidence from the time series
+    coarse.match(con, [new.buffer(D)], "2026-11", "PL", "t", CFG, [], None)
+    coarse.confidence(con, "t")
+    rows = con.execute("SELECT id, konfidenz, zeitreihe FROM freiflaeche WHERE herkunft='suche'").fetchall()
+    assert len(rows) == 1 and rows[0][1] == 1.0 and set(rows[0][2]) == {"2026-10", "2026-11"}
+    assert coarse.recall(con, "t", "2026-10") == {"n": 1, "hits": 1}
+    assert coarse.recall(con, "t", "2026-09") == {"n": 1, "hits": 0}
+
+
+def test_scan_job_with_mocked_openeo(con, tmp_path, monkeypatch):
+    import numpy as np
+    from pvmapper.jobs import Job, runner
+    base = tmp_path / "_ground" / "pl-wielkopolskie"
+    base.mkdir(parents=True)
+    (base / "region.poly").write_text("r\n1\n  16.9 52.0\n  16.9 52.1\n  17.1 52.1\n  17.1 52.0\nEND\nEND\n")
+    calls = []
+
+    def fake_tiles(conn, todo, start, end, d, cfg, job, state, save_state):
+        calls.append((len(todo), start, end))
+        from pvmapper import geo as g
+        for t in todo:
+            pv = np.zeros((100, 100), np.uint8)
+            c = g.reproject(box(*t["bbox"]).centroid, "EPSG:4326", "EPSG:32633")
+            pv[10:40, 10:60] = 1                                         # 15 ha
+            write_tif(os.path.join(d, t["id"] + ".tif"), [pv], round(c.x) - 500, round(c.y) + 500)
+            state.setdefault("done", []).append(t["id"])
+    monkeypatch.setattr(coarse, "connect", lambda cfg, log=print: object())
+    monkeypatch.setattr(coarse, "run_tiles", fake_tiles)
+    cfg = {**CFG, "ground_db": DSN, "jobs_dir": str(tmp_path)}
+    job = Job(str(tmp_path), "ground_scan", {"region": "pl-wielkopolskie", "month": "2026-01"})
+    runner("ground_scan")(job, cfg)
+    assert not calls and any("Winterfenster" in ln for ln in job.log_lines)
+    job = Job(str(tmp_path), "ground_scan", {"region": "pl-wielkopolskie", "month": "2026-09", "dry_run": True})
+    runner("ground_scan")(job, cfg)
+    assert not calls and any("Credits" in ln for ln in job.log_lines)
+    job = Job(str(tmp_path), "ground_scan", {"region": "pl-wielkopolskie", "month": "2026-09", "max_tiles": 2})
+    runner("ground_scan")(job, cfg)
+    assert calls == [(2, "2026-07-01", "2026-10-01")]
+    assert con.execute("SELECT count(*) FROM freiflaeche WHERE herkunft='suche'").fetchone()[0] == 2
+    assert job.counters["neu"] == 2
+
+
+def test_cpu_lane_and_monthly_tick(tmp_path, monkeypatch):
+    import datetime as dt
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv("PVMAPPER_NO_SCHEDULER", "1")
+    from pvmapper.web import app as webapp
+    p = tmp_path / "pvmapper.yml"
+    p.write_text(f"jobs_dir: {tmp_path}/jobs\nground_scan_enabled: true\nground_pilot: pl-wielkopolskie\n")
+    a = webapp.create_app(str(p))
+    TestClient(a)
+    started = []
+    monkeypatch.setattr(webapp.JobManager, "submit", lambda self, job: started.append(job))
+    tick = a.state.ground_tick
+    assert tick(dt.datetime(2026, 11, 3, 2)) is None                     # before the scan day
+    assert tick(dt.datetime(2026, 11, 6, 14)) is None                    # daytime
+    j = tick(dt.datetime(2026, 11, 6, 2))
+    assert j.kind == "ground_scan" and j.params["month"] == "2026-10"
+    assert tick(dt.datetime(2026, 11, 7, 2)) is None                     # once per month
+    assert tick(dt.datetime(2027, 2, 6, 2)) is None                      # January window skipped
+    assert "ground_scan" in webapp.CPU_KINDS
