@@ -500,7 +500,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         if geo.ground_area_m2(region) > 4e6:
             raise HTTPException(400, "Gebiet zu groß (höchstens 4 km²) – bitte näher heranzoomen oder kleiner zeichnen.")
         try:
-            feats = osm.buildings(region)
+            feats = osm.buildings(region, quick=True)
         except Exception as e:                                   # noqa: BLE001
             raise HTTPException(502, str(e))
         if body.get("geometry") and body.get("inside", True):

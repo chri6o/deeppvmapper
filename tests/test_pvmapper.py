@@ -1323,7 +1323,7 @@ def test_area_job_on_osm_buildings_only(tmp_path, monkeypatch):
     bld_w, bld_s, bld_e, bld_n = 13.4001, 52.52005, 13.40045, 52.52025          # one building in the western cell
     calls = []
 
-    def fake_fetch(q, timeout=180):
+    def fake_fetch(q, **kw):
         calls.append(q)
         ring = [(bld_w, bld_s), (bld_e, bld_s), (bld_e, bld_n), (bld_w, bld_n), (bld_w, bld_s)]
         return {"elements": [{"type": "way", "id": 1, "tags": {"building": "school", "roof:shape": "flat"},
@@ -1395,7 +1395,7 @@ def test_pick_osm_buildings_and_start_roof_potential(tmp_path, monkeypatch):
 
     def ring(w, s, e, n):
         return [{"lon": x, "lat": y} for x, y in [(w, s), (e, s), (e, n), (w, n), (w, s)]]
-    monkeypatch.setattr(osm, "_fetch", lambda q, timeout=180: {"elements": [
+    monkeypatch.setattr(osm, "_fetch", lambda q, **kw: {"elements": [
         {"type": "way", "id": 1, "tags": {"building": "school", "roof:shape": "flat", "name": "TEST Schule"},
          "geometry": ring(13.4001, 52.52005, 13.40045, 52.52025)},
         {"type": "way", "id": 2, "tags": {"building": "yes"}, "geometry": ring(13.4006, 52.52005, 13.4008, 52.5202)}]})
@@ -1431,3 +1431,36 @@ def test_pick_osm_buildings_and_start_roof_potential(tmp_path, monkeypatch):
     res = c.get(f"/api/jobs/{j['id']}/results").json()
     assert res["rows"][0]["id"] == "osm:way/1" and res["rows"][0]["roof_type"] == "flat" and res["rows"][0]["usable_area_m2"] > 0
     assert res["roofs"]["features"]
+
+
+def test_osm_falls_back_to_the_editing_api(monkeypatch):
+    """Overpass down → OSM API /map (XML) in small tiles; split multipolygon rings are assembled"""
+    from pvmapper import osm
+    xml = b"""<?xml version="1.0"?><osm version="0.6">
+      <node id="1" lon="13.4001" lat="52.5201"/><node id="2" lon="13.4004" lat="52.5201"/><node id="3" lon="13.4004" lat="52.5203"/>
+      <node id="4" lon="13.4001" lat="52.5203"/>
+      <node id="5" lon="13.4006" lat="52.5201"/><node id="6" lon="13.4008" lat="52.5201"/><node id="7" lon="13.4008" lat="52.5203"/>
+      <node id="8" lon="13.4006" lat="52.5203"/>
+      <way id="10"><nd ref="1"/><nd ref="2"/><nd ref="3"/><nd ref="4"/><nd ref="1"/><tag k="building" v="school"/><tag k="roof:shape" v="flat"/></way>
+      <way id="11"><nd ref="5"/><nd ref="6"/><nd ref="7"/></way><way id="12"><nd ref="7"/><nd ref="8"/><nd ref="5"/></way>
+      <way id="13"><nd ref="1"/><nd ref="5"/></way>
+      <relation id="20"><member type="way" ref="11" role="outer"/><member type="way" ref="12" role="outer"/>
+        <tag k="type" v="multipolygon"/><tag k="building" v="yes"/></relation></osm>"""
+
+    def down(q, **kw):
+        raise RuntimeError("Overpass nicht erreichbar (test)")
+
+    class R:
+        status_code = 200
+        content = xml
+        text = ""
+    calls = []
+    monkeypatch.setattr(osm, "_fetch", down)
+    monkeypatch.setattr(osm.requests, "get", lambda *a, **k: calls.append(k["params"]) or R())
+    monkeypatch.setattr(osm.time, "sleep", lambda s: None)
+    osm._DOWN["until"] = 0
+    f = osm.buildings(box(13.4000, 52.5200, 13.4010, 52.5204), quick=True)
+    assert {x["id"] for x in f} == {"osm:way/10", "osm:relation/20"} and len(calls) == 1
+    assert f[0]["properties"]["roof:shape"] == "flat" or f[1]["properties"].get("roof:shape") == "flat"
+    assert osm._DOWN["until"] > 0
+    osm._DOWN["until"] = 0
