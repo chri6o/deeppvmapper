@@ -276,6 +276,14 @@ werden übersprungen. Zugang: `/etc/pvmapper/openeo.env` mit `OPENEO_AUTH_CLIENT
 Testlauf: `{"kind":"ground_scan","params":{"month":"2026-09","max_tiles":1}}`, nur Schätzung: `"dry_run":true`.
 Grobsuche und Ausgangsbestand laufen in einer eigenen Warteschlange neben der GPU.
 
+**Prüfen** im Bereich „Freiflächen“: bestätigen, verwerfen (mit Grund), Typ setzen, zurücksetzen; „Nächste →“ bzw. Taste N.
+Entscheidungen stehen in der Historie und überleben neue Importe und Suchläufe.
+
+**Leistung** (Schritt 5, erste Stufe; `ground_capacity`, läuft auch nach jedem Import und Suchlauf): mit Modulreihen
+Modulfläche × Wirkungsgrad nach Baujahr ÷ cos(Neigung), sonst Zaunfläche × Leistungsdichte nach Typ und Baujahr
+(`pvmapper/ground/ground_density.yml`, änderbar). Immer als Spanne mit Methode; AC = DC ÷ 1,2–1,4; Ertrag aus PVGIS (fest,
+optimaler Winkel, je 0,1°-Zelle zwischengespeichert). Kein Kalibrieren mit Registern; OSM-Leistungen nur als Gegencheck im Log.
+
 ## Kommandozeile
 
 ```bash

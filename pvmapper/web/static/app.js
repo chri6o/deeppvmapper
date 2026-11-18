@@ -85,12 +85,14 @@ function groundPopup(p) {
     ` · ${esc(G_STATUS[p.pruefstatus] || p.pruefstatus)}${p.verwurf_grund ? " (" + esc(G_REASONS[p.verwurf_grund.replace("manuell:", "")] || p.verwurf_grund) + ")" : ""}` +
     `${p.typ && p.typ !== "unbekannt" ? "<br>Typ: " + esc(p.typ) : ""}${p.baujahr_schaetzung ? "<br>Baujahr: " + p.baujahr_schaetzung : ""}` +
     `${p.first_seen ? "<br>zuerst gesehen: " + esc(p.first_seen.slice(0, 7)) : ""}` +
-    `${q.osm_leistung_kwp ? "<br>Leistung laut OSM: " + fmt(q.osm_leistung_kwp / 1000, 1) + " MWp" : ""}` +
+    `${p.kwp_min != null ? `<br><b>Leistung (Schätzung): ${fmt(p.kwp_min / 1000, 1)}–${fmt(p.kwp_max / 1000, 1)} MWp</b> DC · AC ${fmt(p.ac_kw_min / 1000, 1)}–${fmt(p.ac_kw_max / 1000, 1)} MW<br><span class="muted">Methode: ${esc(G_METHOD[p.methode] || p.methode)}${p.ertrag_kwh_kwp ? ` · Ertrag ${fmt(p.ertrag_kwh_kwp)} kWh/kWp (PVGIS, fest)` : ""}</span>` : ""}` +
+    `${q.osm_leistung_kwp ? "<br>Leistung laut OSM: " + fmt(q.osm_leistung_kwp / 1000, 1) + " MWp (nur Gegencheck)" : ""}` +
     `${q.tzsam_kwp_schaetzung ? "<br>TZ-SAM-Schätzung: " + fmt(q.tzsam_kwp_schaetzung / 1000, 1) + " MW" : ""}` +
     `${months ? "<br>als PV erkannt (Sentinel-2): " + months : ""}${wc ? "<br>WorldCover 2021: " + wc : ""}` +
     `${osmLinks ? "<br>OSM: " + osmLinks : ""}${(q.tzsam || []).length ? "<br>TZ-SAM: " + esc(q.tzsam.join(", ")) + " (CC BY-NC)" : ""}` +
     (q.osm_name ? `<br><span class="muted">${esc(p.id)}</span>` : "") + groundReviewHtml(p);
 }
+const G_METHOD = { modulflaeche: "Modulfläche × Wirkungsgrad nach Baujahr", zaunflaeche: "Zaunfläche × Leistungsdichte nach Typ und Baujahr", s2_polygon: "Sentinel-2-Fläche × Leistungsdichte (grob)" };
 const G_TYPES = { fest_sued: "fest, Süd", fest_ost_west: "fest, Ost-West", tracker: "Tracker", agri_vertikal: "Agri-PV vertikal", floating: "Floating", unbekannt: "unbekannt" };
 const G_REASONS = { keine_pv: "keine PV", gewaechshaus: "Gewächshaus/Folie", baustelle: "Baustelle ohne Module", dach: "Dachanlage", doppelt: "doppelt erfasst", sonstiges: "sonstiges" };
 const G_STATUS = { kandidat: "zu prüfen", manuell_geprueft: "bestätigt", gegenprobe_bestaetigt: "bestätigt (Gegenprobe)", verworfen: "verworfen" };
@@ -147,12 +149,15 @@ async function loadGround(fit, keepView) {
     `<div><b>${fmt(v.n)}</b> ${esc(G_TXT[k] || k)}<br><span class="muted">${fmt(v.ha)} ha${v.drop ? ", " + fmt(v.drop) + " verworfen" : ""}</span></div>`).join("")
     : `<p class="hint">Noch keine Daten für diese Region: unten „Ausgangsbestand laden“.</p>`;
   const cand = fc.features.slice().sort((a, b) => b.properties.flaeche_zaun_m2 - a.properties.flaeche_zaun_m2);
+  const sum = (k) => cand.reduce((a, f) => a + (f.properties[k] || 0), 0);
+  if (cand.some((f) => f.properties.kwp_min != null))
+    $("#g-stats").insertAdjacentHTML("beforeend", `<div><b>${fmt(sum("kwp_min") / 1000)}–${fmt(sum("kwp_max") / 1000)}</b> MWp<br><span class="muted">Auswahl, geschätzt</span></div>`);
   const s2 = (p) => { const z = p.zeitreihe || {}, k = Object.keys(z).sort().pop(); return k && z[k].s2 != null ? Math.round(z[k].s2 * 100) + " %" : "–"; };
   $("#g-list").innerHTML = cand.length ? `<h3>${fmt(cand.length)} Flächen in der Auswahl${cand.length > 300 ? " (300 größte gelistet)" : ""}</h3>` +
-    `<table class="tbl"><tr><th>Fläche</th><th>Herkunft</th><th>Stand</th><th title="zuletzt als PV erkannt (Sentinel-2)">S2</th><th>Name / Boden 2021</th></tr>` +
+    `<table class="tbl"><tr><th>Fläche</th><th>Herkunft</th><th>Stand</th><th title="zuletzt als PV erkannt (Sentinel-2)">S2</th><th title="geschätzte DC-Leistung (Mitte der Spanne)">MWp</th><th>Name / Boden 2021</th></tr>` +
     cand.slice(0, 300).map((f) => { const p = f.properties, q = p.quellen || {}, wc = q.worldcover_2021 || {};
       return `<tr class="click${p.id === S.gLast ? " sel" : ""}" data-id="${esc(p.id)}"><td>${fmt(p.flaeche_zaun_m2 / 1e4, 1)} ha</td><td>${esc(G_TXT[p.herkunft] || "")}</td>` +
-        `<td>${esc(G_STATUS[p.pruefstatus] || p.pruefstatus)}</td><td>${s2(p)}</td><td>${esc(q.osm_name || Object.keys(wc).join(", "))}</td></tr>`; }).join("") + "</table>"
+        `<td>${esc(G_STATUS[p.pruefstatus] || p.pruefstatus)}</td><td>${s2(p)}</td><td>${p.kwp_min == null ? "–" : fmt((p.kwp_min + p.kwp_max) / 2000, 1)}</td><td>${esc(q.osm_name || Object.keys(wc).join(", "))}</td></tr>`; }).join("") + "</table>"
     : `<p class="hint">Keine Flächen in dieser Auswahl.</p>`;
   $$("#g-list tr.click").forEach((tr) => tr.onclick = () => {
     const l = groundLayer.getLayers().find((x) => x.feature.properties.id === tr.dataset.id);
@@ -185,6 +190,7 @@ async function initGround() {
       catch (e) { $("#g-msg").textContent = e.message; }
     };
     $("#g-inv").onclick = () => start("ground_inventory", { region: $("#g-region").value });
+    $("#g-cap").onclick = () => start("ground_capacity", { region: $("#g-region").value });
     $("#g-scan").onclick = () => start("ground_scan", { region: $("#g-region").value, month: $("#g-month").value, dry_run: $("#g-dry").checked });
     await loadGround(true);
   } else loadGround(false);

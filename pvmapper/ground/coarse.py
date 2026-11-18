@@ -409,6 +409,8 @@ def run(job, cfg: dict):
             + (f"; verbraucht {sum(cr):.0f} Credits" if cr else "") + (f"; {len(state.get('failed', []))} Kacheln fehlgeschlagen"
                                                                      if state.get("failed") else ""))
     recall(con, key, month, job.log)
+    from . import capacity
+    capacity.apply(con, key, cfg, job.log)
 
 
 def recall(con, region: str, month: str, log=print) -> dict:

@@ -386,3 +386,54 @@ def test_rescan_does_not_resurrect_discarded_candidate(con):
     n = coarse.match(con, [g.buffer(D)], "2026-10", "PL", "t", CFG, [], None)
     assert n["neu"] == 0 and n["bekannt"] == 1
     assert con.execute("SELECT count(*) FROM freiflaeche WHERE herkunft='suche'").fetchone()[0] == 1
+
+
+# -- step 5 (first stage): capacity ------------------------------------------------------------------------------------
+
+from pvmapper.ground import capacity  # noqa: E402
+
+
+def test_density_table_and_estimate():
+    c = capacity.conf()
+    assert capacity.density("fest_sued", 2015, c) == (0.5, 0.7)
+    assert capacity.density("fest_sued", 2024, c) == (0.8, 1.0)
+    lo, hi = capacity.density("fest_sued", 2020, c)
+    assert lo == pytest.approx(0.65) and hi == pytest.approx(0.85)                # halfway between 2018 and 2022
+    assert capacity.density("fest_sued", 2008, c) == (0.5, 0.7)
+    assert capacity.density("tracker", None, c) == (0.5, 0.7)
+    assert capacity.density("agri_vertikal", 2023, c) == (0.3, 0.4)
+    assert capacity.density("unbekannt", None, c) == (0.5, 1.0)
+    from pvmapper import typology
+    t = typology.settings({})
+    e = capacity.estimate({"typ": "fest_sued", "baujahr_schaetzung": 2023, "flaeche_zaun_m2": 100000, "herkunft": "bestand_osm"}, c, t)
+    assert (e["kwp_min"], e["kwp_max"], e["methode"]) == (8000, 10000, "zaunflaeche")
+    assert e["ac_kw_min"] == pytest.approx(8000 / 1.4, abs=0.1) and e["ac_kw_max"] == pytest.approx(10000 / 1.2, abs=0.1)
+    m = capacity.estimate({"typ": "fest_sued", "baujahr_schaetzung": 2023, "flaeche_zaun_m2": 100000, "flaeche_module_m2": 40000,
+                           "herkunft": "bestand_osm"}, c, t)
+    assert m["methode"] == "modulflaeche" and 40000 * 0.215 / 0.97 < m["kwp_min"] < m["kwp_max"] < 40000 * 0.215 / 0.8
+    v = capacity.estimate({"typ": "agri_vertikal", "flaeche_zaun_m2": 100000, "flaeche_module_m2": 5000, "herkunft": "bestand_osm"}, c, t)
+    assert v["methode"] == "zaunflaeche"                                         # vertical: module area method not applicable
+    s = capacity.estimate({"typ": "unbekannt", "first_seen": "2026-09-01", "flaeche_zaun_m2": 20000, "herkunft": "suche"}, c, t)
+    assert s["methode"] == "s2_polygon" and s["kwp_min"] == 1600
+
+
+def test_capacity_apply_with_pvgis_cache(con):
+    store.upsert(con, [_row(baujahr_schaetzung=2023, flaeche_zaun_m2=100000, quellen={"osm": ["w1"], "osm_leistung_kwp": 9000}),
+                       _row("ff-pl-osm-w2", flaeche_zaun_m2=50000, geom_zaun=sq(17.01, 52.0, 100))])
+    calls = []
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"outputs": {"totals": {"fixed": {"E_y": 1086.2}}},
+                                "inputs": {"mounting_system": {"fixed": {"slope": {"value": 40}}}, "meteo_data": {"radiation_db": "X"}}}
+
+    class Sess:
+        def get(self, url, **k):
+            calls.append(k["params"]); return R()
+    out = capacity.apply(con, "t", {}, log=lambda m: None, session=Sess())
+    assert out["anlagen"] == 2 and out["in_spanne"] == 1 and out["median_fehler"] == pytest.approx(0.0)
+    assert len(calls) == 1                                                        # both in the same 0.1° cell
+    r = con.execute("SELECT kwp_min, kwp_max, methode, ertrag_kwh_kwp FROM freiflaeche WHERE id='ff-pl-osm-w1'").fetchone()
+    assert r == (8000, 10000, "zaunflaeche", pytest.approx(1086.2))
+    capacity.apply(con, "t", {}, log=lambda m: None, session=Sess())
+    assert len(calls) == 1                                                        # cached

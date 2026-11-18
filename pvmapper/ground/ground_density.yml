@@ -1,0 +1,41 @@
+# Capacity of ground-mounted PV (docs/freiflaechen.md, step 5). Start values from Christoph, 18.11.2026; edit freely.
+# Never fitted to registers (MaStR or others): registers are only a cross-check later.
+
+# DC capacity per fenced hectare (MWp/ha) by type and build year; between the listed years linear, outside the nearest value.
+density_mwp_per_ha:
+  fest_sued:
+    2012: [0.5, 0.7]
+    2018: [0.5, 0.7]
+    2022: [0.8, 1.0]
+  fest_ost_west:          # start value = fixed south (no own figure yet); east-west fields are usually denser – check
+    2012: [0.5, 0.7]
+    2018: [0.5, 0.7]
+    2022: [0.8, 1.0]
+  tracker:
+    2012: [0.5, 0.7]
+  agri_vertikal:
+    2012: [0.3, 0.4]
+  floating:               # start value = fixed south (no own figure yet) – check
+    2012: [0.5, 0.7]
+    2018: [0.5, 0.7]
+    2022: [0.8, 1.0]
+  unbekannt:              # type not yet known: range of fixed systems
+    2012: [0.5, 0.7]
+    2018: [0.5, 0.7]
+    2022: [0.8, 1.0]
+unknown_year: [0.5, 1.0]  # no build year: whole range of fixed systems (type tracker/agri: their own range)
+
+# module area (rows from OSM generators or the fine analysis, plan view) → real module area: divide by cos(tilt)
+tilt_deg:
+  fest_sued: [15, 35]
+  fest_ost_west: [8, 15]
+  tracker: [0, 30]        # plan view depends on the sun position at the flight
+  agri_vertikal: null     # vertical: plan view shows only the edge, module area method not applicable
+  floating: [8, 15]
+  unbekannt: [8, 35]
+
+dc_ac_ratio: [1.2, 1.4]   # AC = DC ÷ ratio
+pvgis:
+  url: https://re.jrc.ec.europa.eu/api/v5_3/PVcalc
+  loss_pct: 14
+  grid_deg: 0.1           # one PVGIS request per grid cell (cached)

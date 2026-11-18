@@ -25,7 +25,7 @@ from ..jobs import Job, runner
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 
-CPU_KINDS = ("ground_inventory", "ground_scan")     # no GPU, mostly waiting for downloads/openEO: own lane
+CPU_KINDS = ("ground_inventory", "ground_scan", "ground_capacity")     # no GPU, mostly waiting for downloads/openEO: own lane
 
 
 class JobManager:
@@ -700,7 +700,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory", "ground_scan"):
+        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory", "ground_scan", "ground_capacity"):
             raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")

@@ -493,4 +493,6 @@ def run(job, cfg: dict):
     ref = sum(1 for r in rows if r["quellen"].get("osm_leistung_kwp"))
     job.counters.update({**{k: v for k, v in {**c1, **c2}.items() if isinstance(v, int)}, "test": test, "mit_leistung": ref})
     job.log(f"Fertig: {len(rows)} Flächen, davon {test} Testmenge (räumlich), {ref} mit Leistungsangabe in OSM (nur Gegencheck).")
+    from . import capacity
+    capacity.apply(con, key, cfg, job.log)
     job.step()
