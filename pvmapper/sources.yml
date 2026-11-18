@@ -386,6 +386,24 @@ sources:
     attribution: "© Beeldmateriaal Nederland / PDOK"
     priority: 40
 
+  # ---------------------------------------------------------------- Poland
+  pl-gugik:
+    name: "PL · Ortofotomapa (GUGiK, Standardauflösung)"
+    country: PL
+    region: Polska
+    type: wms
+    url: https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution
+    layers: Raster
+    crs: EPSG:2180
+    native_resolution_m: 0.25
+    bbox: [14.07, 49.0, 24.15, 54.84]
+    license: "frei, ohne Gebühren (GUGiK); kein automatisches Massen-Herunterladen (Harvesting)"
+    attribution: "© GUGiK (geoportal.gov.pl)"
+    priority: 20
+    concurrency: 2
+    min_interval_s: 0.5
+    notes: "Aufnahmedatum je Ort über den WFS-Skorowidz (Schritt 4 Freiflächen)"
+
   # ---------------------------------------------------------------- Austria
   at-basemap:
     name: "AT · basemap.at Orthofoto (≈ 20–30 cm)"

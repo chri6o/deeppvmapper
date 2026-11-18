@@ -67,6 +67,82 @@ const roofLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 layerCtl.addOverlay(roofLayer, "Freie Dachflächen und Aufbauten");
+// ground-mounted PV (docs/freiflaechen.md): own layer, coloured by origin
+const G_COL = { bestand_osm: "#2563eb", bestand_tzsam: "#7c3aed", suche: "#ea580c" };
+const G_TXT = { bestand_osm: "OSM", bestand_tzsam: "TZ-SAM", suche: "neu gefunden" };
+const groundLayer = L.geoJSON(null, {
+  style: (f) => f.properties.pruefstatus === "verworfen" ? { color: "#64748b", weight: 1, dashArray: "4 3", fillOpacity: .05 }
+    : { color: G_COL[f.properties.herkunft] || "#64748b", weight: 2, fillOpacity: f.properties.herkunft === "suche" ? .3 : .12 },
+  onEachFeature: (f, l) => l.bindPopup(() => groundPopup(f.properties)),
+});
+layerCtl.addOverlay(groundLayer, "Freiflächen");
+function groundPopup(p) {
+  const q = p.quellen || {}, z = p.zeitreihe || {};
+  const osmLinks = (q.osm || []).map((k) => `<a href="https://www.openstreetmap.org/${{ w: "way", r: "relation", n: "node" }[k[0]] || "way"}/${k.slice(1)}" target="_blank">${esc(k)}</a>`).join(", ");
+  const months = Object.keys(z).sort().map((m) => `${m}: ${z[m].s2 == null ? "–" : Math.round(z[m].s2 * 100) + " %"}`).join(" · ");
+  const wc = q.worldcover_2021 ? Object.entries(q.worldcover_2021).map(([k, v]) => `${esc(k)} ${Math.round(v * 100)} %`).join(", ") : "";
+  return `<b>${esc(q.osm_name || p.id)}</b><br>${esc(G_TXT[p.herkunft] || p.herkunft)} · ${fmt(p.flaeche_zaun_m2 / 1e4, 1)} ha` +
+    ` · ${esc(p.pruefstatus)}${p.verwurf_grund ? " (" + esc(p.verwurf_grund) + ")" : ""}` +
+    `${p.typ && p.typ !== "unbekannt" ? "<br>Typ: " + esc(p.typ) : ""}${p.baujahr_schaetzung ? "<br>Baujahr: " + p.baujahr_schaetzung : ""}` +
+    `${p.first_seen ? "<br>zuerst gesehen: " + esc(p.first_seen.slice(0, 7)) : ""}` +
+    `${q.osm_leistung_kwp ? "<br>Leistung laut OSM: " + fmt(q.osm_leistung_kwp / 1000, 1) + " MWp" : ""}` +
+    `${q.tzsam_kwp_schaetzung ? "<br>TZ-SAM-Schätzung: " + fmt(q.tzsam_kwp_schaetzung / 1000, 1) + " MW" : ""}` +
+    `${months ? "<br>als PV erkannt (Sentinel-2): " + months : ""}${wc ? "<br>WorldCover 2021: " + wc : ""}` +
+    `${osmLinks ? "<br>OSM: " + osmLinks : ""}${(q.tzsam || []).length ? "<br>TZ-SAM: " + esc(q.tzsam.join(", ")) + " (CC BY-NC)" : ""}` +
+    (q.osm_name ? `<br><span class="muted">${esc(p.id)}</span>` : "");
+}
+async function loadGround(fit) {
+  const region = $("#g-region").value, h = $("#g-filter").value;
+  const qs = new URLSearchParams({ region });
+  if (h) qs.set("herkunft", h);
+  if (!$("#g-dropped").checked) qs.set("pruefstatus", "kandidat,manuell_geprueft,gegenprobe_bestaetigt");
+  let fc, st;
+  try { [fc, st] = await Promise.all([api("/api/ground/features?" + qs), api("/api/ground/stats?region=" + encodeURIComponent(region))]); }
+  catch (e) { $("#g-stats").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  groundLayer.clearLayers(); groundLayer.addData(fc);
+  const by = {};
+  for (const r of st.rows) { const k = r.herkunft; by[k] = by[k] || { n: 0, ha: 0, drop: 0 }; by[k].n += r.n; by[k].ha += r.ha; if (r.pruefstatus === "verworfen") by[k].drop += r.n; }
+  $("#g-stats").innerHTML = Object.keys(by).length ? Object.entries(by).map(([k, v]) =>
+    `<div><b>${fmt(v.n)}</b> ${esc(G_TXT[k] || k)}<br><span class="muted">${fmt(v.ha)} ha${v.drop ? ", " + fmt(v.drop) + " verworfen" : ""}</span></div>`).join("")
+    : `<p class="hint">Noch keine Daten für diese Region: unten „Ausgangsbestand laden“.</p>`;
+  const cand = fc.features.filter((f) => f.properties.herkunft === "suche").sort((a, b) => b.properties.flaeche_zaun_m2 - a.properties.flaeche_zaun_m2);
+  $("#g-list").innerHTML = cand.length ? `<h3>Neue Kandidaten (${fmt(cand.length)})</h3><table class="tbl"><tr><th>Fläche</th><th>zuerst</th><th>Konfidenz</th><th>Bodenbedeckung 2021</th></tr>` +
+    cand.slice(0, 300).map((f) => { const p = f.properties, wc = (p.quellen || {}).worldcover_2021 || {};
+      return `<tr class="click" data-id="${esc(p.id)}"><td>${fmt(p.flaeche_zaun_m2 / 1e4, 1)} ha</td><td>${esc((p.first_seen || "").slice(0, 7))}</td>` +
+        `<td>${p.konfidenz == null ? "–" : Math.round(p.konfidenz * 100) + " %"}</td><td>${esc(Object.keys(wc).join(", "))}</td></tr>`; }).join("") + "</table>" : "";
+  $$("#g-list tr.click").forEach((tr) => tr.onclick = () => {
+    const l = groundLayer.getLayers().find((x) => x.feature.properties.id === tr.dataset.id);
+    if (l) { map.fitBounds(l.getBounds(), { maxZoom: 17 }); l.openPopup(); }
+  });
+  if (fit && groundLayer.getLayers().length) map.fitBounds(groundLayer.getBounds(), { maxZoom: 15 });
+  groundOrtho();
+}
+function groundOrtho() {
+  if (currentTab() !== "ground") return;
+  const cc = (S.gRegions?.regions?.[$("#g-region").value] || {}).cc;
+  const src = S.sources.filter((s) => s.country === cc).sort((a, b) => a.priority - b.priority)[0];
+  if ($("#g-ortho").checked && src) { if (S.srcLayer?.srcId !== src.id) { showSource(src.id); if (S.srcLayer) S.srcLayer.srcId = src.id; } }
+  else if (!$("#g-ortho").checked && S.srcLayer) { map.removeLayer(S.srcLayer); layerCtl.removeLayer(S.srcLayer); S.srcLayer = null; }
+}
+async function initGround() {
+  if (!S.gRegions) {
+    S.gRegions = await api("/api/ground/regions");
+    $("#g-region").innerHTML = Object.entries(S.gRegions.regions).map(([k, r]) => `<option value="${esc(k)}"${k === S.gRegions.pilot ? " selected" : ""}>${esc(r.name)} (${esc(r.cc)})</option>`).join("");
+    const d = new Date(); d.setMonth(d.getMonth() - 1); $("#g-month").value = d.toISOString().slice(0, 7);
+    ["#g-region", "#g-filter", "#g-dropped"].forEach((q) => $(q).onchange = () => loadGround(q === "#g-region"));
+    $("#g-ortho").onchange = groundOrtho;
+    $("#g-reload").onclick = () => loadGround(false);
+    const start = async (kind, params) => {
+      try { const j = await api("/api/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, params }) });
+        started(j); $("#g-msg").textContent = "Gestartet – Fortschritt unter Ergebnisse."; }
+      catch (e) { $("#g-msg").textContent = e.message; }
+    };
+    $("#g-inv").onclick = () => start("ground_inventory", { region: $("#g-region").value });
+    $("#g-scan").onclick = () => start("ground_scan", { region: $("#g-region").value, month: $("#g-month").value, dry_run: $("#g-dry").checked });
+    await loadGround(true);
+  } else loadGround(false);
+}
+
 // OSM buildings picked for the roof potential ('Fläche auswerten' → Dachpotenzial)
 S.osm = new Map(); S.picked = new Set();
 const osmLayer = L.geoJSON(null, {
@@ -235,6 +311,7 @@ function mapMode() {
   want(roofLayer, t === "results");
   want(instLayer, t === "results" || (checking && S.mode === "point"));
   want(dataLayer, t === "results" || (checking && ["list", "point"].includes(S.mode)));
+  want(groundLayer, t === "ground");
   showInstLegend(map.hasLayer(instLayer) && instLayer.getLayers().length > 0);
 }
 function tab(name) {
@@ -244,6 +321,7 @@ function tab(name) {
   if (name === "check" && S.mode === "list" && S.input) { dataLayer.clearLayers(); dataLayer.addData(S.input.preview); }
   if (name === "train" && S.sub === "data") { loadDatasets(M.ds); if (M.item) showEditor(true); } else showEditor(false);
   if (name === "train" && S.sub === "models") loadModels();
+  if (name === "ground") initGround();
   if (name === "train" && S.sub === "clean") loadCleanup();
   mapMode();
 }

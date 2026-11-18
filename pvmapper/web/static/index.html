@@ -14,6 +14,7 @@
   <nav id="tabs">
     <button data-tab="check" class="active">Prüfen</button>
     <button data-tab="results">Ergebnisse</button>
+    <button data-tab="ground">Freiflächen</button>
     <button data-tab="train">Trainieren</button>
     <button data-tab="pvmap">PV-Map</button>
     <button data-tab="settings">Einstellungen</button>
@@ -244,6 +245,34 @@
   </div>
 
   <!-- ===================================================== PV-Map -->
+  <!-- ===================================================== Freiflächen -->
+  <div class="tab hidden" id="tab-ground">
+    <h2>Freiflächen</h2>
+    <p class="hint">Solarparks, Agri-PV und Floating-PV – getrennt von den Gebäuden. Blau: bekannt aus OSM, violett: nur TZ-SAM,
+      orange: neu gefunden (Grobsuche), grau gestrichelt: verworfen.</p>
+    <div class="row">
+      <select id="g-region" style="flex:1"></select>
+      <select id="g-filter"><option value="">alle</option><option value="suche" selected>nur neue Kandidaten</option>
+        <option value="bestand_osm">OSM</option><option value="bestand_tzsam">TZ-SAM</option></select>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" id="g-dropped"> verworfene zeigen</label>
+      <label><input type="checkbox" id="g-ortho" checked> Orthofoto</label>
+      <button id="g-reload" class="secondary small" title="neu laden">↻</button>
+    </div>
+    <div id="g-stats" class="stats"></div>
+    <div id="g-list"></div>
+    <details id="g-jobs"><summary>Aufträge starten</summary>
+      <div class="row"><button id="g-inv" class="secondary">Ausgangsbestand laden (OSM, TZ-SAM)</button></div>
+      <div class="row">
+        <input id="g-month" type="month" title="Monat (Fenster: die drei Monate bis einschließlich diesem)">
+        <label title="nur Kacheln, Fläche und Credits schätzen"><input type="checkbox" id="g-dry" checked> nur schätzen</label>
+        <button id="g-scan" class="primary">Grobsuche starten</button>
+      </div>
+      <p id="g-msg" class="hint"></p>
+    </details>
+  </div>
+
   <div class="tab hidden" id="tab-pvmap">
     <h2>PV-Map</h2>
     <div class="grid2">
