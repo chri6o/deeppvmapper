@@ -677,3 +677,18 @@ def test_mastr_url_newest_by_date():
     class S:
         def get(self, *a, **k): return R()
     assert greg.mastr_url(S()).endswith("Gesamtdatenexport_20261118_26.2.zip")
+
+
+def test_ground_jobs_resume_after_restart(tmp_path, monkeypatch):
+    monkeypatch.setenv("PVMAPPER_NO_SCHEDULER", "1")
+    from pvmapper.jobs import Job
+    from pvmapper.web import app as webapp
+    jd = tmp_path / "jobs"
+    a = Job(str(jd), "ground_scan", {"month": "2026-09"}); a.status = "running"; a.save()
+    b = Job(str(jd), "buildings", {"input": "x"}); b.status = "queued"; b.save()
+    got = []
+    monkeypatch.setattr(webapp.JobManager, "_worker", lambda self, cpu=False: None)
+    mgr = webapp.JobManager(lambda: {"jobs_dir": str(jd)})
+    monkeypatch.setattr(mgr, "submit", lambda job: got.append(job.id))
+    mgr.load_existing()
+    assert got == [a.id] and mgr.jobs[b.id].status == "cancelled"

@@ -50,6 +50,11 @@ class JobManager:
                 try:
                     job = Job.load(jd, jid)
                     if job.status in ("running", "queued"):
+                        if job.kind in CPU_KINDS:       # ground jobs resume where they stopped (tiles, downloads, results kept)
+                            job.log("Dienst neu gestartet – Auftrag wird fortgesetzt.")
+                            self.jobs[jid] = job
+                            self.submit(job)
+                            continue
                         job.status = "cancelled"        # server was stopped mid-run
                     self.jobs[jid] = job
                 except Exception:                       # noqa: BLE001
