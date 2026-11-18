@@ -1665,3 +1665,24 @@ def test_check_requests_poll_and_small_packages(tmp_path, monkeypatch):
     assert calls["q"].get("requested") == "true" and "cc" not in calls["q"] and calls["cq"].get("requested") == "true"
     assert len(calls["batches"]) >= 2 and max(len(b) for b in calls["batches"]) <= 10, calls["batches"]
     assert j.counters["unveraendert"] == 1, "TESTr1 unchanged, TESTr0 computed again (force)"
+
+
+def test_repeat_request_after_retraining(tmp_path, monkeypatch):
+    """PV-Map #379: PV-Mapper lists the requests of PV-Map and repeats one with a chosen model, starting the job at once"""
+    from pvmapper import pvmap
+    monkeypatch.setenv("PVMAPPER_NO_SCHEDULER", "1")
+    from fastapi.testclient import TestClient
+    from pvmapper.web.app import create_app
+    import pvmapper.web.app as webapp
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), pvmap_token="pvm_x"), str(cfgp))
+    app = create_app(str(cfgp))
+    started, calls = [], {}
+    monkeypatch.setattr(webapp.JobManager, "submit", lambda self, job: started.append(job))
+    monkeypatch.setattr(pvmap.Client, "requests", lambda self, limit=20: {"requests": [{"id": "r1", "status": "done", "n": 3, "done": 3}]})
+    monkeypatch.setattr(pvmap.Client, "repeat", lambda self, rid, only="all", force=True: calls.update(rid=rid, only=only, force=force) or {"id": "r2", "n": 2})
+    c = TestClient(app)
+    assert c.get("/api/pvmap/requests").json()["requests"][0]["id"] == "r1"
+    r = c.post("/api/pvmap/requests/r1/repeat", json={"only": "pv", "profile": "custom:neu", "start": True}).json()
+    assert r["n"] == 2 and calls == {"rid": "r1", "only": "pv", "force": True}
+    assert started and started[0].kind == "sync" and started[0].params["filter"] == "requested=true" and started[0].params["profile"] == "custom:neu"

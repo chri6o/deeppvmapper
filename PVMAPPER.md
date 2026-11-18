@@ -69,6 +69,11 @@ Abgleich nur für sie (`requested=true`); die Ergebnisse gehen in Paketen zu 10 
 Fortschrittsbalken in PV-Map mitläuft. „Auch bei unverändertem Luftbild neu rechnen“ im Auftrag (`force`) überspringt den Vergleich
 des Luftbild-Fingerabdrucks. Ein laufender Nachtabgleich nimmt angeforderte Gebäude ohnehin zuerst. PV-Map: `docs/pvmapper-ergebnisse.md` (#379).
 
+**Prüfläufe wiederholen** (etwa nach einem Nachtraining): Reiter PV-Map → „Prüfaufträge in PV-Map“ → „Aufträge anzeigen“, Modell und
+Gebäude (alle / nur mit PV / nur ohne PV) wählen, „Wiederholen“. PV-Mapper legt in PV-Map einen neuen Auftrag mit denselben Gebäuden an,
+startet ihn sofort und rechnet auch bei gleichem Luftbild neu. PV-Map vergleicht das Ergebnis mit dem früheren Lauf (neu mit PV, keine PV
+mehr, jetzt bestätigt, nur noch möglich, unverändert). Dasselbe geht in PV-Map am Auftrag („wiederholen“).
+
 ## PV-Map-Konnektor und Training mit Bestands-PV
 
 PV-Mapper holt aus PV-Map **Gebäudelisten** und **Trainingsbeispiele**. In PV-Map legst du dafür ein API-Token an (Verwaltung → Datenquellen → API-Tokens) und trägst es mit der Adresse in den Einstellungen von PV-Mapper ein. Schnittstelle: PV-Map `docs/pvmapper-connector.md`.

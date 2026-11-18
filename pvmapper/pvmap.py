@@ -96,6 +96,14 @@ class Client:
         """buildings waiting in check requests made in PV-Map (#379) – a small call for the poll"""
         return int(self._get("/detect/requests/pending", {}).get("n") or 0)
 
+    def requests(self, limit: int = 20) -> dict:
+        """check requests made in PV-Map with their progress and, for a repeat, the comparison with the earlier run (#379)"""
+        return self._get("/detect/requests", {"limit": limit})
+
+    def repeat(self, rid: str, only: str = "all", force: bool = True) -> dict:
+        """the same buildings once more (e.g. after retraining): a new request in PV-Map, compared with this one"""
+        return self._get(f"/detect/requests/{rid}/repeat", {}, "POST", {"only": only, "force": force})
+
     def queue_count(self, model: str | None = None, recheck_days: int = 365, **filters) -> dict:
         return self._get("/detect/queue/count", {**filters, "model": model, "recheck_days": recheck_days})
 

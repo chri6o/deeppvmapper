@@ -559,6 +559,30 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             out["queue_error"] = str(e)[:300]
         return out
 
+    @app.get("/api/pvmap/requests")
+    def pvmap_requests():
+        """check requests in PV-Map (#379) with progress and comparison of repeats"""
+        from .. import pvmap
+        try:
+            return pvmap.Client.from_config(cfg()).requests()
+        except pvmap.PVMapError as e:
+            raise HTTPException(502, str(e))
+
+    @app.post("/api/pvmap/requests/{rid}/repeat")
+    def pvmap_repeat(rid: str, body: dict = Body(default={})):
+        """repeat a request with the current model (e.g. after retraining); `start`: process it now instead of waiting for the poll"""
+        from .. import pvmap
+        try:
+            out = pvmap.Client.from_config(cfg()).repeat(rid, body.get("only") or "all", body.get("force", True) is not False)
+        except pvmap.PVMapError as e:
+            raise HTTPException(502, str(e))
+        if body.get("start"):
+            job = Job(cfg()["jobs_dir"], "sync", {"filter": "requested=true", "requests": True,
+                                                  **({"profile": body["profile"]} if body.get("profile") else {})})
+            mgr.submit(job)
+            out["job"] = job.as_dict()
+        return out
+
     @app.post("/api/sync/start")
     def sync_start(body: dict = Body(default={})):
         """start a sync now (optionally limited to `hours` or `max` buildings)"""

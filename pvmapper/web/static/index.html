@@ -320,6 +320,16 @@
     <div id="s-sync-out"></div>
     <div class="row"><button id="s-save-pm" class="primary">Speichern</button></div>
     <div id="s-msg-pm"></div>
+    <h3>Prüfaufträge in PV-Map</h3>
+    <p class="hint">Aufträge aus PV-Map mit Fortschritt. „Wiederholen“ prüft dieselben Gebäude noch einmal – etwa nach einem Nachtraining mit
+      dem neuen Modell – und rechnet auch bei gleichem Luftbild neu. PV-Map vergleicht danach mit dem früheren Lauf (neu mit PV, keine PV mehr,
+      jetzt bestätigt).</p>
+    <div class="grid2">
+      <label>Modell für die Wiederholung<select id="rq-profile" class="profile-select"></select></label>
+      <label>Gebäude<select id="rq-only"><option value="all">alle</option><option value="pv">nur mit PV</option><option value="none">nur ohne PV</option></select></label>
+    </div>
+    <div class="row"><button id="rq-load" class="secondary">Aufträge anzeigen</button></div>
+    <div id="rq-out"></div>
   </div>
 
   <!-- ===================================================== Einstellungen -->

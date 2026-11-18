@@ -949,6 +949,29 @@ $("#s-sync-status").onclick = async () => {
     $("#s-sync-out").innerHTML = `<div class="info">Arbeitsliste (${esc(d.filter || "")}): ${q}<br>Prüfaufträge ${d.requests ? "sofort" : "nur im Nachtbetrieb"} · Nachtbetrieb ${d.enabled ? `an, ${esc(d.start)}–${esc(d.end)}${d.in_window ? " (läuft gerade im Zeitfenster)" : ""}` : "aus"}${jobs ? "<br>" + jobs : ""}</div>`; }
   catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
+/* check requests in PV-Map (#379): list with progress, repeat after retraining */
+const RQ_ST = { waiting: "wartet", working: "in Arbeit", done: "fertig", cancelled: "abgebrochen" };
+async function loadRequests() {
+  $("#rq-out").innerHTML = `<div class="info">Frage PV-Map …</div>`;
+  try {
+    const d = await api("/api/pvmap/requests");
+    const rows = (d.requests || []).map((x) => {
+      const C = x.compare, cmp = C ? ` · gegenüber dem früheren Lauf: ${fmt(C.new_pv)} neu mit PV, ${fmt(C.lost_pv)} keine PV mehr, ${fmt(C.tier_up)} jetzt bestätigt, ${fmt(C.tier_down)} nur noch möglich, ${fmt(C.same)} unverändert` : "";
+      const fin = x.status === "done" || x.status === "cancelled";
+      return `<tr><td>${esc(x.label || "Prüfauftrag")}${x.parent_id ? " <span class=\"hint\">(Wiederholung)</span>" : ""}<br><span class="hint">${esc(new Date(x.created_at).toLocaleString("de-DE"))}${(x.models || []).length ? " · Modell " + esc(x.models.join(", ")) : ""}</span></td>
+        <td>${RQ_ST[x.status] || esc(x.status)}<br><span class="hint">${fmt(x.done)} von ${fmt(x.n)} geprüft · PV ${fmt(x.pv)} (bestätigt ${fmt(x.pv_confirmed)})${cmp}</span></td>
+        <td>${fin ? `<button class="secondary" data-rqrep="${esc(x.id)}">Wiederholen</button>` : ""}</td></tr>`; }).join("");
+    $("#rq-out").innerHTML = rows ? `<div class="tablewrap"><table>${rows}</table></div>` : `<div class="info">Noch keine Prüfaufträge in PV-Map.</div>`;
+    $$("#rq-out [data-rqrep]").forEach((b) => b.onclick = async () => {
+      try {
+        const r = await api(`/api/pvmap/requests/${b.dataset.rqrep}/repeat`, { json: { only: $("#rq-only").value, profile: $("#rq-profile").value, start: true } });
+        $("#rq-out").insertAdjacentHTML("afterbegin", `<div class="info">Wiederholung für ${fmt(r.n)} Gebäude angelegt und gestartet (Modell ${esc($("#rq-profile").value)}).</div>`);
+        if (r.job) started(r.job);
+      } catch (e) { $("#rq-out").insertAdjacentHTML("afterbegin", `<div class="info err">${esc(e.message)}</div>`); }
+    });
+  } catch (e) { $("#rq-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+}
+$("#rq-load").onclick = loadRequests;
 $("#s-sync-now").onclick = async () => {
   try { const j = await api("/api/sync/start", { json: { hours: 2 } }); started(j); }
   catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
