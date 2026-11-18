@@ -1420,7 +1420,7 @@ $("#e-prev").onclick = () => openItem(M.idx - 1);
 /* sample review (pvmapper/review.py): verdict per image, summary per dataset */
 function isSample() { return !!((M.dsList || []).find((d) => d.id === M.ds) || {}).sample; }
 async function loadReview() {
-  const box = $("#m-review"); box.classList.toggle("hidden", !isSample()); $("#e-review").classList.toggle("hidden", !isSample());
+  const box = $("#m-review"); box.classList.toggle("hidden", !isSample());   // the verdict bar (#e-review) is there for every dataset
   if (!isSample()) return;
   try { const r = await api(`/api/datasets/${M.ds}/review`);
     const pct = (x) => x == null ? "–" : fmt(100 * x, 0) + " %";
@@ -1453,7 +1453,11 @@ async function showRules() {
 }
 $$("#e-review [data-cause]").forEach((b) => b.onclick = async () => {
   const m = M.item; if (!m) return;
-  try { const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/review`, { json: { cause: b.dataset.cause } });
+  if (M.cur.length >= 3) closePoly();
+  try {
+    // keep what was drawn: save the current areas first, the verdict then moves them for a false hit
+    if (M.dirty) await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), label: M.label, status: "open" } });
+    const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/review`, { json: { cause: b.dataset.cause } });
     const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
     loadReview();
     if (b.dataset.cause === "teilweise") { M.label = 1; info2("Fläche korrigieren, dann „Speichern“."); return; }
@@ -1477,6 +1481,8 @@ setSnap(M.snap); $("#e-full").classList.toggle("on", !M.full);
 async function saveItem(status) {
   const m = M.item; if (!m) return;
   if (M.cur.length >= 3) closePoly();
+  if (status === "done" && M.label === 1 && M.layer === "neg" && !negPolys().length &&
+      !confirm("Die Ebene „Gaube zeichnen“ ist gewählt, aber es ist keine Gaube-Fläche gezeichnet – das Bild wird als „PV vorhanden“ gespeichert.\n\nFür einen falschen Treffer stattdessen „✗ falsch …“ klicken oder das Häkchen „PV vorhanden“ entfernen.\n\nTrotzdem als PV speichern?")) return;
   try {
     const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), label: M.label, status } });
     const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
@@ -1541,6 +1547,7 @@ document.addEventListener("keydown", (e) => {
   else if (kl === "r" && M.item) regLookup([M.item.name]);
   else if (kl === "x") saveItem("skip");
   else if (kl === "l") { $("#e-label").checked = !$("#e-label").checked; $("#e-label").onchange(); }
+  else if (kl === "w") { e.preventDefault(); document.querySelector('#e-review [data-cause="sonstiges"]').click(); }
   else if (kl === "f" || k === "0") { fitView(); draw(); }
 });
 document.addEventListener("keyup", (e) => {

@@ -418,8 +418,8 @@
       </div>
       <button id="e-snap" class="on" title="Fang (S): Bildecken, Ecken und Kanten der Flächen und des Umrisses">🧲 Fang</button>
       <div class="seg" title="Ebene">
-        <button id="e-layer-pv" class="on" title="PV-Module markieren (N/G wechselt)">PV</button>
-        <button id="e-layer-neg" title="Aufbauten ohne PV markieren – Gauben, Dachfenster, Lichtkuppeln, Solarthermie (N/G wechselt). Das Training lernt dort gezielt „keine PV“.">Gaube / kein PV</button>
+        <button id="e-layer-pv" class="on" title="Zeichenebene: PV-Module (N/G wechselt)">PV zeichnen</button>
+        <button id="e-layer-neg" title="Zeichenebene: Aufbauten ohne PV – Gauben, Dachfenster, Lichtkuppeln, Solarthermie (N/G wechselt). Nur zum Zeichnen; das Urteil „keine PV“ setzt „✗ Falscher Treffer“ oder das Häkchen „PV vorhanden“.">Gaube zeichnen</button>
       </div>
       <button id="e-model" title="Modellvorschlag (M)">Modell</button>
       <button id="e-ai" title="KI-Vorschlag (K)">KI</button>
@@ -436,8 +436,8 @@
       <button id="e-next" title="Weiter ohne Speichern (→)">→</button>
       <button id="e-close" title="Editor schließen">✕</button>
     </div>
-    <div id="e-review" class="etool hidden" title="Stichprobe: Urteil für dieses Bild – speichert und geht weiter">
-      <span class="hint" style="margin-right:6px">Stichprobe:</span><button data-cause="richtig" class="primary" title="PV, Fläche passt">✓ richtig</button><button data-cause="teilweise" class="" title="PV, aber Fläche korrigieren (bleibt offen)">≈ teilweise</button><button data-cause="gaube" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Gaube</button><button data-cause="schatten" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Schatten</button><button data-cause="dachfenster" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Dachfenster / Lichtkuppel</button><button data-cause="solarthermie" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Solarthermie</button><button data-cause="dach_dunkel" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">dunkle Dachfläche</button><button data-cause="sonstiges" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">sonstiges</button>
+    <div id="e-review" class="etool" title="Urteil für dieses Bild – ein Klick speichert und geht weiter">
+      <span class="hint" style="margin-right:6px">Urteil:</span><button data-cause="richtig" class="primary" title="PV, Fläche passt">✓ richtig</button><button data-cause="teilweise" class="" title="PV, aber Fläche korrigieren (bleibt offen)">≈ teilweise</button><button data-cause="gaube" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Gaube</button><button data-cause="schatten" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Schatten</button><button data-cause="dachfenster" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Dachfenster / Lichtkuppel</button><button data-cause="solarthermie" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Solarthermie</button><button data-cause="dach_dunkel" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">dunkle Dachfläche</button><button data-cause="sonstiges" class="" title="Falscher Treffer (W): Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">✗ falsch, sonstiges</button>
     </div>
     <div id="e-wrap"><canvas id="e-canvas"></canvas></div>
     <div id="e-info" class="einfo"></div>
@@ -447,7 +447,7 @@
       <b>Zeiger</b> Fläche anklicken und ziehen · Ecke ziehen · Doppelklick auf Kante = neue Ecke · Entf löscht Ecke bzw. Fläche<br>
       <b>Ebenen</b> N oder G wechselt PV ↔ Gaube/kein PV · Klick mit dem Zeiger auf eine Fläche der anderen Ebene wechselt dorthin<br>
       <b>Ansicht</b> Mausrad / Trackpad zoomt · + / − · F oder 0 ganzes Bild · B Liste ein/aus · S Fang ein/aus<br>
-      <b>Ablauf</b> Enter speichert und öffnet das nächste Bild · ← → blättern · X überspringen · L Label · M Modell · K KI · R Registerdaten · Cmd/Strg+Z rückgängig · Esc abbrechen
+      <b>Ablauf</b> Enter speichert und öffnet das nächste Bild · ← → blättern · X überspringen · L Label · W falscher Treffer (Flächen → „keine PV“) · M Modell · K KI · R Registerdaten · Cmd/Strg+Z rückgängig · Esc abbrechen
     </div>
   </div>
   <div id="maphint" class="maphint hidden"></div>
