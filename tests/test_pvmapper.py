@@ -1812,3 +1812,14 @@ def test_sample_review_marks_false_hits_as_hard_negatives(tmp_path, monkeypatch)
     assert r.status_code == 200, r.text
     p = started[0].params
     assert started[0].kind == "train" and p["sample"] and p["prepare_only"] and p["from_job"] == run.id and len(p["ids"]) == 5 and p["profile"] == "nrw"
+
+
+def test_cross_check_images_for_berlin_hamburg_saxony():
+    """second flights for the cross-check outside NRW (checked live 18.11.2026): every alt exists, same CRS as its primary source"""
+    cat = sources.Catalog()
+    for sid, n in (("de-nw", 3), ("de-be", 2), ("de-hh", 2), ("de-sn", 1)):
+        src = cat.sources[sid]
+        assert len(src.alt) == n, sid
+        for a in src.alt:
+            assert a in cat.sources and cat.sources[a].crs == src.crs and cat.sources[a].native_resolution_m <= 0.2, (sid, a)
+    assert cat.sources["de-hh-2022"].extra_params == {"TIME": "2022"}

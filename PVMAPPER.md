@@ -83,6 +83,10 @@ Auswertung: Anteil richtiger Treffer mit 95-%-Spanne und die Ursachen der falsch
 den Lauf in PV-Map „wiederholen“ und den Vergleich ansehen (`pvmapper/review.py`). Wer weniger falsche „bestätigt“-Treffer will, erhöht im
 Reiter PV-Map „„Bestätigt“ ab Score (mit Gegenprobe)“ (Standard 0,9).
 
+**Gegenprobe außerhalb von NRW:** Vergleichsbilder für Berlin (TrueDOP 2024/2023, 20 cm), Hamburg (Zeitreihe unbelaubt 2024/2022 über
+`TIME`) und Sachsen (Historische DOP 2018–2020, 20 cm) sind eingetragen (`alt` in `sources.yml`). Damit können Treffer dort „bestätigt“
+werden. Übersicht der Länder: PV-Map `docs/luftbild-vergleichsbilder.md`.
+
 **Lauf neu starten:** Reiter „Ergebnisse“ → Lauf öffnen → „Neu starten …“: Modell und Gebäude (alle / nur mit PV / nur ohne PV) wählen.
 Das legt einen neuen Lauf an, der alle diese Gebäude neu rechnet; der alte Lauf bleibt zum Vergleich. „Fortsetzen“ führt dagegen einen
 abgebrochenen Lauf an derselben Stelle weiter und lässt Fertiges aus. Ein PV-Map-Abgleich (Arbeitsliste, Prüfauftrag) hat keine feste
