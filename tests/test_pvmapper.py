@@ -1686,3 +1686,38 @@ def test_repeat_request_after_retraining(tmp_path, monkeypatch):
     r = c.post("/api/pvmap/requests/r1/repeat", json={"only": "pv", "profile": "custom:neu", "start": True}).json()
     assert r["n"] == 2 and calls == {"rid": "r1", "only": "pv", "force": True}
     assert started and started[0].kind == "sync" and started[0].params["filter"] == "requested=true" and started[0].params["profile"] == "custom:neu"
+
+
+def test_restart_job_with_other_model_and_subset(tmp_path, monkeypatch):
+    """"Neu starten…": a new job computes the same buildings again (all / only with PV / only without), with another model;
+    "Fortsetzen" stays: it continues the cancelled job and skips what is done"""
+    from pvmapper import restart
+    gj = tmp_path / "b.geojson"
+    cx, cy = 13.40, 52.52
+    feats = [{"type": "Feature", "properties": {"id": f"B{i}", "name": f"Schule {i}"},
+              "geometry": box(cx + i * 0.001, cy, cx + i * 0.001 + 0.0003, cy + 0.0002).__geo_interface__} for i in range(4)]
+    gj.write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
+    jobs = str(tmp_path / "jobs")
+    old = Job(jobs, "buildings", {"input": str(gj), "id_field": "id", "profile": "nrw", "cross_check": False})
+    import sqlite3
+    from pvmapper import building_mode
+    db = sqlite3.connect(os.path.join(old.dir, "results.sqlite")); db.execute(building_mode.SCHEMA)
+    for i in range(3):   # cancelled after three buildings, one with PV
+        db.execute("INSERT INTO results(id,status,has_pv,lon,lat,props,footprint_wkt) VALUES (?,?,?,?,?,?,?)",
+                   (f"B{i}", "ok", 1 if i == 1 else 0, cx, cy, json.dumps({"name": f"Schule {i}"}),
+                    box(cx + i * 0.001, cy, cx + i * 0.001 + 0.0003, cy + 0.0002).wkt))
+    db.commit(); db.close()
+    old.status = "cancelled"; old.save()
+    j = restart.restart(old, jobs, "custom:neu", "all")
+    assert j.kind == "buildings" and j.params["input"] == str(gj) and j.params["profile"] == "custom:neu" and j.params["restart_of"] == old.id
+    assert not os.path.exists(os.path.join(j.dir, "results.sqlite")), "a new job: nothing counts as done"
+    j2 = restart.restart(old, jobs, None, "pv")
+    fc = json.load(open(j2.params["input"])); assert [f["id"] for f in fc["features"]] == ["B1"] and j2.params["profile"] == "nrw"
+    assert fc["features"][0]["properties"]["name"] == "Schule 1"
+    sync = Job(jobs, "sync", {"input": "pvmapqueue:requested=true", "push": True}); sync.status = "done"
+    import shutil; shutil.copy(os.path.join(old.dir, "results.sqlite"), os.path.join(sync.dir, "results.sqlite"))
+    j3 = restart.restart(sync, jobs, None, "all")
+    assert j3.params["push"] and j3.params["force"] and len(json.load(open(j3.params["input"]))["features"]) == 3
+    old.status = "running"
+    with pytest.raises(ValueError):
+        restart.restart(old, jobs)

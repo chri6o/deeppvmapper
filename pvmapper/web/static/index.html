@@ -118,9 +118,16 @@
       <div id="jd-stats" class="stats"></div>
       <div class="row">
         <button id="jd-cancel" class="secondary">Abbrechen</button>
-        <button id="jd-resume" class="secondary">Fortsetzen</button>
+        <button id="jd-resume" class="secondary" title="Abgebrochenen Lauf an derselben Stelle weiterführen">Fortsetzen</button>
+        <button id="jd-restart" class="secondary" title="Dieselben Gebäude noch einmal von vorn prüfen, z. B. mit einem neuen Modell">Neu starten …</button>
         <button id="jd-delete" class="secondary">Löschen</button>
         <span id="jd-files"></span>
+      </div>
+      <div id="jd-restart-box" class="row hidden">
+        <label>Modell<select id="jd-rs-profile" class="profile-select"></select></label>
+        <label>Gebäude<select id="jd-rs-only"><option value="all">alle</option><option value="pv">nur mit PV</option><option value="none">nur ohne PV</option></select></label>
+        <button id="jd-rs-go" class="primary">Neu starten</button>
+        <span class="hint">Ein neuer Lauf; alle Gebäude werden neu gerechnet. Ein PV-Map-Abgleich nimmt die Gebäude dieses Laufs und meldet die Ergebnisse wieder an PV-Map.</span>
       </div>
       <div class="row filters">
         <select id="jd-status"><option value="">alle</option><option value="pv" selected>mit PV</option><option value="kein_pv">ohne PV</option><option value="fehler">Fehler</option><option value="nacharbeit">Nacharbeit: verpasst / unvollständig</option></select>

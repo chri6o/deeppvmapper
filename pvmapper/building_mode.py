@@ -243,7 +243,7 @@ def run(job, cfg: dict):
                 sc = b.props.get("_scan") or {}
                 # work list: same aerial image and same model as at the last check → nothing new to compute
                 if (sc.get("img_hash") and sources.hash_distance(sc["img_hash"], h) <= 12 and sc.get("model") == prof.id
-                        and not b.props.get("force")):            # a request with "compute again" (PV-Map #379)
+                        and not b.props.get("force") and not p.get("force")):            # a request with "compute again" (PV-Map #379)
                     b.props["_unchanged"] = True
                     return b, search, fp, None, win, src, None
             return b, search, fp, img, win, src, None

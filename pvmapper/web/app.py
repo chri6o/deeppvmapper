@@ -875,6 +875,18 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         mgr.submit(job)
         return job.as_dict()
 
+    @app.post("/api/jobs/{jid}/restart")
+    def restart_job(jid: str, body: dict = Body(default={})):
+        """the same check once more from the start (e.g. after retraining): `profile`, `only` = all | pv | none – a new job;
+        "Fortsetzen" stays the way to continue a cancelled job"""
+        from .. import restart
+        try:
+            job = restart.restart(_job(jid), cfg()["jobs_dir"], body.get("profile") or None, body.get("only") or "all")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        mgr.submit(job)
+        return job.as_dict()
+
     @app.get("/api/jobs/{jid}/files/{name}")
     def job_file(jid: str, name: str):
         path = os.path.join(_job(jid).dir, os.path.basename(name))

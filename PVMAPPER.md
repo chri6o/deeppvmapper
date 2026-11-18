@@ -69,6 +69,12 @@ Abgleich nur für sie (`requested=true`); die Ergebnisse gehen in Paketen zu 10 
 Fortschrittsbalken in PV-Map mitläuft. „Auch bei unverändertem Luftbild neu rechnen“ im Auftrag (`force`) überspringt den Vergleich
 des Luftbild-Fingerabdrucks. Ein laufender Nachtabgleich nimmt angeforderte Gebäude ohnehin zuerst. PV-Map: `docs/pvmapper-ergebnisse.md` (#379).
 
+**Lauf neu starten:** Reiter „Ergebnisse“ → Lauf öffnen → „Neu starten …“: Modell und Gebäude (alle / nur mit PV / nur ohne PV) wählen.
+Das legt einen neuen Lauf an, der alle diese Gebäude neu rechnet; der alte Lauf bleibt zum Vergleich. „Fortsetzen“ führt dagegen einen
+abgebrochenen Lauf an derselben Stelle weiter und lässt Fertiges aus. Ein PV-Map-Abgleich (Arbeitsliste, Prüfauftrag) hat keine feste
+Gebäudeliste: sein Neustart nimmt die Gebäude, die dieser Lauf geprüft hat, rechnet auch bei gleichem Luftbild neu und meldet die
+Ergebnisse wieder an PV-Map (`pvmapper/restart.py`).
+
 **Prüfläufe wiederholen** (etwa nach einem Nachtraining): Reiter PV-Map → „Prüfaufträge in PV-Map“ → „Aufträge anzeigen“, Modell und
 Gebäude (alle / nur mit PV / nur ohne PV) wählen, „Wiederholen“. PV-Mapper legt in PV-Map einen neuen Auftrag mit denselben Gebäuden an,
 startet ihn sofort und rechnet auch bei gleichem Luftbild neu. PV-Map vergleicht das Ergebnis mit dem früheren Lauf (neu mit PV, keine PV
