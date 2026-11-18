@@ -522,14 +522,15 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                 if items:
                     out.append({"id": j.id, "name": j.params.get("name") or j.params.get("cc") or "Labels",
                                 "prepare_only": bool(j.params.get("prepare_only")), "status": j.status,
-                                "profile": j.params.get("profile"), "stats": annotate.stats(items)})
+                                "profile": j.params.get("profile"), "sample": bool(j.params.get("sample")),
+                                "from_job": j.params.get("from_job"), "stats": annotate.stats(items)})
         return sorted(out, key=lambda x: x["id"], reverse=True)
 
     @app.get("/api/datasets/{jid}/items")
     def dataset_items(jid: str):
         items = annotate.list_items(_ds(jid))
         keep = ("id", "name", "label", "effective_label", "label_kind", "sub", "size_bin", "pv_kwp", "has_mask",
-                "mask_source", "status", "val", "source", "ai", "use_register")
+                "mask_source", "status", "val", "source", "ai", "use_register", "review")
         return {"stats": annotate.stats(items), "items": [{**{k: m.get(k) for k in keep}, "has_register": bool(
             m.get("register") and any(b.get("register") for b in m["register"].get("buildings") or []))} for m in items]}
 
@@ -655,6 +656,43 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         except Exception as e:                                   # noqa: BLE001
             raise HTTPException(400, str(e))
         return annotate.register_lookup(d, cl, body.get("names"), float(body.get("radius_m") or 30))
+
+    @app.post("/api/jobs/{jid}/sample")
+    def make_sample(jid: str, body: dict = Body(default={})):
+        """"Stichprobe prüfen": n random PV hits of a run as a dataset for the review in the mask editor (pvmapper/review.py)"""
+        from .. import review
+        src = _job(jid)
+        if src.kind not in ("buildings", "sync"):
+            raise HTTPException(400, "Eine Stichprobe geht für „Gebäude prüfen“ und den PV-Map-Abgleich.")
+        n = max(1, min(int(body.get("n") or 100), 1000))
+        ids = review.sample_ids(src.dir, n, body.get("seed"))
+        if not ids:
+            raise HTTPException(400, "Dieser Lauf hat noch keine Treffer mit PV.")
+        params = {"from_job": jid, "ids": ids, "prepare_only": True, "sample": True,
+                  "name": body.get("name") or f"Stichprobe {jid} – {len(ids)} Treffer",
+                  "profile": src.params.get("profile") or cfg().get("profile"), "sources": src.params.get("sources")}
+        job = Job(cfg()["jobs_dir"], "train", params)
+        mgr.submit(job)
+        return job.as_dict()
+
+    @app.post("/api/datasets/{jid}/items/{name}/review")
+    def dataset_review(jid: str, name: str, body: dict = Body(...)):
+        """the verdict for one image of a sample: right, partly right, or the cause of a false hit (→ hard negative)"""
+        from .. import review
+        d, name = _item(jid, name)
+        try:
+            meta = review.set_cause(d, name, body.get("cause"), body.get("note"))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if meta.get("status") == "done" and cfg().get("sync_push_reviews", True) and cfg().get("pvmap_token"):
+            threading.Thread(target=_push_review, args=(d, name, meta), daemon=True).start()
+        meta["effective_label"] = annotate.effective_label(meta)
+        return meta
+
+    @app.get("/api/datasets/{jid}/review")
+    def dataset_review_summary(jid: str):
+        from .. import review
+        return review.summary(_ds(jid))
 
     @app.post("/api/datasets/{jid}/items/{name}/flags")
     def dataset_flags(jid: str, name: str, body: dict = Body(...)):

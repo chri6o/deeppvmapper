@@ -74,6 +74,15 @@ bereits geprüfte, alle, nur mit PV oder nur ohne PV, mit gewähltem Modell. PV-
 („Arbeitsliste Bonn“), startet ihn sofort und rechnet auch bei gleichem Luftbild neu; Fortschritt, „wiederholen“ und Vergleich mit dem
 vorigen Lauf wie bei jedem Prüfauftrag.
 
+**Stichprobe prüfen** (Genauigkeit und harte Gegenbeispiele): Reiter „Ergebnisse“ → Lauf öffnen → „Stichprobe prüfen …“ (Standard 100
+zufällige Treffer mit PV). Nach dem Laden der Luftbilder unter Trainieren → Datensätze & Masken den Datensatz „Stichprobe …“ öffnen; im
+Editor steht eine Leiste „Stichprobe“: **richtig**, **teilweise** (Fläche korrigieren, dann Speichern) oder die Ursache eines falschen
+Treffers – **Gaube, Schatten, Dachfenster/Lichtkuppel, Solarthermie, dunkle Dachfläche, sonstiges**. Ein falscher Treffer wird sofort zum
+harten Gegenbeispiel (Flächen auf die Ebene „kein PV“, Label „keine PV“) und geht als von Hand geprüft an PV-Map. Über der Liste steht die
+Auswertung: Anteil richtiger Treffer mit 95-%-Spanne und die Ursachen der falschen. „Training mit diesem Datensatz“ nutzt die Urteile; danach
+den Lauf in PV-Map „wiederholen“ und den Vergleich ansehen (`pvmapper/review.py`). Wer weniger falsche „bestätigt“-Treffer will, erhöht im
+Reiter PV-Map „„Bestätigt“ ab Score (mit Gegenprobe)“ (Standard 0,9).
+
 **Lauf neu starten:** Reiter „Ergebnisse“ → Lauf öffnen → „Neu starten …“: Modell und Gebäude (alle / nur mit PV / nur ohne PV) wählen.
 Das legt einen neuen Lauf an, der alle diese Gebäude neu rechnet; der alte Lauf bleibt zum Vergleich. „Fortsetzen“ führt dagegen einen
 abgebrochenen Lauf an derselben Stelle weiter und lässt Fertiges aus. Ein PV-Map-Abgleich (Arbeitsliste, Prüfauftrag) hat keine feste

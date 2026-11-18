@@ -119,6 +119,7 @@
       <div class="row">
         <button id="jd-cancel" class="secondary">Abbrechen</button>
         <button id="jd-resume" class="secondary" title="Abgebrochenen Lauf an derselben Stelle weiterführen">Fortsetzen</button>
+        <button id="jd-sample" class="secondary" title="Zufällige Treffer mit PV im Masken-Editor beurteilen: richtig oder Gaube, Schatten, Dachfenster … (Genauigkeit und harte Gegenbeispiele)">Stichprobe prüfen …</button>
         <button id="jd-restart" class="secondary" title="Dieselben Gebäude noch einmal von vorn prüfen, z. B. mit einem neuen Modell">Neu starten …</button>
         <button id="jd-delete" class="secondary">Löschen</button>
         <span id="jd-files"></span>
@@ -166,6 +167,7 @@
       <p class="hint">Modulflächen einzeichnen oder Vorschläge prüfen. Das Bild öffnet sich rechts; mit <kbd>→</kbd> geht es zum nächsten. Neue Datensätze entstehen aus Ergebnissen („Als Trainingsdatensatz“), aus einem einzelnen Ort oder unter „Neues Training“.</p>
     <label>Datensatz<select id="m-ds"></select></label>
     <div id="m-stats" class="stats"></div>
+    <div id="m-review" class="info hidden"></div>
     <div class="row filters2">
       <select id="m-filter">
         <option value="todo">PV ohne Maske</option><option value="det">Erkennung ungeprüft</option><option value="ai">KI ungeprüft</option><option value="open">offen</option>
@@ -433,6 +435,9 @@
       <button id="e-save" class="primary" title="Speichern und weiter (Enter)">Speichern ↵</button>
       <button id="e-next" title="Weiter ohne Speichern (→)">→</button>
       <button id="e-close" title="Editor schließen">✕</button>
+    </div>
+    <div id="e-review" class="etool hidden" title="Stichprobe: Urteil für dieses Bild – speichert und geht weiter">
+      <span class="hint" style="margin-right:6px">Stichprobe:</span><button data-cause="richtig" class="primary" title="PV, Fläche passt">✓ richtig</button><button data-cause="teilweise" class="" title="PV, aber Fläche korrigieren (bleibt offen)">≈ teilweise</button><button data-cause="gaube" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Gaube</button><button data-cause="schatten" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Schatten</button><button data-cause="dachfenster" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Dachfenster / Lichtkuppel</button><button data-cause="solarthermie" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Solarthermie</button><button data-cause="dach_dunkel" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">dunkle Dachfläche</button><button data-cause="sonstiges" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">sonstiges</button>
     </div>
     <div id="e-wrap"><canvas id="e-canvas"></canvas></div>
     <div id="e-info" class="einfo"></div>

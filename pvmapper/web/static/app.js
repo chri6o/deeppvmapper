@@ -772,6 +772,7 @@ async function refreshJob(withResults) {
   $("#jd-log").textContent = j.log.join("\n");
   $("#jd-cancel").classList.toggle("hidden", !["running", "queued"].includes(j.status));
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
+  $("#jd-sample").classList.toggle("hidden", !["buildings", "sync"].includes(j.kind) || !(j.counters || {}).pv);
   $("#jd-restart").classList.toggle("hidden", !["buildings", "sync"].includes(j.kind) || ["running", "queued"].includes(j.status));
   if (S.job !== S.restartFor) { $("#jd-restart-box").classList.add("hidden"); S.restartFor = S.job; }
   S.jobData = j;
@@ -1085,7 +1086,7 @@ async function openDataset(id) {
     if (!$("#m-name").value) $("#m-name").placeholder = `${m[1]}-v${(+m[2] || 1) + 1}`;
   }
   const d = await api(`/api/datasets/${id}/items`);
-  M.items = d.items;
+  M.items = d.items; loadReview();
   const subs = [...new Set(d.items.map((x) => x.sub))].sort(), sizes = [...new Set(d.items.map((x) => x.size_bin))].sort();
   $("#m-sub").innerHTML = `<option value="">alle Arten</option>` + subs.map((x) => `<option>${esc(x)}</option>`).join("");
   $("#m-size").innerHTML = `<option value="">alle Größen</option>` + sizes.map((x) => `<option>${esc(x)}</option>`).join("");
@@ -1415,6 +1416,35 @@ $("#e-undo").onclick = undo;
 $("#e-clear").onclick = () => { if (M.polys.length) { push(); M.polys = []; M.sel = -1; draw(); info2(); } };
 $("#e-label").onchange = () => { M.label = $("#e-label").checked ? 1 : 0; M.dirty = true; };
 $("#e-prev").onclick = () => openItem(M.idx - 1);
+
+/* sample review (pvmapper/review.py): verdict per image, summary per dataset */
+function isSample() { return !!((M.dsList || []).find((d) => d.id === M.ds) || {}).sample; }
+async function loadReview() {
+  const box = $("#m-review"); box.classList.toggle("hidden", !isSample()); $("#e-review").classList.toggle("hidden", !isSample());
+  if (!isSample()) return;
+  try { const r = await api(`/api/datasets/${M.ds}/review`);
+    const pct = (x) => x == null ? "–" : fmt(100 * x, 0) + " %";
+    const wrong = r.by_cause.filter((c) => !c.ok && c.n).map((c) => `${esc(c.label)} ${fmt(c.n)}`).join(" · ");
+    box.innerHTML = `<b>Stichprobe:</b> ${fmt(r.reviewed)} von ${fmt(r.n)} beurteilt · <b>richtig ${pct(r.precision)}</b>` +
+      (r.reviewed ? ` (95 %: ${pct(r.ci95[0])}–${pct(r.ci95[1])})` : "") + (wrong ? `<br>Falsche Treffer: ${wrong}` : "") +
+      (r.wrong ? `<br><span class="hint">Die falschen Treffer sind jetzt „keine PV“-Flächen – „Training mit diesem Datensatz“ nutzt sie als harte Gegenbeispiele.</span>` : "");
+  } catch (e) { box.innerHTML = esc(e.message); }
+}
+$$("#e-review [data-cause]").forEach((b) => b.onclick = async () => {
+  const m = M.item; if (!m) return;
+  try { const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/review`, { json: { cause: b.dataset.cause } });
+    const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
+    loadReview();
+    if (b.dataset.cause === "teilweise") { M.label = 1; info2("Fläche korrigieren, dann „Speichern“."); return; }
+    openItem(M.idx + 1);
+  } catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); }
+});
+$("#jd-sample").onclick = async () => {
+  const n = prompt("Wie viele zufällige Treffer mit PV beurteilen?", "100"); if (n === null) return;
+  try { const j = await api(`/api/jobs/${S.job}/sample`, { json: { n: +n || 100 } }); started(j);
+    alert(`Stichprobe mit ${j.params.ids.length} Treffern wird vorbereitet (Luftbilder laden). Danach: Trainieren → Datensätze & Masken → „${j.params.name}“; im Editor je Bild ein Urteil klicken.`); }
+  catch (e) { alert(e.message); }
+};
 $("#e-next").onclick = () => openItem(M.idx + 1);
 $("#e-save").onclick = () => saveItem("done");
 $("#e-skip").onclick = () => saveItem("skip");

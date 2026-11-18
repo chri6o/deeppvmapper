@@ -1757,3 +1757,58 @@ def test_web_ui_ids_unique_and_assets_versioned(tmp_path, monkeypatch):
     assert re.search(r'/static/app\.js\?v=\d+', html) and re.search(r'/static/style\.css\?v=\d+', html)
     js = open(os.path.join(os.path.dirname(__file__), "..", "pvmapper", "web", "static", "app.js"), encoding="utf-8").read()
     assert '$("#s-sync-redo").onclick' in js
+
+
+def test_sample_review_marks_false_hits_as_hard_negatives(tmp_path, monkeypatch):
+    """"Stichprobe prüfen": random PV hits of a run → dataset; per image a verdict; a false hit becomes a 'no PV' area with label 0;
+    the summary gives the share of right hits with a 95 % interval and the causes of the false ones"""
+    import sqlite3
+    from PIL import Image
+    from pvmapper import annotate, building_mode, review
+    run = Job(str(tmp_path / "jobs"), "sync", {"input": "pvmapqueue:requested=true", "profile": "nrw"})
+    db = sqlite3.connect(os.path.join(run.dir, "results.sqlite")); db.execute(building_mode.SCHEMA)
+    for i in range(30):
+        db.execute("INSERT INTO results(id,status,has_pv) VALUES (?,?,?)", (f"B{i:02d}", "ok", 1 if i % 3 else 0))
+    db.commit(); db.close()
+    run.status = "done"; run.counters["pv"] = 20; run.save()
+    s1, s2 = review.sample_ids(run.dir, 10, seed=7), review.sample_ids(run.dir, 10, seed=7)
+    assert s1 == s2 and len(set(s1)) == 10 and all(int(x[1:]) % 3 for x in s1), "only PV hits, reproducible"
+    assert len(review.sample_ids(run.dir, 500, seed=1)) == 20
+
+    d = str(tmp_path / "ds"); os.makedirs(d)
+    sq = [[[16, 16], [48, 16], [48, 48], [16, 48]]]
+    for i in range(4):
+        name = f"b{i}"
+        Image.fromarray(np.full((64, 64, 3), 90, np.uint8)).save(os.path.join(d, name + ".jpg"))
+        annotate.write_meta(d, {"id": f"B{i}", "name": name, "label": 1, "status": "open"})
+        annotate.save_annotation(d, name, sq, None, "open", "model")
+    assert review.set_cause(d, "b0", "richtig")["status"] == "done"
+    m = review.set_cause(d, "b1", "gaube")
+    assert annotate.effective_label(m) == 0 and not m["has_mask"] and m["has_neg"] and m["status"] == "done"
+    assert annotate.current_polygons(d, "b1", "neg"), "the detected area is now a hard negative"
+    review.set_cause(d, "b2", "schatten"); review.set_cause(d, "b2", "gaube")
+    m = review.set_cause(d, "b2", "richtig")   # changed the verdict: the areas are PV again, no hard negative left
+    assert m["has_mask"] and not m["has_neg"] and annotate.effective_label(m) == 1
+    review.set_cause(d, "b2", "schatten")
+    assert annotate.current_polygons(d, "b2", "neg") and not annotate.current_polygons(d, "b2")
+    assert review.set_cause(d, "b3", "teilweise")["status"] == "open"
+    with pytest.raises(ValueError):
+        review.set_cause(d, "b0", "egal")
+    s = review.summary(d)
+    assert s["reviewed"] == 4 and s["correct"] == 2 and s["precision"] == 0.5 and s["ci95"][0] < 0.5 < s["ci95"][1]
+    c = {x["cause"]: x for x in s["by_cause"]}
+    assert c["gaube"]["n"] == 1 and c["gaube"]["share_of_wrong"] == 0.5 and c["richtig"]["share_of_wrong"] is None
+
+    # the web route makes a dataset job from the run
+    monkeypatch.setenv("PVMAPPER_NO_SCHEDULER", "1")
+    from fastapi.testclient import TestClient
+    from pvmapper.web.app import create_app
+    import pvmapper.web.app as webapp
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m")), str(cfgp))
+    app = create_app(str(cfgp)); started = []
+    monkeypatch.setattr(webapp.JobManager, "submit", lambda self, job: started.append(job))
+    r = TestClient(app).post(f"/api/jobs/{run.id}/sample", json={"n": 5, "seed": 3})
+    assert r.status_code == 200, r.text
+    p = started[0].params
+    assert started[0].kind == "train" and p["sample"] and p["prepare_only"] and p["from_job"] == run.id and len(p["ids"]) == 5 and p["profile"] == "nrw"
