@@ -994,7 +994,7 @@ async function loadRequests() {
   } catch (e) { $("#rq-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 }
 $("#rq-load").onclick = loadRequests;
-$("#s-sync-recheck").onclick = () => $("#s-recheck-box").classList.toggle("hidden");
+$("#s-sync-redo").onclick = () => $("#s-recheck-box").classList.toggle("hidden");
 $("#s-rc-go").onclick = async () => {
   try {
     const r = await api("/api/pvmap/requests/from-filter", { json: { filter: $("#s-sync-filter").value.trim() || null, only: $("#s-rc-only").value, profile: $("#s-rc-profile").value } });

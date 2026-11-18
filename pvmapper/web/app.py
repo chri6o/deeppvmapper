@@ -209,7 +209,12 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index():
         with open(os.path.join(STATIC, "index.html"), encoding="utf-8") as f:
-            return f.read()
+            html = f.read()
+        # cache busting: the browser loads app.js / style.css again after every update (an old app.js left new buttons without function)
+        for name in ("app.js", "style.css"):
+            v = int(os.path.getmtime(os.path.join(STATIC, name)))
+            html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
+        return html
 
     @app.get("/favicon.ico")
     def favicon():
