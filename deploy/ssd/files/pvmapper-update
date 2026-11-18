@@ -5,6 +5,14 @@ APP=/opt/pvmapper
 BRANCH="${1:-pvmapper-eu}"
 sudo -u pvmapper git -C "$APP/app" fetch -q origin "$BRANCH"
 sudo -u pvmapper git -C "$APP/app" reset -q --hard "origin/$BRANCH"
+# this script updates itself from the repository and starts again with the new version
+NEW="$APP/app/deploy/ssd/files/pvmapper-update"
+if [ -z "${PVMAPPER_UPDATE_RESTARTED:-}" ] && ! cmp -s "$NEW" "$0"; then
+  install -m 755 "$NEW" /usr/local/bin/pvmapper-update
+  PVMAPPER_UPDATE_RESTARTED=1 exec /usr/local/bin/pvmapper-update "$@"
+fi
+# system packages and databases (PostGIS, osmium); idempotent
+bash "$APP/app/deploy/ssd/files/pvmapper-system.sh"
 sudo -u pvmapper "$APP/venv/bin/pip" install -q -r "$APP/app/requirements-pvmapper.txt" pyogrio
 # keep the systemd unit in sync with the repository
 if ! cmp -s "$APP/app/deploy/ssd/files/pvmapper.service" /etc/systemd/system/pvmapper.service; then

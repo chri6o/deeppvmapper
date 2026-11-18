@@ -143,6 +143,8 @@ def runner(kind: str):
         from .sync import run
     elif kind == "roofshape":
         from .roofshape import run
+    elif kind == "ground_inventory":
+        from .ground.inventory import run
     else:
         raise ValueError(f"unknown job kind {kind}")
     return run

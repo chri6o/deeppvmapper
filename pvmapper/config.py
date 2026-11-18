@@ -47,6 +47,12 @@ DEFAULTS = {
                                       # many PV roofs (scores of 0.2–0.3 on obvious arrays), the segmentation decides
     "cross_check": True,              # second aerial image (other year) as cross-check, where the source has one
     "postproc": True,                 # mask post-processing (see pvmapper/postproc.py; postproc_* thresholds)
+    "ground_db": "postgresql:///pvmapper_ground",   # PostGIS for ground-mounted PV (docs/freiflaechen.md); peer login as the service user
+    "ground_dir": None,               # downloads and intermediate files (None = <jobs_dir>/_ground)
+    "ground_pilot": "pl-wielkopolskie",   # region key (pvmapper/ground/inventory.py REGIONS, extend with ground_regions)
+    "ground_regions": {},             # extra regions: {key: {cc, name, geofabrik: "europe/<path>"}}
+    "ground_min_ha": 0.5,             # smaller ground-mounted installations are ignored
+    "ground_max_building_share": 0.2, # candidates covered by OSM buildings beyond this share are discarded
     "sync_enabled": False,            # night sync with PV-Map: fetch the work list, check, send results (PV-Map docs/pvmapper-ergebnisse.md)
     "sync_start": "22:00",            # time window, local time
     "sync_end": "06:00",

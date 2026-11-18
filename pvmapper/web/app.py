@@ -316,6 +316,45 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         except Exception as e:                                   # noqa: BLE001
             raise HTTPException(400, f"PV-Map: {e}")
 
+    # -- ground-mounted PV (docs/freiflaechen.md) ----------------------------------------------------------------------
+
+    def _gcon():
+        from ..ground import store as gstore
+        try:
+            con = gstore.connect(cfg())
+        except Exception as e:                                   # noqa: BLE001
+            raise HTTPException(503, f"Freiflächen-Datenbank nicht erreichbar ({e}). Einmal „sudo pvmapper-update“ ausführen.")
+        gstore.migrate(con)
+        return con
+
+    @app.get("/api/ground/regions")
+    def ground_regions():
+        from ..ground import inventory as ginv
+        return {"pilot": cfg().get("ground_pilot"), "regions": ginv.regions(cfg())}
+
+    @app.get("/api/ground/stats")
+    def ground_stats(region: str | None = None):
+        from ..ground import store as gstore
+        with _gcon() as con:
+            return gstore.stats(con, region)
+
+    @app.get("/api/ground/features")
+    def ground_features(region: str | None = None, bbox: str | None = None, pruefstatus: str | None = None,
+                        herkunft: str | None = None, limit: int = 20000):
+        from ..ground import store as gstore
+        w, a = ["TRUE"], []
+        if region:
+            w.append("region = %s"); a.append(region)
+        if pruefstatus:
+            w.append("pruefstatus = ANY(%s)"); a.append(pruefstatus.split(","))
+        if herkunft:
+            w.append("herkunft = ANY(%s)"); a.append(herkunft.split(","))
+        if bbox:
+            x0, y0, x1, y1 = (float(v) for v in bbox.split(","))
+            w.append("geom_zaun && ST_MakeEnvelope(%s,%s,%s,%s,4326)"); a += [x0, y0, x1, y1]
+        with _gcon() as con:
+            return gstore.features(con, " AND ".join(w), a, min(int(limit), 50000))
+
     @app.get("/api/roofshape/models")
     def roofshape_models():
         from .. import roofshape
@@ -622,7 +661,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape"):
+        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory"):
             raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")

@@ -260,6 +260,15 @@ PV-Map: PV-Map `docs/pvmapper-ergebnisse.md`.
 
 Mit Masken lernt der Klassifikator je Bildausschnitt (PV ja/nein) statt nur je Gebäude – das ist das stärkere Signal.
 
+## Freiflächen (Solarparks, Agri-PV, Floating) – im Aufbau
+
+Eigenes Modul, getrennt von den Gebäuden; Plan: `docs/freiflaechen.md`. Daten in PostGIS (`pvmapper_ground`, richtet
+`pvmapper-update` ein). Schritt 2, **Ausgangsbestand**: Auftrag `ground_inventory` lädt den OSM-Auszug der Region von Geofabrik,
+filtert mit osmium Solarparks (ohne Dachanlagen) und die Gebäude im Umkreis, führt TZ-SAM dazu (Zenodo; neuere Quartale als
+GeoPackage von Hand in `jobs/_ground/tzsam/` legen) und speichert alles ab 0,5 ha. Mehr als 20 % Gebäudeanteil → verworfen.
+Starten: `curl -X POST localhost:8765/api/jobs -H 'Content-Type: application/json' -d '{"kind":"ground_inventory","params":{"region":"pl-wielkopolskie"}}'`;
+Ergebnis: `GET /api/ground/stats`, `GET /api/ground/features`.
+
 ## Kommandozeile
 
 ```bash
