@@ -193,6 +193,8 @@ Gebäude prüfen → „Freie Dachfläche und PV-Potenzial ermitteln“ (für ei
 
 Ausgabe: Spalten `roof_type`, `roof_area_m2`, `usable_area_m2`, `kwp_potential` (+ Spanne), `roof_potential.geojson` (freie Flächen und Aufbauten), Kartenebene „Freie Dachflächen und Aufbauten“, Angaben in der Vorschau. Abstände in den Einstellungen (`roof_setback_flat_m`, `roof_setback_pitched_m`, `roof_obstacle_clearance_m`).
 
+**Gebäude auf der Karte wählen:** Fläche auswerten → „Dachpotenzial für ausgewählte Gebäude“. Gebäude aus OpenStreetMap einzeln anklicken (ein zweiter Klick nimmt sie wieder heraus), oder ein Polygon/Rechteck zeichnen und „Gebäude im Polygon übernehmen“ (bis 4 km²). Dann „Dachpotenzial für N Gebäude prüfen“: Das startet eine Gebäudeprüfung mit Dachpotenzial für genau diese Gebäude, mit OSM-Dachform und Vorschaubildern für alle.
+
 Das ist Bildanalyse ohne trainiertes Netz – eine erste Schätzung. Die im Masken-Editor gezeichneten „Gaube / kein PV“-Flächen sind das Material für ein späteres Aufbauten-Modell.
 
 ## Fläche auswerten nur auf OSM-Gebäuden

@@ -484,6 +484,47 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         from .. import calibration
         return {"removed": calibration.remove(cfg()["model_dir"], profile)}
 
+    @app.post("/api/osm/buildings")
+    def osm_buildings(body: dict = Body(...)):
+        """OSM building footprints in a bbox [w, s, e, n] or a polygon (GeoJSON geometry); with `inside` only those whose
+        centre lies in the polygon. At most 4 km² per request."""
+        from shapely.geometry import box as _box, shape as _shape
+        from .. import osm
+        if body.get("geometry"):
+            region = _shape(body["geometry"])
+        elif body.get("bbox"):
+            a, b_, c_, d_ = [float(x) for x in body["bbox"]]
+            region = _box(min(a, c_), min(b_, d_), max(a, c_), max(b_, d_))
+        else:
+            raise HTTPException(400, "bbox oder geometry fehlt")
+        if geo.ground_area_m2(region) > 4e6:
+            raise HTTPException(400, "Gebiet zu groß (höchstens 4 km²) – bitte näher heranzoomen oder kleiner zeichnen.")
+        try:
+            feats = osm.buildings(region)
+        except Exception as e:                                   # noqa: BLE001
+            raise HTTPException(502, str(e))
+        if body.get("geometry") and body.get("inside", True):
+            feats = [f for f in feats if region.contains(_shape(f["geometry"]).representative_point())]
+        return {"type": "FeatureCollection", "features": feats[:5000], "truncated": len(feats) > 5000,
+                "attribution": "© OpenStreetMap contributors, ODbL"}
+
+    @app.post("/api/roofs/start")
+    def roofs_start(body: dict = Body(...)):
+        """roof potential (and PV check) for buildings picked on the map: the features are stored as an input file and a
+        'check buildings' job with roof_potential starts"""
+        feats = (body.get("features") or [])[:20000]
+        if not feats:
+            raise HTTPException(400, "Keine Gebäude ausgewählt")
+        path = os.path.join(upload_dir, time.strftime("%Y%m%d-%H%M%S-") + f"dachpotenzial-{len(feats)}.geojson")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"type": "FeatureCollection", "features": feats}, f, ensure_ascii=False)
+        params = {"input": path, "roof_potential": True, "id_field": "id",
+                  "sources": body.get("sources") or "auto", "profile": body.get("profile") or cfg().get("profile"),
+                  "save_chips": body.get("save_chips") or "all"}
+        job = Job(cfg()["jobs_dir"], "buildings", params)
+        mgr.submit(job)
+        return job.as_dict()
+
     @app.post("/api/probe/dataset")
     def probe_dataset(body: dict = Body(...)):
         """the probe cut-out with its detected PV as an image of a training dataset (new dataset or appended)"""

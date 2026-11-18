@@ -74,6 +74,15 @@
     <label>… oder eigener Gebäudelayer (Pfad, ersetzt OSM)<input id="a-buildings" placeholder="/daten/gebaeude.gpkg"></label>
     <label class="check"><input type="checkbox" id="a-only" checked> nur Anlagen auf Gebäuden behalten</label>
     <button id="a-start" class="primary">Auswertung starten</button>
+    <details id="a-roofbox" open><summary>Dachpotenzial für ausgewählte Gebäude</summary>
+      <p class="hint">Gebäude aus OpenStreetMap wählen: einzeln in der Karte anklicken, oder ein Polygon zeichnen (Werkzeuge oben links) und alle Gebäude darin übernehmen. Ein zweiter Klick nimmt ein Gebäude wieder heraus. Geprüft werden PV, Bauform, Baujahr und die freie Dachfläche mit Potenzial.</p>
+      <label class="check"><input type="checkbox" id="a-pick" checked> Gebäude per Klick wählen</label>
+      <div class="row"><button id="a-pick-poly" class="secondary" title="Alle OSM-Gebäude im gezeichneten Polygon übernehmen">Gebäude im Polygon übernehmen</button>
+        <button id="a-pick-view" class="secondary" title="Umrisse im Kartenausschnitt anzeigen (ab Zoomstufe 16)">Umrisse im Ausschnitt zeigen</button>
+        <button id="a-pick-clear" class="secondary">Auswahl leeren</button></div>
+      <div id="a-pick-info" class="info hidden"></div>
+      <button id="a-roof-start" class="primary" disabled>Dachpotenzial prüfen</button>
+    </details>
   </div>
 
   <!-- ===================================================== Jobs -->

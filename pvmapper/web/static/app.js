@@ -67,13 +67,84 @@ const roofLayer = L.geoJSON(null, {
   },
 }).addTo(map);
 layerCtl.addOverlay(roofLayer, "Freie Dachflächen und Aufbauten");
+// OSM buildings picked for the roof potential ('Fläche auswerten' → Dachpotenzial)
+S.osm = new Map(); S.picked = new Set();
+const osmLayer = L.geoJSON(null, {
+  style: (f) => S.picked.has(f.properties.id) ? { color: "#1d4ed8", weight: 2, fillColor: "#3b82f6", fillOpacity: .35 }
+    : { color: "#64748b", weight: 1, fillOpacity: .03, dashArray: "3 3" },
+  onEachFeature: (f, l) => l.on("click", (e) => {
+    if (currentTab() !== "area" || !$("#a-pick").checked) return;
+    L.DomEvent.stopPropagation(e); togglePick(f.properties.id);
+  }),
+}).addTo(map);
+layerCtl.addOverlay(osmLayer, "OSM-Gebäude (Auswahl Dachpotenzial)");
+function addOsm(fc) {
+  let n = 0;
+  for (const f of fc.features || []) if (!S.osm.has(f.properties.id)) { S.osm.set(f.properties.id, f); osmLayer.addData(f); n++; }
+  return n;
+}
+function pickInfo() {
+  const n = S.picked.size;
+  $("#a-pick-info").classList.toggle("hidden", !n && !S.osm.size);
+  $("#a-pick-info").innerHTML = `${fmt(n)} Gebäude ausgewählt${S.osm.size ? ` · ${fmt(S.osm.size)} Umrisse geladen` : ""} <span class="muted">· © OpenStreetMap-Mitwirkende</span>`;
+  $("#a-roof-start").disabled = !n;
+  $("#a-roof-start").textContent = n ? `Dachpotenzial für ${fmt(n)} Gebäude prüfen` : "Dachpotenzial prüfen";
+}
+function restyleOsm() { osmLayer.setStyle(osmLayer.options.style); }
+function togglePick(id) { S.picked.has(id) ? S.picked.delete(id) : S.picked.add(id); restyleOsm(); pickInfo(); }
+function inRing(pt, ring) {
+  let c = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if ((yi > pt[1]) !== (yj > pt[1]) && pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+function containsPt(g, pt) {
+  const polys = g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : [];
+  return polys.some((p) => inRing(pt, p[0]) && !p.slice(1).some((h) => inRing(pt, h)));
+}
+async function pickAt(ll) {
+  const pt = [ll.lng, ll.lat];
+  let hit = [...S.osm.values()].find((f) => containsPt(f.geometry, pt));
+  if (!hit) {
+    const d = 0.0004;
+    try { addOsm(await api("/api/osm/buildings", { json: { bbox: [ll.lng - d, ll.lat - d * 0.65, ll.lng + d, ll.lat + d * 0.65] } })); }
+    catch (e) { info("#a-pick-info", e.message, true); $("#a-pick-info").classList.remove("hidden"); return; }
+    hit = [...S.osm.values()].find((f) => containsPt(f.geometry, pt));
+  }
+  if (hit) togglePick(hit.properties.id); else pickInfo();
+}
+$("#a-pick-poly").onclick = async () => {
+  if (!S.drawn) { info("#a-pick-info", "Erst ein Polygon oder Rechteck zeichnen (Werkzeuge oben links).", true); $("#a-pick-info").classList.remove("hidden"); return; }
+  $("#a-pick-info").classList.remove("hidden"); $("#a-pick-info").textContent = "Lade Gebäude aus OpenStreetMap …";
+  try {
+    const fc = await api("/api/osm/buildings", { json: { geometry: S.drawn.geometry, inside: true } });
+    addOsm(fc); fc.features.forEach((f) => S.picked.add(f.properties.id)); restyleOsm(); pickInfo();
+  } catch (e) { info("#a-pick-info", e.message, true); }
+};
+$("#a-pick-view").onclick = async () => {
+  if (map.getZoom() < 16) { info("#a-pick-info", "Bitte näher heranzoomen (ab Zoomstufe 16).", true); $("#a-pick-info").classList.remove("hidden"); return; }
+  const b = map.getBounds();
+  try { addOsm(await api("/api/osm/buildings", { json: { bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()] } })); pickInfo(); }
+  catch (e) { info("#a-pick-info", e.message, true); $("#a-pick-info").classList.remove("hidden"); }
+};
+$("#a-pick-clear").onclick = () => { S.picked.clear(); restyleOsm(); pickInfo(); };
+$("#a-roof-start").onclick = async () => {
+  const feats = [...S.picked].map((id) => S.osm.get(id)).filter(Boolean);
+  if (!feats.length) return;
+  try {
+    const j = await api("/api/roofs/start", { json: { features: feats, sources: $("#a-source").value, profile: $("#a-profile").value } });
+    tab("jobs"); openJob(j.id);
+  } catch (e) { info("#a-pick-info", e.message, true); }
+};
 const drawn = new L.FeatureGroup().addTo(map);
 map.addControl(new L.Control.Draw({
   draw: { polyline: false, circle: false, marker: false, circlemarker: false, polygon: { showArea: true }, rectangle: true },
   edit: { featureGroup: drawn },
 }));
 map.on(L.Draw.Event.CREATED, (e) => { drawn.clearLayers(); drawn.addLayer(e.layer); S.drawn = e.layer.toGeoJSON(); $("#a-bbox").value = ""; tab("area"); estimateArea(); });
-map.on("click", (e) => { if (currentTab() === "probe") probe(e.latlng); });
+map.on("click", (e) => { if (currentTab() === "probe") probe(e.latlng); else if (currentTab() === "area" && $("#a-pick").checked) pickAt(e.latlng); });
 
 function sourceLayer(src) {
   if (!src) return null;

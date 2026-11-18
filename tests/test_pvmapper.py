@@ -1386,3 +1386,48 @@ def test_capacity_calibration_from_register(tmp_path):
     assert T.settings(cfg)["fill_factor"][key]["f"] == cal["fill_factor"][key]
     assert T.settings({**cfg, "profile": "ign"})["fill_factor"][key]["f"] != cal["fill_factor"][key]   # only for that model
     assert T.settings({**cfg, "kwp_calibration": False})["fill_factor"][key]["f"] != cal["fill_factor"][key]
+
+
+def test_pick_osm_buildings_and_start_roof_potential(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from pvmapper import osm
+    from pvmapper.web.app import create_app
+
+    def ring(w, s, e, n):
+        return [{"lon": x, "lat": y} for x, y in [(w, s), (e, s), (e, n), (w, n), (w, s)]]
+    monkeypatch.setattr(osm, "_fetch", lambda q, timeout=180: {"elements": [
+        {"type": "way", "id": 1, "tags": {"building": "school", "roof:shape": "flat", "name": "TEST Schule"},
+         "geometry": ring(13.4001, 52.52005, 13.40045, 52.52025)},
+        {"type": "way", "id": 2, "tags": {"building": "yes"}, "geometry": ring(13.4006, 52.52005, 13.4008, 52.5202)}]})
+
+    class FakeSrc:
+        id = "fake-2024"
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        return np.full((win.height, win.width, 3), 150, np.uint8), win, FakeSrc()
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), fetch_workers=1,
+               cross_check=False, age_check=False)
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(cfg, str(cfgp))
+    c = TestClient(create_app(str(cfgp)))
+    fc = c.post("/api/osm/buildings", json={"bbox": [13.4000, 52.5200, 13.4010, 52.5203]}).json()
+    assert {f["id"] for f in fc["features"]} == {"osm:way/1", "osm:way/2"}
+    poly = box(13.40005, 52.5200, 13.4005, 52.5203).__geo_interface__                 # only the first building
+    fc2 = c.post("/api/osm/buildings", json={"geometry": poly, "inside": True}).json()
+    assert [f["id"] for f in fc2["features"]] == ["osm:way/1"]
+    assert c.post("/api/osm/buildings", json={"bbox": [13.0, 52.0, 13.5, 52.5]}).status_code == 400   # too large
+    j = c.post("/api/roofs/start", json={"features": fc2["features"]}).json()
+    for _ in range(200):
+        jj = c.get(f"/api/jobs/{j['id']}").json()
+        if jj["status"] not in ("queued", "running"):
+            break
+        import time as _t
+        _t.sleep(0.1)
+    assert jj["status"] == "done", jj.get("error")
+    assert jj["params"]["roof_potential"] and jj["counters"]["dach_bewertet"] == 1
+    res = c.get(f"/api/jobs/{j['id']}/results").json()
+    assert res["rows"][0]["id"] == "osm:way/1" and res["rows"][0]["roof_type"] == "flat" and res["rows"][0]["usable_area_m2"] > 0
+    assert res["roofs"]["features"]
