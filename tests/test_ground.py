@@ -556,3 +556,94 @@ def test_scan_measure_only_variant(tmp_path, monkeypatch):
     runner("ground_scan")(job, cfg)
     assert seen["d"].endswith(os.path.join("2026-09", "km40-ohne-wc")) and seen["wc"] is False and seen["n"] == 1
     assert seen["ids"][0].startswith("E") and any("4.0 min, 10 Credits" in ln for ln in job.log_lines)
+
+
+# -- build date from the Sentinel-2 history and addition per quarter ---------------------------------------------------
+
+from pvmapper.ground import history as ghist  # noqa: E402
+
+
+def _months(a, b):
+    y, m = map(int, a.split("-"))
+    out = []
+    while f"{y}-{m:02d}" <= b:
+        out.append(f"{y}-{m:02d}")
+        y, m = (y + (m == 12), m % 12 + 1)
+    return out
+
+
+def synth(build="2021-05", start="2015-07", end="2026-10", winter_gaps=True, noise=0.02, pre_built=False):
+    import random
+    rnd = random.Random(1)
+    ser = {}
+    for m in _months(start, end):
+        mon = int(m[5:])
+        if winter_gaps and mon in (12, 1) and rnd.random() < 0.7:
+            continue                                                      # clouds/snow
+        built = pre_built or m >= build
+        constr = not built and m >= "%s" % (_months("2000-01", build)[-4] if build else "9999")
+        d_ndvi = (0.35 if built else 0.25 if constr else 0.0) + rnd.uniform(-noise, noise)
+        d_bri = (-0.3 if built else 0.4 if constr else 0.0) + rnd.uniform(-noise, noise)
+        ser[m] = (d_ndvi, d_bri)
+    return ser
+
+
+def test_change_point_cases():
+    cp = ghist.change_point(synth("2021-05"))
+    assert cp["status"] == "gebaut" and cp["bau"] == "2021-05" and cp["beginn"] in ("2021-02", "2021-03", "2021-04")
+    assert cp["konfidenz"] > 0.6
+    assert ghist.change_point(synth(None, pre_built=True))["status"] == "vor"
+    flat = {m: (0.01, 0.0) for m in _months("2016-01", "2026-10")}
+    assert ghist.change_point(flat)["status"] == "keine_aenderung"
+    assert ghist.change_point({m: (0, 0) for m in _months("2026-01", "2026-05")})["status"] == "zu_wenig_daten"
+    late = ghist.change_point(synth("2026-06"))
+    assert late["status"] == "gebaut" and late["bau"] == "2026-06"
+
+
+def test_features_and_parse():
+    f = {"2021-06": [0.05, 0.05, 0.05, 0.10, 0.12, 0.10]}                # dark modules, low NDVI
+    r = {"2021-06": [0.04, 0.07, 0.05, 0.35, 0.20, 0.12]}                # meadow
+    (dn, db), = ghist.features(f, r).values()
+    assert dn > 0.3 and db < 0
+    js = json.dumps({"2021-06-01T00:00:00Z": [[1, 2, 3, 4, 5, 6], [6, 5, 4, 3, 2, 1]], "2021-07-01T00:00:00Z": [[None] * 6, [1] * 6]})
+    p = ghist.parse_result(js, 2)
+    assert p[0] == {"2021-06": [1, 2, 3, 4, 5, 6]} and set(p[1]) == {"2021-06", "2021-07"}
+    cs = "\n".join(["date,feature_index,avg_band_0,avg_band_1,avg_band_2,avg_band_3,avg_band_4,avg_band_5",
+                    "2021-06-01T00:00:00Z,1,1,2,3,4,5,6"])
+    assert ghist.parse_result(cs, 2)[1]["2021-06"] == [1, 2, 3, 4, 5, 6]
+    fc = ghist.geometries([("a", sq(17, 52, 200)), ("b", sq(17.004, 52, 200))])
+    parts = [x["properties"]["teil"] for x in fc["features"]]
+    assert parts == ["flaeche", "ring", "flaeche", "ring"]
+    from shapely.geometry import shape
+    assert not shape(fc["features"][1]["geometry"]).intersects(sq(17.004, 52, 200).buffer(-D))       # ring excludes neighbours
+
+
+def test_history_apply_accuracy_and_zubau(con):
+    ghist.schema(con)
+    rows = [_row(f"ff-de-osm-w{i}", land="DE", region="bb", geom_zaun=sq(13 + i * 0.05, 52.3, 300), flaeche_zaun_m2=90000)
+            for i in range(4)]
+    store.upsert(con, rows)
+    con.execute("UPDATE freiflaeche SET kwp_min = 7000, kwp_max = 9000, ac_kw_min = 6000, ac_kw_max = 8000")
+    for i, b in enumerate(["2021-05", "2021-06", "2022-11", None]):
+        cp = ghist.change_point(synth(b, pre_built=b is None))
+        ghist.save(con, f"ff-de-osm-w{i}", cp, {})
+    assert ghist.apply(con, "bb") == 3
+    assert con.execute("SELECT baujahr_schaetzung FROM freiflaeche WHERE id='ff-de-osm-w2'").fetchone()[0] == 2022
+    store.upsert(con, rows)                                               # re-import resets the year ...
+    ghist.apply(con, "bb")                                                # ... and apply restores it
+    assert con.execute("SELECT first_seen::text FROM freiflaeche WHERE id='ff-de-osm-w0'").fetchone()[0] == "2021-05-01"
+    greg.save(con, "mastr", "bb", [{"unit_id": "SEE0", "brutto_kw": 8000, "start_date": "2021-04-20",
+                                    "lonlat": tuple(sq(13, 52.3, 300).centroid.coords[0]), "geom_kind": "einheit"},
+                                   {"unit_id": "SEE2", "brutto_kw": 8000, "start_date": "2022-12-01",
+                                    "lonlat": tuple(sq(13.1, 52.3, 300).centroid.coords[0]), "geom_kind": "einheit"}])
+    greg.match_mastr(con, "bb")
+    acc = ghist.accuracy(con, "bb")
+    assert acc["n"] == 2 and acc["median_abs_monate"] == 1
+    con.execute("UPDATE freiflaeche SET kwp_min = 7000, kwp_max = 9000, ac_kw_min = 6000, ac_kw_max = 8000")
+    z = ghist.zubau(con, "bb")
+    assert [(e["quartal"], e["n"], e["dc_mw_min"]) for e in z["reihe"]] == [("2021-Q2", 2, 14.0), ("2022-Q4", 1, 7.0)]
+    assert z["ohne_quartal"]["vor_2015"] == 1
+    zg = ghist.zubau(con, "bb", group="groesse")
+    assert {e["segment"] for e in zg["reihe"]} == {"5–20 MW"}
+    rq = ghist.register_quarters(con, "bb")
+    assert [(r["quartal"], r["dc_mw"]) for r in rq] == [("2021-Q2", 8.0), ("2022-Q4", 8.0)]

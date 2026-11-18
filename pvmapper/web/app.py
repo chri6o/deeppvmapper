@@ -13,7 +13,7 @@ import threading
 import time
 
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from shapely import wkt as shp_wkt
 from shapely.geometry import Point, mapping
@@ -25,7 +25,7 @@ from ..jobs import Job, runner
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 
-CPU_KINDS = ("ground_inventory", "ground_scan", "ground_capacity", "ground_register")     # no GPU, mostly waiting for downloads/openEO: own lane
+CPU_KINDS = ("ground_inventory", "ground_scan", "ground_capacity", "ground_register", "ground_history")     # no GPU, mostly waiting for downloads/openEO: own lane
 
 
 class JobManager:
@@ -383,6 +383,25 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         with _gcon() as con:
             return gstore.features(con, " AND ".join(w), a, min(int(limit), 50000))
 
+    @app.get("/api/ground/zubau")
+    def ground_zubau(region: str | None = None, cc: str | None = None, group: str = "none", confirmed: bool = False,
+                     format: str = "json"):
+        from ..ground import history as ghist
+        with _gcon() as con:
+            z = ghist.zubau(con, region, cc, group, confirmed)
+            if region:
+                z["register"] = ghist.register_quarters(con, region)
+        if format == "csv":
+            import csv as _csv
+            buf = io.StringIO()
+            wr = _csv.writer(buf, delimiter=";")
+            wr.writerow(["quartal", "segment", "anlagen", "dc_mw_min", "dc_mw_max", "ac_mw_min", "ac_mw_max"])
+            for e in z["reihe"]:
+                wr.writerow([e["quartal"], e["segment"], e["n"], e["dc_mw_min"], e["dc_mw_max"], e["ac_mw_min"], e["ac_mw_max"]])
+            return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                            headers={"Content-Disposition": f"attachment; filename=zubau_{region or cc or 'alle'}_{group}.csv"})
+        return z
+
     @app.get("/api/ground/register/gaps")
     def ground_gaps(region: str):
         from ..ground import register as greg
@@ -715,7 +734,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory", "ground_scan", "ground_capacity", "ground_register"):
+        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory", "ground_scan", "ground_capacity", "ground_register", "ground_history"):
             raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")

@@ -425,7 +425,8 @@ def run(job, cfg: dict):
             + (f"; verbraucht {sum(cr):.0f} Credits" if cr else "") + (f"; {len(state.get('failed', []))} Kacheln fehlgeschlagen"
                                                                      if state.get("failed") else ""))
     recall(con, key, month, job.log)
-    from . import capacity
+    from . import capacity, history
+    history.apply(con, key)                       # build dates from the Sentinel-2 history survive re-imports
     capacity.apply(con, key, cfg, job.log)
 
 

@@ -176,6 +176,43 @@ function groundOrtho() {
   if ($("#g-ortho").checked && src) { if (S.srcLayer?.srcId !== src.id) { showSource(src.id); if (S.srcLayer) S.srcLayer.srcId = src.id; } }
   else if (!$("#g-ortho").checked && S.srcLayer) { map.removeLayer(S.srcLayer); layerCtl.removeLayer(S.srcLayer); S.srcLayer = null; }
 }
+const Z_COL = ["#2563eb", "#ea580c", "#16a34a", "#7c3aed", "#dc2626", "#0891b2", "#a16207"];
+async function loadZubau() {
+  const region = $("#g-region").value, group = $("#g-zgroup").value, unit = $("#g-zunit").value, conf = $("#g-zconf").checked;
+  const qs = new URLSearchParams({ region, group, confirmed: conf });
+  $("#g-zcsv").href = "/api/ground/zubau?" + qs + "&format=csv";
+  let z;
+  try { z = await api("/api/ground/zubau?" + qs); } catch (e) { $("#g-zubau").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  const val = (e, k) => unit === "n" ? (k === "mid" ? e.n : e.n) : k === "min" ? e[unit + "_mw_min"] : k === "max" ? e[unit + "_mw_max"] : (e[unit + "_mw_min"] + e[unit + "_mw_max"]) / 2;
+  if (!z.reihe.length) { $("#g-zubau").innerHTML = `<p class="hint">Noch keine datierten Anlagen: „Baudatum bestimmen“ unter Aufträge.</p>`; return; }
+  const qOf = (q) => { const [y, n] = q.split("-Q"); return +y * 4 + (+n - 1); };
+  const lab = (i) => `${Math.floor(i / 4)}-Q${i % 4 + 1}`;
+  const reg = (z.register || []).filter((r) => unit === "n" || r[unit + "_mw"] != null);
+  const all = z.reihe.map((e) => qOf(e.quartal)).concat(reg.map((r) => qOf(r.quartal)));
+  const q0 = Math.max(Math.min(...all), qOf("2015-Q3")), q1 = Math.max(...all);
+  const segs = [...new Set(z.reihe.map((e) => e.segment))];
+  const tot = {};
+  for (const e of z.reihe) { const t = tot[e.quartal] = tot[e.quartal] || { mid: 0, min: 0, max: 0 }; t.mid += val(e, "mid"); t.min += val(e, "min"); t.max += val(e, "max"); }
+  const regV = Object.fromEntries(reg.map((r) => [r.quartal, unit === "n" ? r.n : r[unit + "_mw"]]));
+  const ymax = Math.max(1, ...Object.values(tot).map((t) => t.max), ...Object.values(regV));
+  const W = 420, H = 190, L = 34, B = 26, n = q1 - q0 + 1, bw = (W - L - 4) / n;
+  const y = (v) => H - B - v / ymax * (H - B - 8);
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="font:10px sans-serif">`;
+  for (let k = 0; k <= 4; k++) { const v = ymax * k / 4; svg += `<line x1="${L}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="#e5e7eb"/><text x="${L - 3}" y="${y(v) + 3}" text-anchor="end" fill="#64748b">${fmt(v, unit === "n" || v >= 10 ? 0 : 1)}</text>`; }
+  for (let i = q0; i <= q1; i++) {
+    const x = L + (i - q0) * bw, q = lab(i); let acc = 0;
+    segs.forEach((sg, si) => { const e = z.reihe.find((r) => r.quartal === q && r.segment === sg); if (!e) return; const v = val(e, "mid");
+      svg += `<rect x="${x + 1}" y="${y(acc + v)}" width="${Math.max(bw - 2, 1)}" height="${y(acc) - y(acc + v)}" fill="${Z_COL[si % Z_COL.length]}"><title>${esc(q)} · ${esc(sg)}: ${fmt(v, 1)} (${e.n} Anlagen)</title></rect>`; acc += v; });
+    const t = tot[q];
+    if (t && unit !== "n") svg += `<line x1="${x + bw / 2}" x2="${x + bw / 2}" y1="${y(t.min)}" y2="${y(t.max)}" stroke="#111" stroke-width="1"/>`;
+    if (regV[q] != null) svg += `<circle cx="${x + bw / 2}" cy="${y(regV[q])}" r="2.5" fill="#fff" stroke="#111"><title>Register ${esc(q)}: ${fmt(regV[q], 1)}</title></circle>`;
+    if (i % 4 === 0) svg += `<text x="${x}" y="${H - 8}" fill="#64748b">${Math.floor(i / 4)}</text>`;
+  }
+  svg += "</svg>";
+  const legend = segs.length > 1 ? segs.map((sg, si) => `<span style="white-space:nowrap"><i style="display:inline-block;width:9px;height:9px;background:${Z_COL[si % Z_COL.length]}"></i> ${esc(sg)}</span>`).join(" ") : "";
+  const r = z.ohne_quartal;
+  $("#g-zubau").innerHTML = svg + `<div class="hint">${legend}${legend ? "<br>" : ""}ohne Quartal: ${fmt(r.vor_2015)} vor 2015/16, ${fmt(r.nur_jahr)} nur Baujahr, ${fmt(r.ohne_datum)} ohne Datum</div>`;
+}
 async function initGround() {
   if (!S.gRegions) {
     S.gRegions = await api("/api/ground/regions");
@@ -193,6 +230,9 @@ async function initGround() {
     $("#g-inv").onclick = () => start("ground_inventory", { region: $("#g-region").value });
     $("#g-cap").onclick = () => start("ground_capacity", { region: $("#g-region").value });
     $("#g-reg").onclick = () => start("ground_register", { region: $("#g-region").value });
+    $("#g-hist").onclick = () => start("ground_history", { region: $("#g-region").value });
+    ["#g-zgroup", "#g-zunit", "#g-zconf"].forEach((q) => $(q).onchange = loadZubau);
+    $("#g-zubau-box").ontoggle = () => { if ($("#g-zubau-box").open) loadZubau(); };
     $("#g-scan").onclick = () => start("ground_scan", { region: $("#g-region").value, month: $("#g-month").value, dry_run: $("#g-dry").checked });
     await loadGround(true);
   } else loadGround(false);

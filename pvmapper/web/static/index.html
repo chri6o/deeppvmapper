@@ -267,9 +267,21 @@
     </div>
     <div id="g-stats" class="stats"></div>
     <div id="g-list"></div>
+    <details id="g-zubau-box"><summary>Zubau je Quartal</summary>
+      <div class="row">
+        <select id="g-zgroup"><option value="none">gesamt</option><option value="groesse">nach Größe</option><option value="typ">nach Typ</option></select>
+        <select id="g-zunit"><option value="dc">MWp (DC)</option><option value="ac">MW (AC)</option><option value="n">Anzahl</option></select>
+        <label title="nur von Hand bestätigte Anlagen"><input type="checkbox" id="g-zconf"> nur bestätigte</label>
+      </div>
+      <div id="g-zubau"></div>
+      <p class="hint">Balken: Mitte der geschätzten Spanne; Strich: Spanne der Summe. Punkte: Registerzubau (Anlagen ab 0,5 MW) zum
+        Vergleich der Erfassung. Datum: Fertigstellung laut Sentinel-2-Zeitreihe, sonst „zuerst gesehen“. Die letzten 1–2 Quartale sind unvollständig.</p>
+      <a id="g-zcsv" href="#" download>CSV herunterladen</a>
+    </details>
     <details id="g-jobs"><summary>Aufträge starten</summary>
       <div class="row"><button id="g-inv" class="secondary">Ausgangsbestand laden (OSM, TZ-SAM)</button>
         <button id="g-cap" class="secondary" title="Leistung und Ertrag neu berechnen (z. B. nach Typ-Korrekturen)">Leistung neu berechnen</button>
+        <button id="g-hist" class="secondary" title="Baudatum aller Flächen aus der Sentinel-2-Zeitreihe seit 2015 (openEO)">Baudatum bestimmen</button>
         <button id="g-reg" class="secondary" title="DE: MaStR zuordnen und Leistungsdichte kalibrieren · PL: MIOZE-Register, Orte mit Anlagen ohne bekannte Fläche">Register abgleichen</button></div>
       <div class="row">
         <input id="g-month" type="month" title="Monat (Fenster: die drei Monate bis einschließlich diesem)">

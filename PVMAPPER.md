@@ -282,7 +282,15 @@ Entscheidungen stehen in der Historie und überleben neue Importe und Suchläufe
 **Leistung** (Schritt 5, erste Stufe; `ground_capacity`, läuft auch nach jedem Import und Suchlauf): mit Modulreihen
 Modulfläche × Wirkungsgrad nach Baujahr ÷ cos(Neigung), sonst Zaunfläche × Leistungsdichte nach Typ und Baujahr
 (`pvmapper/ground/ground_density.yml`, änderbar). Immer als Spanne mit Methode; AC = DC ÷ 1,2–1,4; Ertrag aus PVGIS (fest,
-optimaler Winkel, je 0,1°-Zelle zwischengespeichert). Kein Kalibrieren mit Registern; OSM-Leistungen nur als Gegencheck im Log.
+optimaler Winkel, je 0,1°-Zelle zwischengespeichert). Kalibrieren mit Registern nur nach Freigabe (`ground_calibration`).
+
+**Register** (`ground_register`): Brandenburg – MaStR-Gesamtexport, Zuordnung zu den Flächen, Kalibrierung der Leistungsdichte mit
+Testmenge; Wielkopolskie – MIOZE-Register der URE, Orte mit Registeranlagen ohne bekannte Fläche (Suchhinweis).
+
+**Baudatum und Zubau** (`ground_history`): openEO rechnet je Fläche und Umgebungsring Monatswerte von Sentinel-2 seit 2015; lokal
+wird der Umbruch gesucht (Vegetation weg, dunkle Module stabil = Fertigstellung; heller offener Boden davor = Baubeginn).
+Genauigkeit gegen MaStR-Inbetriebnahme. Im Bereich Freiflächen „Zubau je Quartal“ (MWp DC, MW AC oder Anzahl; gesamt, nach
+Größe oder Typ; Registerzubau als Vergleich) und CSV-Export.
 
 ## Kommandozeile
 
