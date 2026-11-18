@@ -1741,3 +1741,19 @@ def test_recheck_work_list_creates_request(tmp_path, monkeypatch):
     assert r["n"] == 1450 and sent["path"] == "/detect/requests"
     assert sent["body"] == {"filter": {"cc": "DE", "lau": "DE_05314000"}, "only": "checked", "force": True, "label": None}
     assert started[0].params == {"filter": "requested=true", "requests": True, "profile": "custom:neu"}
+
+
+def test_web_ui_ids_unique_and_assets_versioned(tmp_path, monkeypatch):
+    """every id in the page once (a duplicate id left "Arbeitsliste neu prüfen" without function); app.js/style.css carry a version"""
+    import re, collections
+    monkeypatch.setenv("PVMAPPER_NO_SCHEDULER", "1")
+    from fastapi.testclient import TestClient
+    from pvmapper.web.app import create_app
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m")), str(cfgp))
+    html = TestClient(create_app(str(cfgp))).get("/").text
+    dupes = [k for k, v in collections.Counter(re.findall(r'\sid="([^"]+)"', html)).items() if v > 1]
+    assert not dupes, dupes
+    assert re.search(r'/static/app\.js\?v=\d+', html) and re.search(r'/static/style\.css\?v=\d+', html)
+    js = open(os.path.join(os.path.dirname(__file__), "..", "pvmapper", "web", "static", "app.js"), encoding="utf-8").read()
+    assert '$("#s-sync-redo").onclick' in js
