@@ -700,6 +700,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         if not os.path.isfile(db_path):
             return {"rows": [], "geojson": {"type": "FeatureCollection", "features": []}}
         con = sqlite3.connect(db_path)
+        if job.kind != "area" and not con.execute("SELECT 1 FROM sqlite_master WHERE name='results'").fetchone():
+            return {"rows": [], "total": 0, "geojson": {"type": "FeatureCollection", "features": []}}   # job just started
         if job.kind == "area":
             feats, rows = [], []
             path = os.path.join(job.dir, "installations.geojson")

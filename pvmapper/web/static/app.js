@@ -73,7 +73,7 @@ const osmLayer = L.geoJSON(null, {
   style: (f) => S.picked.has(f.properties.id) ? { color: "#1d4ed8", weight: 2, fillColor: "#3b82f6", fillOpacity: .35 }
     : { color: "#64748b", weight: 1, fillOpacity: .03, dashArray: "3 3" },
   onEachFeature: (f, l) => l.on("click", (e) => {
-    if (currentTab() !== "area" || !$("#a-pick").checked) return;
+    if (!S.pickOn || S.drawing) return;
     L.DomEvent.stopPropagation(e); togglePick(f.properties.id);
   }),
 }).addTo(map);
@@ -129,6 +129,7 @@ $("#a-pick-view").onclick = async () => {
   try { addOsm(await api("/api/osm/buildings", { json: { bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()] } })); pickInfo(); }
   catch (e) { info("#a-pick-info", e.message, true); $("#a-pick-info").classList.remove("hidden"); }
 };
+$("#a-pick").onchange = () => setPick($("#a-pick").checked);
 $("#a-pick-clear").onclick = () => { S.picked.clear(); restyleOsm(); pickInfo(); };
 $("#a-roof-start").onclick = async () => {
   const feats = [...S.picked].map((id) => S.osm.get(id)).filter(Boolean);
@@ -143,8 +144,32 @@ map.addControl(new L.Control.Draw({
   draw: { polyline: false, circle: false, marker: false, circlemarker: false, polygon: { showArea: true }, rectangle: true },
   edit: { featureGroup: drawn },
 }));
-map.on(L.Draw.Event.CREATED, (e) => { drawn.clearLayers(); drawn.addLayer(e.layer); S.drawn = e.layer.toGeoJSON(); $("#a-bbox").value = ""; tab("area"); estimateArea(); });
-map.on("click", (e) => { if (currentTab() === "probe") probe(e.latlng); else if (currentTab() === "area" && $("#a-pick").checked) pickAt(e.latlng); });
+// map tool "Gebäude wählen": click picks OSM buildings for the roof potential; a polygon drawn while it is on takes all buildings in it
+const PickCtl = L.Control.extend({
+  options: { position: "topleft" },
+  onAdd() {
+    const bar = L.DomUtil.create("div", "leaflet-bar pick-ctl");
+    const b = L.DomUtil.create("a", "", bar);
+    b.href = "#"; b.id = "pick-btn"; b.innerHTML = "☝"; b.title = "Gebäude wählen (Dachpotenzial): Klick wählt ein Gebäude, gezeichnetes Polygon übernimmt alle darin";
+    L.DomEvent.on(b, "click", (e) => { L.DomEvent.stop(e); setPick(!S.pickOn); });
+    L.DomEvent.disableClickPropagation(bar);
+    return bar;
+  },
+});
+map.addControl(new PickCtl());
+function setPick(on) {
+  S.pickOn = on; $("#a-pick").checked = on;
+  const b = document.getElementById("pick-btn"); if (b) b.classList.toggle("on", on);
+  map.getContainer().classList.toggle("picking", on);
+  if (on) { if (currentTab() !== "area") tab("area"); const box = $("#a-roofbox"); if (box) box.open = true; pickInfo(); }
+}
+map.on(L.Draw.Event.CREATED, (e) => {
+  drawn.clearLayers(); drawn.addLayer(e.layer); S.drawn = e.layer.toGeoJSON(); $("#a-bbox").value = ""; tab("area");
+  if (S.pickOn) $("#a-pick-poly").click(); else estimateArea();
+});
+map.on(L.Draw.Event.DRAWSTART, () => { S.drawing = true; });
+map.on(L.Draw.Event.DRAWSTOP, () => { setTimeout(() => { S.drawing = false; }, 50); });
+map.on("click", (e) => { if (S.drawing) return; if (S.pickOn) pickAt(e.latlng); else if (currentTab() === "probe") probe(e.latlng); });
 
 function sourceLayer(src) {
   if (!src) return null;

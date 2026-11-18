@@ -104,3 +104,7 @@ body.e-full #panel { display: none; }
 .job .jopen.small { font-size: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 4px; background: #fff; cursor: pointer; white-space: nowrap; }
 .job .jopen.small:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
 #job-archive > summary { cursor: pointer; color: var(--muted); margin: 6px 0; }
+
+.pick-ctl a { font-size: 16px; line-height: 30px; text-align: center; cursor: pointer; }
+.pick-ctl a.on { background: #1d4ed8; color: #fff; }
+.leaflet-container.picking { cursor: pointer; }
