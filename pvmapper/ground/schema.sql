@@ -75,6 +75,12 @@ CREATE TABLE IF NOT EXISTS ground_register_match (
   dist_m   real,
   PRIMARY KEY (source, unit_id)
 );
-ALTER TABLE freiflaeche DROP CONSTRAINT IF EXISTS freiflaeche_methode_check;
-ALTER TABLE freiflaeche ADD CONSTRAINT freiflaeche_methode_check
-  CHECK (methode IN ('modulflaeche','zaunflaeche','zaunflaeche_kalibriert','s2_polygon'));
+-- widen the method check only when it is still the old one (ALTER TABLE takes an exclusive lock: never on every connect)
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'freiflaeche_methode_check'
+                 AND pg_get_constraintdef(oid) LIKE '%zaunflaeche_kalibriert%') THEN
+    ALTER TABLE freiflaeche DROP CONSTRAINT IF EXISTS freiflaeche_methode_check;
+    ALTER TABLE freiflaeche ADD CONSTRAINT freiflaeche_methode_check
+      CHECK (methode IN ('modulflaeche','zaunflaeche','zaunflaeche_kalibriert','s2_polygon'));
+  END IF;
+END $$;

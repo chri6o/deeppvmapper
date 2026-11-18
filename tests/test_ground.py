@@ -699,3 +699,26 @@ def test_history_spatial_groups():
     fences = [(f"a{i}", sq(13.0 + i * 0.001, 52.3, 50)) for i in range(5)] + [(f"b{i}", sq(14.5 + i * 0.001, 52.9, 50)) for i in range(3)]
     gs = ghist.spatial_groups(fences, 10, 4)
     assert sorted(len(g) for g in gs) == [1, 3, 4] and all(len({f[0][0] for f in g}) == 1 for g in gs)
+
+
+def test_migrate_concurrently_without_deadlock(con):
+    import threading
+    import psycopg
+    store._MIGRATED.clear()
+    errs = []
+
+    def go():
+        try:
+            c = psycopg.connect(DSN, autocommit=True)
+            for _ in range(5):
+                store._MIGRATED.clear()
+                store.migrate(c)
+            c.close()
+        except Exception as e:                                          # noqa: BLE001
+            errs.append(e)
+    ts = [threading.Thread(target=go) for _ in range(4)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert not errs
+    d = con.execute("SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'freiflaeche_methode_check'").fetchone()[0]
+    assert "zaunflaeche_kalibriert" in d

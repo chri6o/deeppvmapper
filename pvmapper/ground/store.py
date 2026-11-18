@@ -28,9 +28,21 @@ def connect(cfg: dict):
     return con
 
 
+_MIGRATED: set = set()
+
+
 def migrate(con):
+    """schema.sql once per process and database, serialised across processes with an advisory lock
+    (18.11.2026: two processes altering the table at the same time ran into a deadlock)"""
+    key = (con.info.dsn, con.execute("SELECT oid FROM pg_database WHERE datname = current_database()").fetchone()[0])
+    if key in _MIGRATED:
+        return
     with open(os.path.join(os.path.dirname(__file__), "schema.sql")) as f:
-        con.execute(f.read())
+        sql = f.read()
+    with con.transaction():
+        con.execute("SELECT pg_advisory_xact_lock(377377)")
+        con.execute(sql)
+    _MIGRATED.add(key)
 
 
 def multi(g):
