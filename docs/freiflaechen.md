@@ -49,7 +49,14 @@ Ergebnisse. Dieselbe Datei liegt in PV-Map unter `docs/freiflaechen.md`, die Plu
      (`methode = zaunflaeche`), Tabelle `ground_density.yml`, Startwerte in MWp/ha: fest ab 2022 0,8–1,0; fest 2012–2018 0,5–0,7;
      Tracker 0,5–0,7; Agri-PV vertikal 0,3–0,4 (Jahre dazwischen linear).
    - Immer Spanne `kwp_min`/`kwp_max` und `methode`. AC = DC ÷ 1,4 bis DC ÷ 1,2. Ertrag kWh/kWp über PVGIS (Zwischenspeicher je 0,1°).
-   - **Kein Kalibrieren mit dem Marktstammdatenregister oder anderen Registern**; Register dienen später nur als Gegencheck.
+   - **Register** (geändert 18.11.2026, Christoph): Die Leistungsdichte darf mit Registern kalibriert werden, mit Schutz vor
+     Fehleinträgen: nur eindeutige Zuordnungen (Einheit in genau einer Fläche bzw. einzige Fläche ≤ 100 m), Plausibilität
+     0,2–2,0 MWp/ha, Median und Quartile je Baujahresklasse (mindestens 5 Paare), Testmenge räumlich zurückgehalten, Start- und
+     kalibrierte Werte im Vergleich; eingeschaltet erst nach Sicht der Testzahlen (`ground_calibration`), Methode
+     `zaunflaeche_kalibriert`. Deutschland: MaStR-Gesamtexport (Feld `ArtDerSolaranlage` = 852 Freiflächensolaranlage; Brutto =
+     DC, Netto = AC), zweites Pilotgebiet Brandenburg. Polen: MIOZE-Register der URE (api.ure.gov.pl, Anlagen bis 1 MW, Ort und
+     AC-Leistung, keine Koordinaten) nur zur **Eingrenzung der Suchregionen** (Orte mit Registerleistung ohne bekannte Fläche);
+     in Polen ist die installierte PV-Leistung die Wechselrichterleistung (AC).
 
 ## Datenmodell
 
@@ -101,7 +108,7 @@ Datenquelle „PV-Mapper Freiflächen“, unter Datenquellen ein- und ausblendba
 
 ## Pilot und Abnahme
 
-- Pilotregion konfigurierbar (`ground_pilot`); Start Polen, Woiwodschaft Wielkopolskie, dann ganz Tschechien.
+- Pilotregion konfigurierbar (`ground_pilot`); Start Polen, Woiwodschaft Wielkopolskie, dazu Brandenburg (Kalibrierung mit MaStR), dann ganz Tschechien.
 - Hold-out räumlich (10-km-Blöcke), nicht zufällig.
 - Trefferquote für Anlagen ab 1 ha ≥ 90 %.
 - Fehlalarme: gegen den Bestand **und** eine Stichprobe von 100 Verdachtsfällen, von Hand in der Prüfliste geprüft (der Bestand ist
