@@ -84,6 +84,46 @@ def apply_roof(row: dict, img, mask, win, fp, props: dict, res_m: float, cfg: di
     row["roof"] = json.dumps(r, ensure_ascii=False, separators=(",", ":"))
 
 
+def roof_filter(mask, fp, win, shape, cfg: dict) -> tuple:
+    """roof search only: a detected area lying mostly outside the footprint belongs to something else (carport, neighbour,
+    ground-mounted field) and is dropped as a whole; what remains counts up to `roof_clip_buffer_m` beyond the footprint
+    (offset of the OSM outline, eaves). Returns (mask, removed areas as [(reason, m²)] like postproc)."""
+    import cv2
+    import numpy as np
+    if fp is None or not mask.any():
+        return mask, []
+    exact = runtime.clip_mask(fp, win, shape, buffer_m=0) > 0
+    keep = runtime.clip_mask(fp, win, shape, buffer_m=float(cfg.get("roof_clip_buffer_m", 0.5))) > 0
+    m = mask > 0
+    n, lab = cv2.connectedComponents(m.astype(np.uint8), connectivity=8)
+    removed = []
+    share_min = float(cfg.get("roof_min_inside_share", 0.5))
+    px_m2 = abs(win.geotransform[1] * win.geotransform[5])
+    for k in range(1, n):
+        comp = lab == k
+        px = int(comp.sum())
+        inside = int((comp & exact).sum())
+        if inside < share_min * px:
+            m[comp] = False
+            removed.append(("außerhalb des Grundrisses", round(px * px_m2, 1)))
+    m &= keep
+    out = mask.copy()
+    out[~m] = 0
+    return out, removed
+
+
+def weak_hit(row: dict, cfg: dict) -> bool:
+    """combined rule for 'possible' (tier 2) instead of PV: small area AND small share of the roof AND score near the
+    threshold; thresholds from the sample review (review.rule_check); off while `roof_weak_rule` is not set"""
+    r = cfg.get("roof_weak_rule") or {}
+    if not r or not row.get("has_pv"):
+        return False
+    share = row.get("pv_share")
+    return ((r.get("max_area_m2") is None or (row.get("pv_area_m2") or 0) < float(r["max_area_m2"]))
+            and (r.get("max_share") is None or (share is not None and share < float(r["max_share"])))
+            and (r.get("max_prob") is None or (row.get("max_prob") or 0) < float(r["max_prob"])))
+
+
 def set_from_installations(row: dict, feats: list, cfg: dict):
     """kWp (sum with range), main layout, size class and the installations JSON of a building from its installations"""
     sm = typology.summarise([f["properties"] for f in feats])
@@ -98,11 +138,12 @@ def set_from_installations(row: dict, feats: list, cfg: dict):
 COLUMNS = ["id", "status", "has_pv", "pv_area_m2", "kwp_est", "size_class", "in_range",
            "max_prob", "n_installations", "footprint_m2", "source", "lon", "lat", "error", "chip",
            "check", "source2", "removed", "kwp_low", "kwp_high", "layout", "kwp_method",
-           "roof_type", "roof_area_m2", "usable_area_m2", "kwp_potential", "kwp_pot_low", "kwp_pot_high"]
+           "roof_type", "roof_area_m2", "usable_area_m2", "kwp_potential", "kwp_pot_low", "kwp_pot_high", "pv_share", "weak"]
 EXTRA = [("check", "TEXT"), ("source2", "TEXT"), ("removed", "TEXT"),      # added after the first release
          ("kwp_low", "REAL"), ("kwp_high", "REAL"), ("layout", "TEXT"), ("kwp_method", "TEXT"),
          ("installations", "TEXT"), ("roof_type", "TEXT"), ("roof_area_m2", "REAL"), ("usable_area_m2", "REAL"),
-         ("kwp_potential", "REAL"), ("kwp_pot_low", "REAL"), ("kwp_pot_high", "REAL"), ("roof", "TEXT")]
+         ("kwp_potential", "REAL"), ("kwp_pot_low", "REAL"), ("kwp_pot_high", "REAL"), ("roof", "TEXT"),
+         ("pv_share", "REAL"), ("weak", "INTEGER")]
 
 
 def ensure_columns(db):
@@ -128,7 +169,7 @@ def _summarise(b, polys, footprint, search, win, src, prob, cfg):
     utm = f"EPSG:{geo.utm_epsg(c.x, c.y)}"
     clip = geo.reproject(footprint if footprint is not None else search, "EPSG:4326", utm)
     if footprint is not None:
-        clip = clip.buffer(1.5)
+        clip = clip.buffer(float(cfg.get("roof_clip_buffer_m", 0.5)))
     kept = []
     for p in polys:
         q = geo.reproject(p, "EPSG:4326", utm).intersection(clip)
@@ -141,7 +182,9 @@ def _summarise(b, polys, footprint, search, win, src, prob, cfg):
     n_inst = len(getattr(u := unary_union([p.buffer(1.0) for p in parts]), "geoms", [u])) if len(parts) > 1 else len(parts)
     has_pv = area >= float(cfg["min_pv_area_m2"])
     kwp = round(area * float(cfg["kwp_per_m2"]), 1) if has_pv else 0.0
+    fp_m2 = geo.reproject(footprint, "EPSG:4326", utm).area if footprint is not None else None
     return {
+        "pv_share": round(area / fp_m2, 4) if (fp_m2 and has_pv) else None,
         "id": b.id, "status": "pv" if has_pv else "kein_pv", "has_pv": int(has_pv),
         "pv_area_m2": round(area, 1), "kwp_est": kwp,
         "size_class": cfgmod.size_class(kwp, cfg["size_classes"]) if has_pv else "",
@@ -317,8 +360,17 @@ def run(job, cfg: dict):
             if img2 is not None:
                 mask2, _ = postproc.clean(img2, res2[i].mask, prof.resolution_m, clips[i], pp_cfg, prob=res2[i].prob)
                 mask, check = postproc.fuse(mask, mask2, prof.resolution_m)
+            if fp is not None and cfg.get("roof_filter_outside", True):
+                mask, gone = roof_filter(mask, fp, win, img.shape, cfg)
+                if gone:
+                    info = {**info, "removed": list(info.get("removed") or []) + gone}
+                    infos[i] = info
+                    job.counters["ausserhalb_verworfen"] += len(gone)
             polys = inference.mask_to_polygons(mask, win)
             row = _summarise(b, polys, fp, search, win, src, r.max_prob, cfg)
+            row["weak"] = int(weak_hit(row, cfg))
+            if row["weak"]:
+                job.counters["schwach_moeglich"] += 1
             feats = apply_typology(row, img, mask, win, clips[i], src, b.props, prof.resolution_m, tcfg)
             if roof_on:
                 lm = None
@@ -369,7 +421,7 @@ def run(job, cfg: dict):
                 row["chip"] = name
             rows.append(tuple(row[k] for k in keys))
             if push:
-                tier = 1 if (check == "bestaetigt" and r.max_prob >= confirm) else 2
+                tier = 1 if (check == "bestaetigt" and r.max_prob >= confirm and not row.get("weak")) else 2
                 pending.append({"id": b.id, "result": "pv" if row["has_pv"] else "none",
                                 "tier": tier if row["has_pv"] else None, "kwp": row["kwp_est"], "area_m2": row["pv_area_m2"],
                                 "max_prob": row["max_prob"], "check": check, "source": src.id,

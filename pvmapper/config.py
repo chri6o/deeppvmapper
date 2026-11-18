@@ -47,6 +47,10 @@ DEFAULTS = {
                                       # many PV roofs (scores of 0.2–0.3 on obvious arrays), the segmentation decides
     "cross_check": True,              # second aerial image (other year) as cross-check, where the source has one
     "postproc": True,                 # mask post-processing (see pvmapper/postproc.py; postproc_* thresholds)
+    "roof_filter_outside": True,      # roof search: drop detected areas lying mostly outside the footprint (carport, neighbour, field)
+    "roof_min_inside_share": 0.5,     # … share of a detected area that must lie inside the exact footprint
+    "roof_clip_buffer_m": 0.5,        # what remains counts up to this distance beyond the footprint (outline offset, eaves)
+    "roof_weak_rule": None,           # {max_area_m2, max_share, max_prob}: hits below all three → 'possible' (tier 2); from the sample review
     "ground_db": "postgresql:///pvmapper_ground",   # PostGIS for ground-mounted PV (docs/freiflaechen.md); peer login as the service user
     "ground_dir": None,               # downloads and intermediate files (None = <jobs_dir>/_ground)
     "ground_pilot": "pl-wielkopolskie",   # region key (pvmapper/ground/inventory.py REGIONS, extend with ground_regions)

@@ -694,6 +694,29 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         from .. import review
         return review.summary(_ds(jid))
 
+    @app.get("/api/datasets/{jid}/review/rules")
+    def dataset_review_rules(jid: str, max_loss: float = 0.05):
+        """thresholds for 'possible' (area, share of the roof, score) from the reviewed sample, and their effect on the run"""
+        from .. import review
+        src = _job(jid).params.get("from_job")
+        if not src:
+            raise HTTPException(400, "Kein Stichproben-Datensatz (Lauf unbekannt).")
+        rdb = os.path.join(_job(src).dir, "results.sqlite")
+        res = review.rule_check(_ds(jid), rdb, max_loss)
+        if res.get("beste"):
+            res["wirkung_im_lauf"] = review.rule_effect(rdb, res["beste"])
+        return res
+
+    @app.post("/api/settings/roof_weak_rule")
+    def set_weak_rule(body: dict = Body(...)):
+        """switch the rule on (thresholds) or off (null); applies to the next runs"""
+        c = dict(cfg())
+        rule = body.get("rule")
+        c["roof_weak_rule"] = {k: rule.get(k) for k in ("max_area_m2", "max_share", "max_prob")} if rule else None
+        cfgmod.save(c, config_path)
+        state["cfg"] = c
+        return {"roof_weak_rule": c["roof_weak_rule"]}
+
     @app.post("/api/datasets/{jid}/items/{name}/flags")
     def dataset_flags(jid: str, name: str, body: dict = Body(...)):
         """per image: use its register capacity for the capacity calibration (`use_register`)"""

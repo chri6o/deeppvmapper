@@ -162,6 +162,16 @@ Segmentierung dreifach; Bilder nur mit „Kein PV“-Markierung werden ebenfalls
 Training Helligkeit, Gamma, Schattenbänder und Reflexe. Die KI-Masken prüfen jede Fläche gegen eine Liste
 typischer Verwechsler und durchlaufen dieselbe Nachbearbeitung.
 
+### Dachsuche: Funde außerhalb des Grundrisses, „möglich“ statt PV
+
+- **Außerhalb des Grundrisses:** Jede zusammenhängende Erkennung wird als Ganzes bewertet. Liegt weniger als die Hälfte im Grundriss
+  (`roof_min_inside_share`), gehört sie zu etwas anderem (Carport, Nachbardach, Freifläche) und fällt weg. Der Rest zählt bis
+  `roof_clip_buffer_m` (0,5 m) über den Grundriss hinaus (Versatz der OSM-Umrisse, Dachüberstand). Abschalten: `roof_filter_outside`.
+- **Anteil am Dach** (`pv_share`) wird je Gebäude gespeichert. Kein Filter allein: kleine echte Anlagen auf großen Schulen haben 1–3 %.
+- **„möglich“ statt PV:** Regel aus Fläche, Anteil und Score (`roof_weak_rule`), abgeleitet aus einer geprüften Stichprobe
+  (Masken-Editor → Stichprobe → „Schwellen für ‚möglich‘ ableiten“): erfasste Fehltreffer, verlorene echte Anlagen, Wirkung im
+  ganzen Lauf; einschalten mit einem Klick. Betroffene Gebäude gehen als Stufe 2 an PV-Map.
+
 ### Masken-Editor: Werkzeuge und Tasten
 
 Der Editor nutzt das ganze Fenster (☰ oder B blendet die Liste ein). Werkzeuge: V Zeiger (Fläche wählen und verschieben,

@@ -1427,8 +1427,29 @@ async function loadReview() {
     const wrong = r.by_cause.filter((c) => !c.ok && c.n).map((c) => `${esc(c.label)} ${fmt(c.n)}`).join(" · ");
     box.innerHTML = `<b>Stichprobe:</b> ${fmt(r.reviewed)} von ${fmt(r.n)} beurteilt · <b>richtig ${pct(r.precision)}</b>` +
       (r.reviewed ? ` (95 %: ${pct(r.ci95[0])}–${pct(r.ci95[1])})` : "") + (wrong ? `<br>Falsche Treffer: ${wrong}` : "") +
-      (r.wrong ? `<br><span class="hint">Die falschen Treffer sind jetzt „keine PV“-Flächen – „Training mit diesem Datensatz“ nutzt sie als harte Gegenbeispiele.</span>` : "");
+      (r.wrong ? `<br><span class="hint">Die falschen Treffer sind jetzt „keine PV“-Flächen – „Training mit diesem Datensatz“ nutzt sie als harte Gegenbeispiele.</span>` : "") +
+      (r.wrong && r.correct ? `<br><button class="secondary small" id="m-rules">Schwellen für „möglich“ ableiten</button><div id="m-rules-out"></div>` : "");
+    const rb = $("#m-rules");
+    if (rb) rb.onclick = showRules;
   } catch (e) { box.innerHTML = esc(e.message); }
+}
+async function showRules() {
+  const out = $("#m-rules-out"); out.innerHTML = '<span class="hint">rechnet …</span>';
+  let r;
+  try { r = await api(`/api/datasets/${M.ds}/review/rules`); } catch (e) { out.innerHTML = esc(e.message); return; }
+  const pct = (x) => x == null ? "–" : fmt(100 * x, 0) + " %";
+  const rule = (b) => `Fläche < ${fmt(b.max_area_m2)} m²${b.max_share != null ? ` und Anteil am Dach < ${pct(b.max_share)}` : ""}${b.max_prob != null ? ` und Score < ${fmt(b.max_prob, 2)}` : ""}`;
+  if (!r.beste) { out.innerHTML = `<p class="hint">${esc(r.hinweis || "Keine Regel erfasst falsche Treffer, ohne mehr als " + pct(r.max_verlust) + " der richtigen zu verlieren.")}</p>`; return; }
+  const b = r.beste, w = r.wirkung_im_lauf || {};
+  out.innerHTML = `<p><b>${esc(rule(b))}</b> → „möglich“ statt PV<br>` +
+    `erfasst ${fmt(b.falsch_erfasst)} von ${fmt(r.falsch)} falschen Treffern (${pct(b.anteil_falsch)}), verliert ${fmt(b.richtig_verloren)} von ${fmt(r.richtig)} richtigen (${pct(b.anteil_richtig)}); ` +
+    `Genauigkeit der Stichprobe ${pct(r.genauigkeit_vorher)} → <b>${pct(r.genauigkeit_nachher)}</b>` +
+    (Object.keys(r.erfasst_nach_ursache || {}).length ? `<br>erfasst: ${Object.entries(r.erfasst_nach_ursache).map(([k, v]) => `${esc(k)} ${v}`).join(", ")}` : "") +
+    (w.pv_treffer ? `<br>im ganzen Lauf: ${fmt(w.wuerden_moeglich)} von ${fmt(w.pv_treffer)} PV-Treffern (${pct(w.anteil)}) würden „möglich“` : "") +
+    `<br><span class="hint">Mediane richtig / falsch: Fläche ${fmt(r.werte.richtig.flaeche_m2, 1)} / ${fmt(r.werte.falsch.flaeche_m2, 1)} m², Anteil ${pct(r.werte.richtig.anteil_dach)} / ${pct(r.werte.falsch.anteil_dach)}, Score ${fmt(r.werte.richtig.score, 2)} / ${fmt(r.werte.falsch.score, 2)}. Kleine Stichproben: vorsichtig übernehmen.</span><br>` +
+    `<button class="primary small" id="m-rule-on">Regel für künftige Läufe einschalten</button> <button class="secondary small" id="m-rule-off">ausschalten</button></p>`;
+  $("#m-rule-on").onclick = async () => { await api("/api/settings/roof_weak_rule", { json: { rule: b } }); toast("Regel eingeschaltet – gilt für die nächsten Läufe"); };
+  $("#m-rule-off").onclick = async () => { await api("/api/settings/roof_weak_rule", { json: { rule: null } }); toast("Regel ausgeschaltet"); };
 }
 $$("#e-review [data-cause]").forEach((b) => b.onclick = async () => {
   const m = M.item; if (!m) return;
