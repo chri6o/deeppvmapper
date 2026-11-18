@@ -56,6 +56,7 @@ class JobManager:
                             self.submit(job)
                             continue
                         job.status = "cancelled"        # server was stopped mid-run
+                        job.save()                      # on disk too, or the next restart would revive it
                     self.jobs[jid] = job
                 except Exception:                       # noqa: BLE001
                     pass
@@ -70,7 +71,7 @@ class JobManager:
         q = self.q_cpu if cpu else self.q
         while True:
             job = q.get()
-            if job._cancel.is_set():
+            if job._cancel.is_set() or job.status == "cancelled":
                 job.status = "cancelled"
                 job.save()
                 continue
@@ -886,7 +887,11 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
 
     @app.post("/api/jobs/{jid}/cancel")
     def cancel(jid: str):
-        _job(jid).cancel()
+        job = _job(jid)
+        job.cancel()
+        if job.status == "queued":                       # not started yet: cancelled right away (also on disk)
+            job.status = "cancelled"
+            job.save()
         return {"ok": True}
 
     @app.post("/api/jobs/{jid}/resume")

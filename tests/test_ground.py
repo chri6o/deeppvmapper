@@ -692,3 +692,4 @@ def test_ground_jobs_resume_after_restart(tmp_path, monkeypatch):
     monkeypatch.setattr(mgr, "submit", lambda job: got.append(job.id))
     mgr.load_existing()
     assert got == [a.id] and mgr.jobs[b.id].status == "cancelled"
+    assert Job.load(str(jd), b.id).status == "cancelled"                  # stays cancelled after the next restart
