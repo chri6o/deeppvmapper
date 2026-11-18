@@ -117,9 +117,13 @@ Datenquelle „PV-Mapper Freiflächen“, unter Datenquellen ein- und ausblendba
 
 ## Offene Entscheidungen
 
-1. **TZ-SAM-Lizenz (CC BY-NC 4.0):** Vorschlag: nur in PV-Mapper für Training und Test; an PV-Map gehen keine TZ-SAM-Geometrien oder
-   -Kennungen – oder kommerzielle Lizenz anfragen.
+1. **TZ-SAM-Lizenz (CC BY-NC 4.0)** – entschieden 18.11.2026: TZ-SAM dient in PV-Mapper für Training und Test und darf an PV-Map
+   gehen, solange PV-Map es nur für Test und Training nutzt. Jede Zeile mit TZ-SAM-Anteil trägt `quellen.lizenz_nc = true`; PV-Map zeigt
+   sie nur dem Owner. Vor kommerzieller Nutzung wird die kommerzielle Lizenz bei TransitionZero angefragt; bis dahin bleiben diese Zeilen
+   aus allen bezahlten Funktionen.
 2. **Copernicus-Data-Space-Konto:** legt Christoph an; Zugangsdaten als Umgebungsvariablen auf dem PC.
 3. **Belegte Leistungen für die Abnahme:** OSM mit Betreiberangabe (`plant:output:electricity`) plus Liste von Christoph.
-4. **Zugriff auf den PC:** per SSH über die Linux-VM der Claude-App auf dem Mac (eigener Nutzer ohne sudo, eigener Schlüssel); nur
-   möglich, wenn das Konto alle Domains erlaubt.
+4. **Zugriff auf den PC** – entschieden 18.11.2026: SSH über die Linux-VM der Claude-App auf dem Mac (Ordner `pv-map-ops`), Nutzer
+   `claude` ohne Passwort und ohne allgemeines sudo, nur Schlüssel aus dem Heimnetz; erlaubt sind per sudo nur `pvmapper-update` und der
+   Neustart des Dienstes.
+5. **PostGIS auf dem PC** – entschieden 18.11.2026: kommt mit `pvmapper-update`.
