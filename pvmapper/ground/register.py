@@ -114,10 +114,10 @@ def mastr_url(session=None) -> str:
     s = session or requests
     r = s.get(MASTR_PAGE, headers={"User-Agent": UA}, timeout=60)
     r.raise_for_status()
-    m = re.findall(r"https?://[^\"']+/Gesamtdatenexport_\d{8}_[\d.]+\.zip", r.text)
-    if not m:
+    urls = re.findall(r"https?://[^\"']+/Gesamtdatenexport_\d{8}_[\d.]+\.zip", r.text)
+    if not urls:
         raise RuntimeError("MaStR: Link zum Gesamtdatenexport nicht gefunden")
-    return sorted(set(m))[-1]
+    return max(set(urls), key=lambda u: re.search(r"_(\d{8})_", u).group(1))      # newest date, not the quarterly 'Stichtag' file
 
 
 def _xml_records(fh, tag: str):

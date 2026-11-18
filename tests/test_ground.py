@@ -666,3 +666,14 @@ def test_openeo_retry(monkeypatch):
     assert coarse.retry(flaky, j, "Status") == "finished" and len(j.log_lines) == 2
     with pytest.raises(RuntimeError):
         coarse.retry(lambda: (_ for _ in ()).throw(RuntimeError("down")), j, "Status", tries=3)
+
+
+def test_mastr_url_newest_by_date():
+    class R:
+        text = ('<a href="https://download.marktstammdatenregister.de/Gesamtdatenexport_20261118_26.2.zip">a</a>'
+                '<a href="https://download.marktstammdatenregister.de/Stichtag/Gesamtdatenexport_20261001_26.1.zip">b</a>')
+        def raise_for_status(self): pass
+
+    class S:
+        def get(self, *a, **k): return R()
+    assert greg.mastr_url(S()).endswith("Gesamtdatenexport_20261118_26.2.zip")
