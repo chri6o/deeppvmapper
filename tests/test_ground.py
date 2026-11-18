@@ -324,6 +324,18 @@ def test_scan_job_with_mocked_openeo(con, tmp_path, monkeypatch):
     assert calls == [(2, "2026-07-01", "2026-10-01")]
     assert con.execute("SELECT count(*) FROM freiflaeche WHERE herkunft='suche'").fetchone()[0] == 2
     assert job.counters["neu"] == 2
+    con.execute("UPDATE freiflaeche SET first_seen='2026-09-01', zeitreihe='{\"2026-09\":{\"s2\":1}}' WHERE herkunft='suche'")
+    store.upsert(con, [_row("ff-pl-s2-202609-phantom", herkunft="suche", region="pl-wielkopolskie", first_seen="2026-09-01", zeitreihe={"2026-09": {"s2": 1}},
+                            geom_zaun=box(*coarse.tiles(inventory_poly(base), 20)[0]["bbox"]).centroid.buffer(0.001))])
+    job = Job(str(tmp_path), "ground_scan", {"region": "pl-wielkopolskie", "month": "2026-09", "max_tiles": 2})
+    runner("ground_scan")(job, cfg)
+    ids = [r[0] for r in con.execute("SELECT id FROM freiflaeche WHERE herkunft='suche'")]
+    assert "ff-pl-s2-202609-phantom" not in ids and len(ids) == 2           # rerun of the month replaced its candidates
+
+
+def inventory_poly(base):
+    from pvmapper.ground import inventory as gi
+    return gi.read_poly((base / "region.poly").read_text())
 
 
 def test_cpu_lane_and_monthly_tick(tmp_path, monkeypatch):

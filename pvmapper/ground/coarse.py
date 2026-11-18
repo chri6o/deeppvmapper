@@ -367,6 +367,11 @@ def run(job, cfg: dict):
     pbf = next((os.path.join(base, f) for f in sorted(os.listdir(base)) if f.endswith(".osm.pbf")
                 and f not in ("solar.osm.pbf", "near.osm.pbf", "buildings.osm.pbf")), None)
     total = {}
+    for t in ts:                     # a repeated run of a month replaces that month's untouched candidates in these tiles
+        con.execute("DELETE FROM freiflaeche WHERE region = %s AND herkunft = 'suche' AND pruefstatus = 'kandidat' "
+                    "AND first_seen = %s AND (coalesce(zeitreihe,'{}'::jsonb) - %s) = '{}'::jsonb "
+                    "AND ST_Within(ST_Centroid(geom_zaun), ST_MakeEnvelope(%s,%s,%s,%s,4326))",
+                    [key, month + "-01", month] + list(t["bbox"]))
     for t in ts:
         f = os.path.join(d, t["id"] + ".tif")
         if not os.path.exists(f):
