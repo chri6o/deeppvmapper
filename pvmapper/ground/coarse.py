@@ -204,6 +204,20 @@ def retry(fn, job, what: str, tries: int = 8, wait_s: float = 30):
             job.log(f"openEO {what}: {str(e)[:120]} – neuer Versuch in {wait_s * (k + 1):.0f} s")
             time.sleep(wait_s * (k + 1))
 
+def openeo_jobs(cfg: dict, limit: int = 50) -> list[dict]:
+    """jobs of the openEO account (newest first) with status and costs, for the overview in the web UI"""
+    conn = connect(cfg, log=lambda m: None)
+    out = []
+    for j in conn.list_jobs()[:limit]:
+        out.append({k: j.get(k) for k in ("id", "title", "status", "created", "updated", "costs", "usage")})
+    return out
+
+
+def stop_openeo_job(cfg: dict, job_id: str):
+    conn = connect(cfg, log=lambda m: None)
+    conn.job(job_id).stop()
+
+
 def connect(cfg: dict, log=print):
     import openeo
     conn = openeo.connect(cfg.get("openeo_backend") or BACKEND)
@@ -237,6 +251,15 @@ def run_tiles(conn, todo: list[dict], start: str, end: str, d: str, cfg: dict, j
         running[tid] = conn.job(jid)
         queue = [t for t in queue if t["id"] != tid]
     while queue or running:
+        if job._cancel.is_set():                                      # stop the cloud jobs too, not only the waiting
+            for tid, bj in running.items():
+                try:
+                    bj.stop()
+                    job.log(f"openEO-Auftrag {tid} gestoppt")
+                except Exception:                                    # noqa: BLE001
+                    pass
+            state["running"] = {}
+            save_state()
         job.check_cancel()
         while queue and len(running) < par:
             t = queue.pop(0)

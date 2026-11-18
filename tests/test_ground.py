@@ -693,3 +693,9 @@ def test_ground_jobs_resume_after_restart(tmp_path, monkeypatch):
     mgr.load_existing()
     assert got == [a.id] and mgr.jobs[b.id].status == "cancelled"
     assert Job.load(str(jd), b.id).status == "cancelled"                  # stays cancelled after the next restart
+
+
+def test_history_spatial_groups():
+    fences = [(f"a{i}", sq(13.0 + i * 0.001, 52.3, 50)) for i in range(5)] + [(f"b{i}", sq(14.5 + i * 0.001, 52.9, 50)) for i in range(3)]
+    gs = ghist.spatial_groups(fences, 10, 4)
+    assert sorted(len(g) for g in gs) == [1, 3, 4] and all(len({f[0][0] for f in g}) == 1 for g in gs)

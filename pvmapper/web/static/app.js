@@ -213,6 +213,18 @@ async function loadZubau() {
   const r = z.ohne_quartal;
   $("#g-zubau").innerHTML = svg + `<div class="hint">${legend}${legend ? "<br>" : ""}ohne Quartal: ${fmt(r.vor_2015)} vor 2015/16, ${fmt(r.nur_jahr)} nur Baujahr, ${fmt(r.ohne_datum)} ohne Datum</div>`;
 }
+async function loadOpeneo() {
+  $("#g-oe-list").innerHTML = '<p class="hint">lädt …</p>';
+  let js;
+  try { js = await api("/api/ground/openeo/jobs"); } catch (e) { $("#g-oe-list").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
+  $("#g-oe-list").innerHTML = `<table class="tbl"><tr><th>Titel</th><th>Status</th><th>gestartet</th><th>Credits</th><th></th></tr>` +
+    js.map((j) => `<tr><td>${esc(j.title || j.id)}</td><td>${esc(j.status)}</td><td>${esc((j.created || "").replace("T", " ").slice(5, 16))}</td>` +
+      `<td>${j.costs == null ? "–" : fmt(j.costs, 1)}</td><td>${["running", "queued", "created"].includes(j.status) ? `<button class="secondary small" data-stop="${esc(j.id)}">stoppen</button>` : ""}</td></tr>`).join("") + "</table>";
+  $$("#g-oe-list [data-stop]").forEach((b) => b.onclick = async () => {
+    try { await api(`/api/ground/openeo/jobs/${encodeURIComponent(b.dataset.stop)}/stop`, { method: "POST" }); toast("Gestoppt"); loadOpeneo(); }
+    catch (e) { toast("Fehler: " + e.message); }
+  });
+}
 async function initGround() {
   if (!S.gRegions) {
     S.gRegions = await api("/api/ground/regions");
@@ -231,6 +243,7 @@ async function initGround() {
     $("#g-cap").onclick = () => start("ground_capacity", { region: $("#g-region").value });
     $("#g-reg").onclick = () => start("ground_register", { region: $("#g-region").value });
     $("#g-hist").onclick = () => start("ground_history", { region: $("#g-region").value });
+    $("#g-oe").onclick = loadOpeneo;
     ["#g-zgroup", "#g-zunit", "#g-zconf"].forEach((q) => $(q).onchange = loadZubau);
     $("#g-zubau-box").ontoggle = () => { if ($("#g-zubau-box").open) loadZubau(); };
     $("#g-scan").onclick = () => start("ground_scan", { region: $("#g-region").value, month: $("#g-month").value, dry_run: $("#g-dry").checked });

@@ -410,6 +410,23 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         with _gcon() as con:
             return gstore.features(con, " AND ".join(w), a, min(int(limit), 50000))
 
+    @app.get("/api/ground/openeo/jobs")
+    def ground_openeo_jobs(limit: int = 30):
+        from ..ground import coarse
+        try:
+            return coarse.openeo_jobs(cfg(), limit)
+        except Exception as e:                                   # noqa: BLE001
+            raise HTTPException(503, f"openEO nicht erreichbar: {e}")
+
+    @app.post("/api/ground/openeo/jobs/{oid}/stop")
+    def ground_openeo_stop(oid: str):
+        from ..ground import coarse
+        try:
+            coarse.stop_openeo_job(cfg(), oid)
+        except Exception as e:                                   # noqa: BLE001
+            raise HTTPException(503, f"openEO: {e}")
+        return {"ok": True}
+
     @app.get("/api/ground/zubau")
     def ground_zubau(region: str | None = None, cc: str | None = None, group: str = "none", confirmed: bool = False,
                      format: str = "json"):

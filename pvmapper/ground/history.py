@@ -276,6 +276,20 @@ def register_quarters(con, region: str) -> list[dict]:
             for s, q, n, b, nn in rows]
 
 
+def spatial_groups(fences: list, cell_km: float = 10, max_n: int = 60) -> list[list]:
+    """fences grouped by grid cell (EPSG:3035), so every openEO job reads a small area only; large cells split by count"""
+    from .. import geo
+    cells: dict[tuple, list] = {}
+    for fid, g in fences:
+        c = geo.reproject(g.centroid, "EPSG:4326", "EPSG:3035")
+        cells.setdefault((int(c.x // (cell_km * 1000)), int(c.y // (cell_km * 1000))), []).append((fid, g))
+    out = []
+    for k in sorted(cells):
+        v = cells[k]
+        out += [v[i:i + max_n] for i in range(0, len(v), max_n)]
+    return out
+
+
 # -- job ---------------------------------------------------------------------------------------------------------------
 
 def run(job, cfg: dict):
@@ -290,20 +304,41 @@ def run(job, cfg: dict):
     fences = [(fid, wkb.loads(bytes(g))) for fid, g in rows]
     if job.params.get("max_fences"):
         fences = fences[: int(job.params["max_fences"])]
-    chunk = int(job.params.get("chunk") or cfg.get("ground_history_chunk", 150))
+    chunk = int(job.params.get("chunk") or cfg.get("ground_history_chunk", 60))
     start = job.params.get("start") or S2_START
     end = dt.date.today().replace(day=1).isoformat()
-    groups = [fences[i:i + chunk] for i in range(0, len(fences), chunk)]
+    groups = spatial_groups(fences, float(cfg.get("ground_history_cell_km", 10)), chunk)
     from . import inventory
     d = os.path.join(inventory.workdir(cfg, key), "history")
     os.makedirs(d, exist_ok=True)
     job.total, job.done = len(groups), 0
     job.log(f"Baudatum aus Sentinel-2 ({start} bis {end}): {len(fences)} Flächen in {len(groups)} openEO-Aufträgen")
     conn = coarse.connect(cfg, job.log)
+    sp = os.path.join(d, "state.json")
+    state = json.load(open(sp)) if os.path.exists(sp) else {}
+    if state.get("groups") != [[f for f, _ in g] for g in groups]:
+        state = {"groups": [[f for f, _ in g] for g in groups], "pending": {}}       # different grouping: start afresh
+        for f in os.listdir(d):
+            if f.startswith("teil"):
+                os.remove(os.path.join(d, f))
+
+    def save_state():
+        json.dump(state, open(sp, "w"))
     pending, results, t0 = {}, {}, {}
+    for i, jid in (state.get("pending") or {}).items():                 # resume after a restart
+        pending[int(i)], t0[int(i)] = conn.job(jid), time.time()
     par = max(1, min(int(cfg.get("ground_openeo_parallel", 2)), 2))
-    queue = list(range(len(groups)))
+    queue = [i for i in range(len(groups)) if i not in pending]
     while queue or pending:
+        if job._cancel.is_set():
+            for i, bj in pending.items():
+                try:
+                    bj.stop()
+                    job.log(f"openEO-Auftrag Teil {i + 1} gestoppt")
+                except Exception:                                    # noqa: BLE001
+                    pass
+            state["pending"] = {}
+            save_state()
         job.check_cancel()
         while queue and len(pending) < par:
             i = queue.pop(0)
@@ -317,6 +352,8 @@ def run(job, cfg: dict):
                               job, "Auftrag anlegen")
             coarse.retry(bj.start, job, "Auftrag starten")
             pending[i], t0[i] = bj, time.time()
+            state.setdefault("pending", {})[str(i)] = bj.job_id
+            save_state()
             time.sleep(6)
         time.sleep(float(cfg.get("ground_openeo_poll_s", 30)))
         for i, bj in list(pending.items()):
@@ -335,10 +372,14 @@ def run(job, cfg: dict):
                 except Exception:                                    # noqa: BLE001
                     pass
                 pending.pop(i)
+                state["pending"].pop(str(i), None)
+                save_state()
                 job.step()
             elif st in ("error", "canceled"):
                 job.log(f"Teil {i + 1}: openEO-Auftrag {st}")
                 pending.pop(i)
+                state["pending"].pop(str(i), None)
+                save_state()
                 job.step(fehler=1)
     n = {"gebaut": 0, "vor": 0, "keine_aenderung": 0, "unklar": 0, "zu_wenig_daten": 0}
     for i, text in results.items():
