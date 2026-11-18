@@ -759,6 +759,9 @@ async function refreshJob(withResults) {
   $("#jd-log").textContent = j.log.join("\n");
   $("#jd-cancel").classList.toggle("hidden", !["running", "queued"].includes(j.status));
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
+  $("#jd-restart").classList.toggle("hidden", !["buildings", "sync"].includes(j.kind) || ["running", "queued"].includes(j.status));
+  if (S.job !== S.restartFor) { $("#jd-restart-box").classList.add("hidden"); S.restartFor = S.job; }
+  S.jobData = j;
   $("#jd-status").classList.toggle("hidden", !["buildings", "sync"].includes(j.kind));
   $$(".filters").forEach((x) => x.classList.toggle("hidden", ["train", "ai_masks", "roofshape"].includes(j.kind)));
   $("#jd-trainbox").classList.toggle("hidden", !["buildings", "sync", "area"].includes(j.kind));
@@ -787,6 +790,12 @@ $("#t-clean-go").onclick = async () => {
   try { const r = await api("/api/cleanup", { json: { ids } }); $("#t-clean-msg").innerHTML = `<div class="info">${r.deleted.length} gelöscht.</div>`;
     loadCleanup(); loadJobs(); if (typeof loadDatasets === "function") loadDatasets(); }
   catch (e) { $("#t-clean-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
+$("#jd-restart").onclick = () => { const b = $("#jd-restart-box"); b.classList.toggle("hidden"); $("#jd-rs-profile").value = (S.jobData && S.jobData.params && S.jobData.params.profile) || S.info.config.profile; };
+$("#jd-rs-go").onclick = async () => {
+  try { const j = await api(`/api/jobs/${S.job}/restart`, { json: { profile: $("#jd-rs-profile").value, only: $("#jd-rs-only").value } });
+    $("#jd-restart-box").classList.add("hidden"); loadJobs(); openJob(j.id); }
+  catch (e) { alert(e.message); }
 };
 $("#jd-resume").onclick = async () => { await api(`/api/jobs/${S.job}/resume`, { method: "POST" }); openJob(S.job); loadJobs(); };
 $("#jd-reload").onclick = loadResults;
