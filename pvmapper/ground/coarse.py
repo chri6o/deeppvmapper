@@ -370,7 +370,7 @@ def run(job, cfg: dict):
     for t in ts:                     # a repeated run of a month replaces that month's untouched candidates in these tiles
         con.execute("DELETE FROM freiflaeche WHERE region = %s AND herkunft = 'suche' AND pruefstatus = 'kandidat' "
                     "AND first_seen = %s AND (coalesce(zeitreihe,'{}'::jsonb) - %s) = '{}'::jsonb "
-                    "AND ST_Intersects(geom_zaun, ST_MakeEnvelope(%s,%s,%s,%s,4326))",
+                    "AND ST_Intersects(geom_zaun, ST_Expand(ST_MakeEnvelope(%s,%s,%s,%s,4326), 0.03))",   # incl. the raster margin
                     [key, month + "-01", month] + list(t["bbox"]))
     for t in ts:
         f = os.path.join(d, t["id"] + ".tif")
