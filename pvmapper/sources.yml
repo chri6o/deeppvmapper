@@ -112,6 +112,37 @@ sources:
     license: dl-de/zero-2.0
     attribution: "© Geoportal Berlin"
     priority: 10
+    alt: [de-be-2024, de-be-2023]
+
+  de-be-2024:
+    name: "DE · Berlin · TrueDOP 2024 (Geoportal Berlin, Vergleichsbild)"
+    country: DE
+    region: Berlin
+    type: wms
+    url: https://gdi.berlin.de/services/wms/truedop_2024
+    layers: truedop_2024
+    crs: EPSG:25833
+    native_resolution_m: 0.2
+    bbox: [13.05, 52.32, 13.77, 52.69]
+    license: dl-de/zero-2.0
+    attribution: "© Geoportal Berlin"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe (geprüft 18.11.2026: GetCapabilities und GetMap)"
+
+  de-be-2023:
+    name: "DE · Berlin · TrueDOP 2023 (Geoportal Berlin, Vergleichsbild)"
+    country: DE
+    region: Berlin
+    type: wms
+    url: https://gdi.berlin.de/services/wms/truedop_2023
+    layers: truedop_2023
+    crs: EPSG:25833
+    native_resolution_m: 0.2
+    bbox: [13.05, 52.32, 13.77, 52.69]
+    license: dl-de/zero-2.0
+    attribution: "© Geoportal Berlin"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe (geprüft 18.11.2026: GetCapabilities und GetMap)"
 
   de-by:
     name: "DE · Bayern · DOP40 (LDBV, Open Data)"
@@ -169,6 +200,39 @@ sources:
     license: dl-de/by-2.0
     attribution: "© Freie und Hansestadt Hamburg, LGV"
     priority: 10
+    alt: [de-hh-2024, de-hh-2022]
+
+  de-hh-2024:
+    name: "DE · Hamburg · DOP 2024 (LGV, Zeitreihe unbelaubt, Vergleichsbild)"
+    country: DE
+    region: Hamburg
+    type: wms
+    url: https://geodienste.hamburg.de/wms_dop_zeitreihe_unbelaubt
+    layers: dop_zeitreihe_unbelaubt
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [9.72, 53.39, 10.35, 53.75]
+    extra_params: {TIME: "2024"}
+    license: dl-de/by-2.0
+    attribution: "© Freie und Hansestadt Hamburg, LGV"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe (geprüft 18.11.2026: GetCapabilities und GetMap)"
+
+  de-hh-2022:
+    name: "DE · Hamburg · DOP 2022 (LGV, Zeitreihe unbelaubt, Vergleichsbild)"
+    country: DE
+    region: Hamburg
+    type: wms
+    url: https://geodienste.hamburg.de/wms_dop_zeitreihe_unbelaubt
+    layers: dop_zeitreihe_unbelaubt
+    crs: EPSG:25832
+    native_resolution_m: 0.2
+    bbox: [9.72, 53.39, 10.35, 53.75]
+    extra_params: {TIME: "2022"}
+    license: dl-de/by-2.0
+    attribution: "© Freie und Hansestadt Hamburg, LGV"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe (geprüft 18.11.2026: GetCapabilities und GetMap)"
 
   de-he:
     name: "DE · Hessen · DOP20 (HVBG)"
@@ -253,6 +317,22 @@ sources:
     license: dl-de/by-2.0
     attribution: "© GeoSN"
     priority: 20
+    alt: [de-sn-2018-2020]
+
+  de-sn-2018-2020:
+    name: "DE · Sachsen · Historische DOP 2018–2020 (GeoSN, Vergleichsbild)"
+    country: DE
+    region: Sachsen
+    type: wms
+    url: https://geodienste.sachsen.de/wms_geosn_dop_2018_2020/guest
+    layers: dop_2018_2020_rgb
+    crs: EPSG:25833
+    native_resolution_m: 0.2
+    bbox: [11.79, 50.15, 15.09, 51.72]
+    license: dl-de/by-2.0
+    attribution: "© GeoSN"
+    priority: 90
+    notes: "Vergleichsbild für die Gegenprobe (geprüft 18.11.2026: GetCapabilities und GetMap) – 3 bis 6 Jahre alt: neue Anlagen fehlen dort, die Gegenprobe meldet sie als „nur aktuell“"
 
   de-st:
     name: "DE · Sachsen-Anhalt · DOP20 (LVermGeo)"
