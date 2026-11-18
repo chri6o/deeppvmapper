@@ -192,6 +192,18 @@ def worldcover_shares(classes: np.ndarray, mask_poly_px: np.ndarray) -> dict:
 
 # -- openEO ------------------------------------------------------------------------------------------------------------
 
+def retry(fn, job, what: str, tries: int = 8, wait_s: float = 30):
+    """openEO answers now and then with 502/503 or drops the connection: try again before giving up (18.11.2026: one 502
+    ended a 5-hour run after 67 of 112 tiles)"""
+    for k in range(tries):
+        try:
+            return fn()
+        except Exception as e:                                          # noqa: BLE001
+            if k == tries - 1:
+                raise
+            job.log(f"openEO {what}: {str(e)[:120]} – neuer Versuch in {wait_s * (k + 1):.0f} s")
+            time.sleep(wait_s * (k + 1))
+
 def connect(cfg: dict, log=print):
     import openeo
     conn = openeo.connect(cfg.get("openeo_backend") or BACKEND)
@@ -228,9 +240,9 @@ def run_tiles(conn, todo: list[dict], start: str, end: str, d: str, cfg: dict, j
         job.check_cancel()
         while queue and len(running) < par:
             t = queue.pop(0)
-            cube = build(conn, t["bbox"], start, end, wc)
-            bj = cube.create_job(title=f"pvmapper {t['id']} {start}..{end}", out_format="GTiff")
-            bj.start()
+            bj = retry(lambda: build(conn, t["bbox"], start, end, wc).create_job(title=f"pvmapper {t['id']} {start}..{end}",
+                                                                                  out_format="GTiff"), job, "Auftrag anlegen")
+            retry(bj.start, job, "Auftrag starten")
             state.setdefault("started", {})[t["id"]] = time.time()
             running[t["id"]] = bj
             state.setdefault("running", {})[t["id"]] = bj.job_id
@@ -238,11 +250,11 @@ def run_tiles(conn, todo: list[dict], start: str, end: str, d: str, cfg: dict, j
             time.sleep(6)                                            # 12 requests per minute
         time.sleep(float(cfg.get("ground_openeo_poll_s", 30)))
         for tid, bj in list(running.items()):
-            st = bj.status()
+            st = retry(bj.status, job, f"Status {tid}")
             if st == "finished":
-                assets = bj.get_results().get_assets()
+                assets = retry(lambda: bj.get_results().get_assets(), job, f"Ergebnis {tid}")
                 tif = next((a for a in assets if a.name.endswith((".tif", ".tiff"))), assets[0])
-                tif.download(os.path.join(d, tid + ".tif"))
+                retry(lambda: tif.download(os.path.join(d, tid + ".tif")), job, f"Download {tid}")
                 try:
                     md = bj.describe()
                     state.setdefault("credits", {})[tid] = (md.get("costs") or md.get("usage", {}).get("credits"))

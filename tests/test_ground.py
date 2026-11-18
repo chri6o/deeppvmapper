@@ -647,3 +647,22 @@ def test_history_apply_accuracy_and_zubau(con):
     assert {e["segment"] for e in zg["reihe"]} == {"5–20 MW"}
     rq = ghist.register_quarters(con, "bb")
     assert [(r["quartal"], r["dc_mw"]) for r in rq] == [("2021-Q2", 8.0), ("2022-Q4", 8.0)]
+
+
+def test_openeo_retry(monkeypatch):
+    monkeypatch.setattr(coarse.time, "sleep", lambda s: None)
+
+    class J:
+        log_lines = []
+        def log(self, m): self.log_lines.append(m)
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("[502] Bad Gateway")
+        return "finished"
+    j = J()
+    assert coarse.retry(flaky, j, "Status") == "finished" and len(j.log_lines) == 2
+    with pytest.raises(RuntimeError):
+        coarse.retry(lambda: (_ for _ in ()).throw(RuntimeError("down")), j, "Status", tries=3)

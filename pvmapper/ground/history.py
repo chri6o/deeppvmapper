@@ -313,18 +313,19 @@ def run(job, cfg: dict):
                 job.step()
                 continue
             fc = geometries(groups[i])
-            bj = build(conn, fc, start, end).create_job(title=f"pvmapper Baudatum {key} {i}", out_format="JSON")
-            bj.start()
+            bj = coarse.retry(lambda: build(conn, fc, start, end).create_job(title=f"pvmapper Baudatum {key} {i}", out_format="JSON"),
+                              job, "Auftrag anlegen")
+            coarse.retry(bj.start, job, "Auftrag starten")
             pending[i], t0[i] = bj, time.time()
             time.sleep(6)
         time.sleep(float(cfg.get("ground_openeo_poll_s", 30)))
         for i, bj in list(pending.items()):
-            st = bj.status()
+            st = coarse.retry(bj.status, job, f"Status Teil {i + 1}")
             if st == "finished":
-                assets = bj.get_results().get_assets()
+                assets = coarse.retry(lambda: bj.get_results().get_assets(), job, f"Ergebnis Teil {i + 1}")
                 a = next((x for x in assets if x.name.endswith((".json", ".csv"))), assets[0])
                 p = os.path.join(d, f"teil{i}" + os.path.splitext(a.name)[1])
-                a.download(p)
+                coarse.retry(lambda: a.download(p), job, f"Download Teil {i + 1}")
                 if not p.endswith(".json"):
                     os.replace(p, os.path.join(d, f"teil{i}.json"))
                 results[i] = open(os.path.join(d, f"teil{i}.json")).read()
