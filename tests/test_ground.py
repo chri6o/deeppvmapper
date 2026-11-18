@@ -407,7 +407,7 @@ def test_density_table_and_estimate():
     t = typology.settings({})
     e = capacity.estimate({"typ": "fest_sued", "baujahr_schaetzung": 2023, "flaeche_zaun_m2": 100000, "herkunft": "bestand_osm"}, c, t)
     assert (e["kwp_min"], e["kwp_max"], e["methode"]) == (8000, 10000, "zaunflaeche")
-    assert e["ac_kw_min"] == pytest.approx(8000 / 1.4, abs=0.1) and e["ac_kw_max"] == pytest.approx(10000 / 1.2, abs=0.1)
+    assert e["ac_kw_min"] == pytest.approx(8000 / 1.25, abs=0.1) and e["ac_kw_max"] == pytest.approx(10000 / 1.05, abs=0.1)
     m = capacity.estimate({"typ": "fest_sued", "baujahr_schaetzung": 2023, "flaeche_zaun_m2": 100000, "flaeche_module_m2": 40000,
                            "herkunft": "bestand_osm"}, c, t)
     assert m["methode"] == "modulflaeche" and 40000 * 0.215 / 0.97 < m["kwp_min"] < m["kwp_max"] < 40000 * 0.215 / 0.8

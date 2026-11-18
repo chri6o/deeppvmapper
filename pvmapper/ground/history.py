@@ -73,9 +73,11 @@ def geometries(fences: list[tuple[str, object]]) -> dict:
     return {"type": "FeatureCollection", "features": feats}
 
 
-def build(conn, fc: dict, start: str, end: str):
-    bbox = _bbox(fc)
-    s2 = conn.load_collection("SENTINEL2_L2A", spatial_extent=bbox, temporal_extent=[start, end], bands=BANDS + ["SCL"],
+def build(conn, fc: dict, start: str, end: str, extent: str = "geojson"):
+    """extent 'bbox': load the bounding box of the group (cost grows with the box: 18.11.2026 about 5 credits per 10-km cell and
+    year); 'geojson': pass the polygons as spatial extent, so only data under them is loaded"""
+    ext = fc if extent == "geojson" else _bbox(fc)
+    s2 = conn.load_collection("SENTINEL2_L2A", spatial_extent=ext, temporal_extent=[start, end], bands=BANDS + ["SCL"],
                               max_cloud_cover=80)
     scl = s2.band("SCL")
     bad = (scl == 3) | (scl == 8) | (scl == 9) | (scl == 10) | (scl == 11) | (scl == 0) | (scl == 1)
@@ -307,7 +309,11 @@ def run(job, cfg: dict):
     chunk = int(job.params.get("chunk") or cfg.get("ground_history_chunk", 60))
     start = job.params.get("start") or S2_START
     end = dt.date.today().replace(day=1).isoformat()
-    groups = spatial_groups(fences, float(cfg.get("ground_history_cell_km", 10)), chunk)
+    extent = job.params.get("extent") or cfg.get("ground_history_extent", "geojson")
+    if extent == "geojson":                       # the box does not matter: groups by count, nearby fences together
+        groups = spatial_groups(fences, float(cfg.get("ground_history_cell_km", 1000)), chunk)
+    else:
+        groups = spatial_groups(fences, float(cfg.get("ground_history_cell_km", 10)), chunk)
     from . import inventory
     d = os.path.join(inventory.workdir(cfg, key), "history")
     os.makedirs(d, exist_ok=True)
@@ -348,7 +354,7 @@ def run(job, cfg: dict):
                 job.step()
                 continue
             fc = geometries(groups[i])
-            bj = coarse.retry(lambda: build(conn, fc, start, end).create_job(title=f"pvmapper Baudatum {key} {i}", out_format="JSON"),
+            bj = coarse.retry(lambda: build(conn, fc, start, end, extent).create_job(title=f"pvmapper Baudatum {key} {i}", out_format="JSON"),
                               job, "Auftrag anlegen")
             coarse.retry(bj.start, job, "Auftrag starten")
             pending[i], t0[i] = bj, time.time()

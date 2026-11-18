@@ -34,7 +34,7 @@ tilt_deg:
   floating: [8, 15]
   unbekannt: [8, 35]
 
-dc_ac_ratio: [1.2, 1.4]   # AC = DC ÷ ratio
+dc_ac_ratio: [1.05, 1.25] # AC = DC ÷ ratio; MaStR Brandenburg 18.11.2026: median 1.13, quartiles 1.07–1.20
 pvgis:
   url: https://re.jrc.ec.europa.eu/api/v5_3/PVcalc
   loss_pct: 14
