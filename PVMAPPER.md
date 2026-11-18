@@ -60,6 +60,20 @@ Fünf Bereiche oben in der Leiste. Laufende Aufträge zeigt die Kopfzeile an (Kl
 - **PV-Map:** Adresse, Zugangsschlüssel und nächtlicher Abgleich.
 - **Einstellungen:** Gerät, Schwellenwerte, Batchgröße, parallele Downloads, kWp pro m², Mindestfläche, Größenklassen (Standard: S < 30, M < 100, L < 750, XL ≥ 750 kWp) und die Liste der Bildquellen.
 
+## Prüfaufträge aus PV-Map
+
+In PV-Map kann der Owner Gebäude gezielt prüfen lassen (Portfolio → „Alle Gebäude prüfen lassen“ oder „Auswahl prüfen lassen“). Mit
+**Reiter PV-Map → „Prüfaufträge aus PV-Map sofort bearbeiten: an“** fragt PV-Mapper alle 2 Minuten nach (`sync_requests`,
+`sync_requests_every_s`), sobald die Grafikkarte frei ist, auch außerhalb des Nachtfensters. Gibt es wartende Gebäude, startet ein
+Abgleich nur für sie (`requested=true`); die Ergebnisse gehen in Paketen zu 10 Gebäuden oder jede Minute zurück, damit der
+Fortschrittsbalken in PV-Map mitläuft. „Auch bei unverändertem Luftbild neu rechnen“ im Auftrag (`force`) überspringt den Vergleich
+des Luftbild-Fingerabdrucks. Ein laufender Nachtabgleich nimmt angeforderte Gebäude ohnehin zuerst. PV-Map: `docs/pvmapper-ergebnisse.md` (#379).
+
+**Prüfläufe wiederholen** (etwa nach einem Nachtraining): Reiter PV-Map → „Prüfaufträge in PV-Map“ → „Aufträge anzeigen“, Modell und
+Gebäude (alle / nur mit PV / nur ohne PV) wählen, „Wiederholen“. PV-Mapper legt in PV-Map einen neuen Auftrag mit denselben Gebäuden an,
+startet ihn sofort und rechnet auch bei gleichem Luftbild neu. PV-Map vergleicht das Ergebnis mit dem früheren Lauf (neu mit PV, keine PV
+mehr, jetzt bestätigt, nur noch möglich, unverändert). Dasselbe geht in PV-Map am Auftrag („wiederholen“).
+
 ## PV-Map-Konnektor und Training mit Bestands-PV
 
 PV-Mapper holt aus PV-Map **Gebäudelisten** und **Trainingsbeispiele**. In PV-Map legst du dafür ein API-Token an (Verwaltung → Datenquellen → API-Tokens) und trägst es mit der Adresse in den Einstellungen von PV-Mapper ein. Schnittstelle: PV-Map `docs/pvmapper-connector.md`.

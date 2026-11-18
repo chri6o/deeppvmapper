@@ -298,11 +298,13 @@
       <label>PV-Map-Adresse<input id="s-pmurl" placeholder="https://pv-map.solar"></label>
       <label>PV-Map-API-Token<input id="s-pmtoken" type="password" placeholder="pvm_…"></label>
     </div>
-    <h3>Nächtlicher Abgleich</h3>
+    <h3>Prüfaufträge und nächtlicher Abgleich</h3>
     <p class="hint">PV-Mapper holt im Zeitfenster die nächsten Gebäude aus der PV-Map-Arbeitsliste (zuerst nie geprüfte), prüft sie und
       sendet jedes Ergebnis zurück – auch „keine PV“. Bereits geprüfte Gebäude werden nach der Wiederholfrist nur neu gerechnet, wenn es ein
-      neues Luftbild gibt. Was in PV-Map sichtbar ist, stellst du dort unter Verwaltung → Datenquellen ein.</p>
+      neues Luftbild gibt. Was in PV-Map sichtbar ist, stellst du dort unter Verwaltung → Datenquellen ein.
+      Prüfaufträge legst du in PV-Map im Portfolio an („Alle Gebäude prüfen lassen“); den Fortschritt zeigt PV-Map dort.</p>
     <div class="grid2">
+      <label title="PV-Mapper fragt alle 2 Minuten bei PV-Map nach, wenn die Grafikkarte frei ist, auch außerhalb des Zeitfensters">Prüfaufträge aus PV-Map sofort bearbeiten<select id="s-sync-req"><option value="false">aus</option><option value="true">an</option></select></label>
       <label>Nachtbetrieb<select id="s-sync-on"><option value="false">aus</option><option value="true">an</option></select></label>
       <label>Gebäude (Filter)<input id="s-sync-filter" placeholder="cc=DE&amp;nuts3=DEA2&amp;sub=Education"></label>
       <label>von (Uhrzeit)<input id="s-sync-start" placeholder="22:00"></label>
@@ -318,6 +320,16 @@
     <div id="s-sync-out"></div>
     <div class="row"><button id="s-save-pm" class="primary">Speichern</button></div>
     <div id="s-msg-pm"></div>
+    <h3>Prüfaufträge in PV-Map</h3>
+    <p class="hint">Aufträge aus PV-Map mit Fortschritt. „Wiederholen“ prüft dieselben Gebäude noch einmal – etwa nach einem Nachtraining mit
+      dem neuen Modell – und rechnet auch bei gleichem Luftbild neu. PV-Map vergleicht danach mit dem früheren Lauf (neu mit PV, keine PV mehr,
+      jetzt bestätigt).</p>
+    <div class="grid2">
+      <label>Modell für die Wiederholung<select id="rq-profile" class="profile-select"></select></label>
+      <label>Gebäude<select id="rq-only"><option value="all">alle</option><option value="pv">nur mit PV</option><option value="none">nur ohne PV</option></select></label>
+    </div>
+    <div class="row"><button id="rq-load" class="secondary">Aufträge anzeigen</button></div>
+    <div id="rq-out"></div>
   </div>
 
   <!-- ===================================================== Einstellungen -->

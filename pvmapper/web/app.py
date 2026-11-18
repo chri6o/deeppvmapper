@@ -125,6 +125,26 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         mgr.submit(job)
         return job
 
+    def request_tick(now=None):
+        """check requests from PV-Map (#379): a short poll every `sync_requests_every_s` while the GPU is free; waiting buildings → a
+        sync job only for them (requested=true), also outside the night window"""
+        import time as _t
+        c = cfg()
+        if not c.get("sync_requests") or not c.get("pvmap_token"):
+            return None
+        t = now if now is not None else _t.monotonic()
+        if t - state.get("req_poll", -1e9) < float(c.get("sync_requests_every_s") or 120):
+            return None
+        if mgr.current is not None or not mgr.q.empty():
+            return None                                          # the GPU is busy: a running sync takes requests first anyway
+        state["req_poll"] = t
+        from .. import pvmap
+        if pvmap.Client.from_config(c).pending() <= 0:
+            return None
+        job = Job(c["jobs_dir"], "sync", {"filter": "requested=true", "requests": True, "auto": True})
+        mgr.submit(job)
+        return job
+
     def ground_tick(now=None):
         """monthly coarse search for ground-mounted PV: once per month from `ground_scan_day`, at night (01–05 h)"""
         import datetime as _dt
@@ -147,8 +167,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def sync_loop():
         import time as _t
         while True:
-            _t.sleep(60)
-            for tick in (sync_tick, ground_tick):
+            _t.sleep(20)
+            for tick in (sync_tick, request_tick, ground_tick):
                 try:
                     tick()
                 except Exception:                                # noqa: BLE001
@@ -157,6 +177,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         threading.Thread(target=sync_loop, name="sync", daemon=True).start()
     app.state.sync_tick = sync_tick
     app.state.ground_tick = ground_tick
+    app.state.request_tick = request_tick
 
     @app.middleware("http")
     async def password_gate(request, call_next):
@@ -525,7 +546,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         """open buildings in the PV-Map work list per priority, the night window and the last sync jobs"""
         from .. import pvmap, sync
         c = cfg()
-        out = {"enabled": bool(c.get("sync_enabled")), "start": c.get("sync_start"), "end": c.get("sync_end"),
+        out = {"enabled": bool(c.get("sync_enabled")), "requests": bool(c.get("sync_requests")), "start": c.get("sync_start"), "end": c.get("sync_end"),
                "filter": c.get("sync_filter"), "in_window": bool(sync.window(c)),
                "jobs": [j.as_dict() | {"log": None} for j in sorted(mgr.jobs.values(), key=lambda j: j.id, reverse=True)
                         if j.kind == "sync"][:5]}
@@ -536,6 +557,30 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                                                                     recheck_days=int(c.get("sync_recheck_days") or 365), **q)
         except Exception as e:                                   # noqa: BLE001
             out["queue_error"] = str(e)[:300]
+        return out
+
+    @app.get("/api/pvmap/requests")
+    def pvmap_requests():
+        """check requests in PV-Map (#379) with progress and comparison of repeats"""
+        from .. import pvmap
+        try:
+            return pvmap.Client.from_config(cfg()).requests()
+        except pvmap.PVMapError as e:
+            raise HTTPException(502, str(e))
+
+    @app.post("/api/pvmap/requests/{rid}/repeat")
+    def pvmap_repeat(rid: str, body: dict = Body(default={})):
+        """repeat a request with the current model (e.g. after retraining); `start`: process it now instead of waiting for the poll"""
+        from .. import pvmap
+        try:
+            out = pvmap.Client.from_config(cfg()).repeat(rid, body.get("only") or "all", body.get("force", True) is not False)
+        except pvmap.PVMapError as e:
+            raise HTTPException(502, str(e))
+        if body.get("start"):
+            job = Job(cfg()["jobs_dir"], "sync", {"filter": "requested=true", "requests": True,
+                                                  **({"profile": body["profile"]} if body.get("profile") else {})})
+            mgr.submit(job)
+            out["job"] = job.as_dict()
         return out
 
     @app.post("/api/sync/start")

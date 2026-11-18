@@ -71,6 +71,8 @@ DEFAULTS = {
     "sync_recheck_days": 365,         # look at a building's aerial image again after … days (new image → new check)
     "sync_confirm_score": 0.9,        # cross-check confirmed and score ≥ this → "confirmed" (tier 1) in PV-Map
     "sync_chunk": 500,                # buildings per request to the work list
+    "sync_requests": False,           # check requests from PV-Map at once: poll every sync_requests_every_s when the GPU is free (PV-Map #379)
+    "sync_requests_every_s": 120,
     "sync_push_reviews": True,        # masks checked in the editor go to PV-Map as "checked by hand"
     "typology": True,                 # classify every detected installation (layout, azimuth, tilt class, fill factor) and
                                       # estimate kWp from outline × fill factor × efficiency (pvmapper/typology.py)

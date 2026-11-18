@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
@@ -202,8 +203,14 @@ def run(job, cfg: dict):
     roof_on = bool(p.get("roof_potential", cfg.get("roof_potential", False)))
     tcfg = {**cfg, "_profile": prof.id}                          # typology settings incl. the calibration of this model
 
+    # check requests (PV-Map #379): small packages, so that the progress bar in PV-Map moves
+    small = bool(p.get("requests"))
+    last_sent = [time.monotonic()]
+
     def send(force=False):
-        if push and pending and (force or len(pending) >= 200):
+        due = len(pending) >= 10 or time.monotonic() - last_sent[0] >= 60 if small and pending else False
+        if push and pending and (force or due or len(pending) >= 200):
+            last_sent[0] = time.monotonic()
             try:
                 out = client.send_results(list(pending), run=job.id, model=prof.id)
                 job.counters["gesendet"] += len(pending)
@@ -235,7 +242,8 @@ def run(job, cfg: dict):
                 b.props["_img_hash"] = h = sources.image_hash(img)
                 sc = b.props.get("_scan") or {}
                 # work list: same aerial image and same model as at the last check → nothing new to compute
-                if sc.get("img_hash") and sources.hash_distance(sc["img_hash"], h) <= 12 and sc.get("model") == prof.id:
+                if (sc.get("img_hash") and sources.hash_distance(sc["img_hash"], h) <= 12 and sc.get("model") == prof.id
+                        and not b.props.get("force")):            # a request with "compute again" (PV-Map #379)
                     b.props["_unchanged"] = True
                     return b, search, fp, None, win, src, None
             return b, search, fp, img, win, src, None

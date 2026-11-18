@@ -937,18 +937,41 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
   "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
-const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-age": "age_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push", "#s-lod2": "lod2" };
+const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-age": "age_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-req": "sync_requests", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push", "#s-lod2": "lod2" };
 Object.assign(SET, { "#s-sync-filter": "sync_filter", "#s-sync-start": "sync_start", "#s-sync-end": "sync_end", "#s-sync-profile": "sync_profile",
   "#s-sync-recheck": "sync_recheck_days", "#s-sync-score": "sync_confirm_score" });
-const PRIO = { 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };
+const PRIO = { 0: "Prüfaufträge aus PV-Map", 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };
 $("#s-sync-status").onclick = async () => {
   $("#s-sync-out").innerHTML = `<div class="info">Frage PV-Map …</div>`;
   try { const d = await api("/api/sync/status");
     const q = d.queue ? Object.entries(d.queue.open).map(([k, v]) => `${PRIO[k] || k}: <b>${fmt(v)}</b>`).join(" · ") + ` · bisher geprüft ${fmt(d.queue.checked)} von ${fmt(d.queue.total)}` : esc(d.queue_error || "");
     const jobs = (d.jobs || []).map((j) => `${esc(j.id)} · ${STATUS[j.status]} · ${fmt(j.done)} Gebäude · ${fmt((j.counters || {}).gesendet)} gesendet`).join("<br>");
-    $("#s-sync-out").innerHTML = `<div class="info">Arbeitsliste (${esc(d.filter || "")}): ${q}<br>Nachtbetrieb ${d.enabled ? `an, ${esc(d.start)}–${esc(d.end)}${d.in_window ? " (läuft gerade im Zeitfenster)" : ""}` : "aus"}${jobs ? "<br>" + jobs : ""}</div>`; }
+    $("#s-sync-out").innerHTML = `<div class="info">Arbeitsliste (${esc(d.filter || "")}): ${q}<br>Prüfaufträge ${d.requests ? "sofort" : "nur im Nachtbetrieb"} · Nachtbetrieb ${d.enabled ? `an, ${esc(d.start)}–${esc(d.end)}${d.in_window ? " (läuft gerade im Zeitfenster)" : ""}` : "aus"}${jobs ? "<br>" + jobs : ""}</div>`; }
   catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
+/* check requests in PV-Map (#379): list with progress, repeat after retraining */
+const RQ_ST = { waiting: "wartet", working: "in Arbeit", done: "fertig", cancelled: "abgebrochen" };
+async function loadRequests() {
+  $("#rq-out").innerHTML = `<div class="info">Frage PV-Map …</div>`;
+  try {
+    const d = await api("/api/pvmap/requests");
+    const rows = (d.requests || []).map((x) => {
+      const C = x.compare, cmp = C ? ` · gegenüber dem früheren Lauf: ${fmt(C.new_pv)} neu mit PV, ${fmt(C.lost_pv)} keine PV mehr, ${fmt(C.tier_up)} jetzt bestätigt, ${fmt(C.tier_down)} nur noch möglich, ${fmt(C.same)} unverändert` : "";
+      const fin = x.status === "done" || x.status === "cancelled";
+      return `<tr><td>${esc(x.label || "Prüfauftrag")}${x.parent_id ? " <span class=\"hint\">(Wiederholung)</span>" : ""}<br><span class="hint">${esc(new Date(x.created_at).toLocaleString("de-DE"))}${(x.models || []).length ? " · Modell " + esc(x.models.join(", ")) : ""}</span></td>
+        <td>${RQ_ST[x.status] || esc(x.status)}<br><span class="hint">${fmt(x.done)} von ${fmt(x.n)} geprüft · PV ${fmt(x.pv)} (bestätigt ${fmt(x.pv_confirmed)})${cmp}</span></td>
+        <td>${fin ? `<button class="secondary" data-rqrep="${esc(x.id)}">Wiederholen</button>` : ""}</td></tr>`; }).join("");
+    $("#rq-out").innerHTML = rows ? `<div class="tablewrap"><table>${rows}</table></div>` : `<div class="info">Noch keine Prüfaufträge in PV-Map.</div>`;
+    $$("#rq-out [data-rqrep]").forEach((b) => b.onclick = async () => {
+      try {
+        const r = await api(`/api/pvmap/requests/${b.dataset.rqrep}/repeat`, { json: { only: $("#rq-only").value, profile: $("#rq-profile").value, start: true } });
+        $("#rq-out").insertAdjacentHTML("afterbegin", `<div class="info">Wiederholung für ${fmt(r.n)} Gebäude angelegt und gestartet (Modell ${esc($("#rq-profile").value)}).</div>`);
+        if (r.job) started(r.job);
+      } catch (e) { $("#rq-out").insertAdjacentHTML("afterbegin", `<div class="info err">${esc(e.message)}</div>`); }
+    });
+  } catch (e) { $("#rq-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+}
+$("#rq-load").onclick = loadRequests;
 $("#s-sync-now").onclick = async () => {
   try { const j = await api("/api/sync/start", { json: { hours: 2 } }); started(j); }
   catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
