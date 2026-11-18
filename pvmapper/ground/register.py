@@ -144,7 +144,7 @@ def parse_mastr(zip_path: str, area: str, log=print) -> list[dict]:
                 for r in _xml_records(fh, "EinheitSolar"):
                     if kat.get(r.get("Bundesland")) != area:
                         continue
-                    lage = kat.get(r.get("Lage"), "")
+                    lage = kat.get(r.get("ArtDerSolaranlage") or r.get("Lage"), "")      # 852 = Freiflächensolaranlage
                     if "Freifl" not in lage:
                         continue
                     status = kat.get(r.get("EinheitBetriebsstatus"), "")
@@ -156,10 +156,11 @@ def parse_mastr(zip_path: str, area: str, log=print) -> list[dict]:
                                 "netto_kw": _num(r.get("Nettonennleistung")),
                                 "start_date": (r.get("Inbetriebnahmedatum") or "")[:10] or None,
                                 "lonlat": (lon, lat) if lon and lat else None, "geom_kind": "einheit" if lon and lat else "fehlt",
-                                "attrs": {k: v for k, v in {"lage": lage, "status": status,
-                                                            "flaeche_ha": _num(r.get("InAnspruchGenommeneFlaeche")),
-                                                            "art_flaeche": kat.get(r.get("ArtDerFlaeche")),
-                                                            "nutzung": kat.get(r.get("Nutzungsbereich"))}.items() if v}})
+                                "attrs": {k: v for k, v in {"art": lage, "status": status, "module": _num(r.get("AnzahlModule")),
+                                                            "wr_kw": _num(r.get("ZugeordneteWirkleistungWechselrichter")),
+                                                            "landkreis": r.get("Landkreis"),
+                                                            "ausrichtung": kat.get(r.get("Hauptausrichtung")),
+                                                            "neigung": kat.get(r.get("HauptausrichtungNeigungswinkel"))}.items() if v}})
             log(f"MaStR: {name} gelesen ({i + 1}/{len(files)}), bisher {len(out)} Freiflächen-Einheiten in {area}")
     return out
 

@@ -462,13 +462,13 @@ def test_mioze_parse_and_locate():
 def test_mastr_parse_synthetic_zip(tmp_path):
     import zipfile
     kat = "<Katalogwerte>" + "".join(f"<Katalogwert><Id>{i}</Id><Wert>{w}</Wert></Katalogwert>" for i, w in
-                                     [(1400, "Brandenburg"), (1401, "Berlin"), (852, "Freifläche"), (853, "Bauliche Anlagen (Hausdach, Gebäude und Fassade)"),
+                                     [(1400, "Brandenburg"), (1401, "Berlin"), (852, "Freiflächensolaranlage"), (853, "Gebäudesolaranlage"),
                                       (35, "In Betrieb"), (31, "In Planung")]) + "</Katalogwerte>"
     def unit(n, bl, lage, st, lon="13.5", lat="52.3"):
-        return (f"<EinheitSolar><EinheitMastrNummer>SEE{n}</EinheitMastrNummer><Bundesland>{bl}</Bundesland><Lage>{lage}</Lage>"
+        return (f"<EinheitSolar><EinheitMastrNummer>SEE{n}</EinheitMastrNummer><Bundesland>{bl}</Bundesland><ArtDerSolaranlage>{lage}</ArtDerSolaranlage>"
                 f"<EinheitBetriebsstatus>{st}</EinheitBetriebsstatus><Laengengrad>{lon}</Laengengrad><Breitengrad>{lat}</Breitengrad>"
                 f"<Bruttoleistung>9500.5</Bruttoleistung><Nettonennleistung>8000</Nettonennleistung><Inbetriebnahmedatum>2021-06-30</Inbetriebnahmedatum>"
-                f"<Gemeinde>Werder</Gemeinde><InAnspruchGenommeneFlaeche>11.2</InAnspruchGenommeneFlaeche></EinheitSolar>")
+                f"<Gemeinde>Werder</Gemeinde><AnzahlModule>22000</AnzahlModule></EinheitSolar>")
     body = "<EinheitenSolar>" + unit(1, 1400, 852, 35) + unit(2, 1400, 853, 35) + unit(3, 1401, 852, 35) + unit(4, 1400, 852, 31) \
         + unit(5, 1400, 852, 35, "", "") + "</EinheitenSolar>"
     zp = tmp_path / "Gesamtdatenexport_20261118_26.2.zip"
@@ -478,7 +478,7 @@ def test_mastr_parse_synthetic_zip(tmp_path):
     u = greg.parse_mastr(str(zp), "Brandenburg", log=lambda m: None)
     assert [x["unit_id"] for x in u] == ["SEE1", "SEE5"]
     assert u[0]["brutto_kw"] == 9500.5 and u[0]["netto_kw"] == 8000 and u[0]["lonlat"] == (13.5, 52.3)
-    assert u[0]["attrs"]["flaeche_ha"] == 11.2 and u[1]["geom_kind"] == "fehlt"
+    assert u[0]["attrs"]["module"] == 22000 and u[0]["attrs"]["art"] == "Freiflächensolaranlage" and u[1]["geom_kind"] == "fehlt"
 
 
 def test_mastr_match_calibrate_evaluate(con):
