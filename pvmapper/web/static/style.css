@@ -144,3 +144,8 @@ button.small, .secondary.small { padding: 3px 8px; margin: 0; font-size: 12px; }
 #t-models table { font-size: 12.5px; }
 #t-models td, #t-models th { white-space: normal; }
 details > summary { cursor: pointer; margin: 8px 0; font-weight: 500; }
+
+.g-review { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+.g-review .row { gap: 6px; margin: 4px 0; }
+.g-review select { font-size: 12px; padding: 3px 4px; }
+#g-list tr.sel td { background: #fff3c4; }

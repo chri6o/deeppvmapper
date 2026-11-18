@@ -357,3 +357,32 @@ def test_cpu_lane_and_monthly_tick(tmp_path, monkeypatch):
     assert tick(dt.datetime(2026, 11, 7, 2)) is None                     # once per month
     assert tick(dt.datetime(2027, 2, 6, 2)) is None                      # January window skipped
     assert "ground_scan" in webapp.CPU_KINDS
+
+
+def test_review_by_hand_survives_imports(con):
+    store.upsert(con, [_row(), _row("ff-pl-osm-w2", quellen={"osm": ["w2"]})])
+    assert store.review(con, "ff-pl-osm-w1", "type", typ="tracker")["typ"] == "tracker"
+    store.upsert(con, [_row()])                                              # re-import: type set by hand stays
+    assert con.execute("SELECT typ, pruefstatus FROM freiflaeche WHERE id='ff-pl-osm-w1'").fetchone() == ("tracker", "kandidat")
+    store.review(con, "ff-pl-osm-w2", "discard", reason="gewaechshaus")
+    n = store.upsert(con, [_row("ff-pl-osm-w2", quellen={"osm": ["w2"], "neu": 1})])
+    assert n["geschuetzt"] == 1
+    r = con.execute("SELECT pruefstatus, verwurf_grund, jsonb_array_length(historie) FROM freiflaeche WHERE id='ff-pl-osm-w2'").fetchone()
+    assert r == ("verworfen", "manuell:gewaechshaus", 1)
+    store.review(con, "ff-pl-osm-w1", "confirm")
+    assert store.features(con, "id = %s", ["ff-pl-osm-w1"])["features"][0]["properties"]["historie"][-1]["aktion"] == "confirm"
+    assert store.review(con, "ff-pl-osm-w2", "reset")["pruefstatus"] == "kandidat"
+    with pytest.raises(ValueError):
+        store.review(con, "ff-pl-osm-w1", "discard")                       # reason required
+    with pytest.raises(KeyError):
+        store.review(con, "gibt-es-nicht", "confirm")
+
+
+def test_rescan_does_not_resurrect_discarded_candidate(con):
+    g = sq(17.5, 52, 150)
+    coarse.match(con, [g], "2026-09", "PL", "t", CFG, [], None)
+    fid = con.execute("SELECT id FROM freiflaeche WHERE herkunft='suche'").fetchone()[0]
+    store.review(con, fid, "discard", reason="keine_pv")
+    n = coarse.match(con, [g.buffer(D)], "2026-10", "PL", "t", CFG, [], None)
+    assert n["neu"] == 0 and n["bekannt"] == 1
+    assert con.execute("SELECT count(*) FROM freiflaeche WHERE herkunft='suche'").fetchone()[0] == 1

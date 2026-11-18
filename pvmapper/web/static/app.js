@@ -82,20 +82,61 @@ function groundPopup(p) {
   const months = Object.keys(z).sort().map((m) => `${m}: ${z[m].s2 == null ? "–" : Math.round(z[m].s2 * 100) + " %"}`).join(" · ");
   const wc = q.worldcover_2021 ? Object.entries(q.worldcover_2021).map(([k, v]) => `${esc(k)} ${Math.round(v * 100)} %`).join(", ") : "";
   return `<b>${esc(q.osm_name || p.id)}</b><br>${esc(G_TXT[p.herkunft] || p.herkunft)} · ${fmt(p.flaeche_zaun_m2 / 1e4, 1)} ha` +
-    ` · ${esc(p.pruefstatus)}${p.verwurf_grund ? " (" + esc(p.verwurf_grund) + ")" : ""}` +
+    ` · ${esc(G_STATUS[p.pruefstatus] || p.pruefstatus)}${p.verwurf_grund ? " (" + esc(G_REASONS[p.verwurf_grund.replace("manuell:", "")] || p.verwurf_grund) + ")" : ""}` +
     `${p.typ && p.typ !== "unbekannt" ? "<br>Typ: " + esc(p.typ) : ""}${p.baujahr_schaetzung ? "<br>Baujahr: " + p.baujahr_schaetzung : ""}` +
     `${p.first_seen ? "<br>zuerst gesehen: " + esc(p.first_seen.slice(0, 7)) : ""}` +
     `${q.osm_leistung_kwp ? "<br>Leistung laut OSM: " + fmt(q.osm_leistung_kwp / 1000, 1) + " MWp" : ""}` +
     `${q.tzsam_kwp_schaetzung ? "<br>TZ-SAM-Schätzung: " + fmt(q.tzsam_kwp_schaetzung / 1000, 1) + " MW" : ""}` +
     `${months ? "<br>als PV erkannt (Sentinel-2): " + months : ""}${wc ? "<br>WorldCover 2021: " + wc : ""}` +
     `${osmLinks ? "<br>OSM: " + osmLinks : ""}${(q.tzsam || []).length ? "<br>TZ-SAM: " + esc(q.tzsam.join(", ")) + " (CC BY-NC)" : ""}` +
-    (q.osm_name ? `<br><span class="muted">${esc(p.id)}</span>` : "");
+    (q.osm_name ? `<br><span class="muted">${esc(p.id)}</span>` : "") + groundReviewHtml(p);
 }
-async function loadGround(fit) {
-  const region = $("#g-region").value, h = $("#g-filter").value;
+const G_TYPES = { fest_sued: "fest, Süd", fest_ost_west: "fest, Ost-West", tracker: "Tracker", agri_vertikal: "Agri-PV vertikal", floating: "Floating", unbekannt: "unbekannt" };
+const G_REASONS = { keine_pv: "keine PV", gewaechshaus: "Gewächshaus/Folie", baustelle: "Baustelle ohne Module", dach: "Dachanlage", doppelt: "doppelt erfasst", sonstiges: "sonstiges" };
+const G_STATUS = { kandidat: "zu prüfen", manuell_geprueft: "bestätigt", gegenprobe_bestaetigt: "bestätigt (Gegenprobe)", verworfen: "verworfen" };
+function groundReviewHtml(p) {
+  const last = (p.historie || []).slice(-1)[0];
+  return `<div class="g-review" data-id="${esc(p.id)}">` +
+    `<div class="row"><button class="primary small" data-act="confirm">✓ Bestätigen</button>` +
+    `<select data-act="discard"><option value="">✗ Verwerfen …</option>${Object.entries(G_REASONS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></div>` +
+    `<div class="row"><select data-act="type">${Object.entries(G_TYPES).map(([k, v]) => `<option value="${k}"${k === p.typ ? " selected" : ""}>Typ: ${esc(v)}</option>`).join("")}</select>` +
+    `${p.pruefstatus !== "kandidat" ? `<button class="secondary small" data-act="reset" title="zurück auf „zu prüfen“">↺</button>` : ""}</div>` +
+    `${last ? `<span class="muted">zuletzt: ${esc(last.aktion)} ${esc((last.zeit || "").replace("T", " ").slice(0, 16))}</span>` : ""}</div>`;
+}
+async function groundReview(id, action, extra = {}) {
+  try { await api(`/api/ground/${encodeURIComponent(id)}/review`, { json: { action, ...extra } }); }
+  catch (e) { toast("Fehler: " + e.message); return; }
+  map.closePopup();
+  toast(action === "confirm" ? "Bestätigt" : action === "discard" ? "Verworfen" : action === "reset" ? "Zurückgesetzt" : "Typ gespeichert");
+  S.gLast = id;
+  await loadGround(false, true);
+  if (action !== "type") groundNext();
+}
+map.on("popupopen", (e) => {
+  const box = e.popup.getElement()?.querySelector(".g-review");
+  if (!box) return;
+  const id = box.dataset.id;
+  box.querySelectorAll("[data-act]").forEach((el) => {
+    const act = el.dataset.act;
+    if (el.tagName === "BUTTON") el.onclick = () => groundReview(id, act);
+    else el.onchange = () => { if (!el.value) return; groundReview(id, act, act === "discard" ? { reason: el.value } : { typ: el.value }); };
+  });
+});
+function groundNext() {
+  const rows = $$("#g-list tr.click");
+  if (!rows.length) { toast("Keine weiteren Flächen in dieser Auswahl"); return; }
+  const i = rows.findIndex((tr) => tr.dataset.id === S.gLast);
+  (rows[i + 1] || rows[0]).click();
+}
+document.addEventListener("keydown", (e) => {
+  if (currentTab() !== "ground" || ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
+  if (e.key === "n" || e.key === "N") groundNext();
+});
+async function loadGround(fit, keepView) {
+  const region = $("#g-region").value, h = $("#g-filter").value, st0 = $("#g-status").value;
   const qs = new URLSearchParams({ region });
   if (h) qs.set("herkunft", h);
-  if (!$("#g-dropped").checked) qs.set("pruefstatus", "kandidat,manuell_geprueft,gegenprobe_bestaetigt");
+  if (st0) qs.set("pruefstatus", st0);
   let fc, st;
   try { [fc, st] = await Promise.all([api("/api/ground/features?" + qs), api("/api/ground/stats?region=" + encodeURIComponent(region))]); }
   catch (e) { $("#g-stats").innerHTML = `<p class="err">${esc(e.message)}</p>`; return; }
@@ -105,16 +146,21 @@ async function loadGround(fit) {
   $("#g-stats").innerHTML = Object.keys(by).length ? Object.entries(by).map(([k, v]) =>
     `<div><b>${fmt(v.n)}</b> ${esc(G_TXT[k] || k)}<br><span class="muted">${fmt(v.ha)} ha${v.drop ? ", " + fmt(v.drop) + " verworfen" : ""}</span></div>`).join("")
     : `<p class="hint">Noch keine Daten für diese Region: unten „Ausgangsbestand laden“.</p>`;
-  const cand = fc.features.filter((f) => f.properties.herkunft === "suche").sort((a, b) => b.properties.flaeche_zaun_m2 - a.properties.flaeche_zaun_m2);
-  $("#g-list").innerHTML = cand.length ? `<h3>Neue Kandidaten (${fmt(cand.length)})</h3><table class="tbl"><tr><th>Fläche</th><th>zuerst</th><th>Konfidenz</th><th>Bodenbedeckung 2021</th></tr>` +
-    cand.slice(0, 300).map((f) => { const p = f.properties, wc = (p.quellen || {}).worldcover_2021 || {};
-      return `<tr class="click" data-id="${esc(p.id)}"><td>${fmt(p.flaeche_zaun_m2 / 1e4, 1)} ha</td><td>${esc((p.first_seen || "").slice(0, 7))}</td>` +
-        `<td>${p.konfidenz == null ? "–" : Math.round(p.konfidenz * 100) + " %"}</td><td>${esc(Object.keys(wc).join(", "))}</td></tr>`; }).join("") + "</table>" : "";
+  const cand = fc.features.slice().sort((a, b) => b.properties.flaeche_zaun_m2 - a.properties.flaeche_zaun_m2);
+  const s2 = (p) => { const z = p.zeitreihe || {}, k = Object.keys(z).sort().pop(); return k && z[k].s2 != null ? Math.round(z[k].s2 * 100) + " %" : "–"; };
+  $("#g-list").innerHTML = cand.length ? `<h3>${fmt(cand.length)} Flächen in der Auswahl${cand.length > 300 ? " (300 größte gelistet)" : ""}</h3>` +
+    `<table class="tbl"><tr><th>Fläche</th><th>Herkunft</th><th>Stand</th><th title="zuletzt als PV erkannt (Sentinel-2)">S2</th><th>Name / Boden 2021</th></tr>` +
+    cand.slice(0, 300).map((f) => { const p = f.properties, q = p.quellen || {}, wc = q.worldcover_2021 || {};
+      return `<tr class="click${p.id === S.gLast ? " sel" : ""}" data-id="${esc(p.id)}"><td>${fmt(p.flaeche_zaun_m2 / 1e4, 1)} ha</td><td>${esc(G_TXT[p.herkunft] || "")}</td>` +
+        `<td>${esc(G_STATUS[p.pruefstatus] || p.pruefstatus)}</td><td>${s2(p)}</td><td>${esc(q.osm_name || Object.keys(wc).join(", "))}</td></tr>`; }).join("") + "</table>"
+    : `<p class="hint">Keine Flächen in dieser Auswahl.</p>`;
   $$("#g-list tr.click").forEach((tr) => tr.onclick = () => {
     const l = groundLayer.getLayers().find((x) => x.feature.properties.id === tr.dataset.id);
-    if (l) { map.fitBounds(l.getBounds(), { maxZoom: 17 }); l.openPopup(); }
+    S.gLast = tr.dataset.id;
+    $$("#g-list tr.sel").forEach((x) => x.classList.remove("sel")); tr.classList.add("sel");
+    if (l) { map.fitBounds(l.getBounds(), { maxZoom: 17, padding: [40, 40] }); l.openPopup(); }
   });
-  if (fit && groundLayer.getLayers().length) map.fitBounds(groundLayer.getBounds(), { maxZoom: 15 });
+  if (fit && !keepView && groundLayer.getLayers().length) map.fitBounds(groundLayer.getBounds(), { maxZoom: 15 });
   groundOrtho();
 }
 function groundOrtho() {
@@ -129,7 +175,8 @@ async function initGround() {
     S.gRegions = await api("/api/ground/regions");
     $("#g-region").innerHTML = Object.entries(S.gRegions.regions).map(([k, r]) => `<option value="${esc(k)}"${k === S.gRegions.pilot ? " selected" : ""}>${esc(r.name)} (${esc(r.cc)})</option>`).join("");
     const d = new Date(); d.setMonth(d.getMonth() - 1); $("#g-month").value = d.toISOString().slice(0, 7);
-    ["#g-region", "#g-filter", "#g-dropped"].forEach((q) => $(q).onchange = () => loadGround(q === "#g-region"));
+    ["#g-region", "#g-filter", "#g-status"].forEach((q) => $(q).onchange = () => loadGround(q === "#g-region"));
+    $("#g-next").onclick = groundNext;
     $("#g-ortho").onchange = groundOrtho;
     $("#g-reload").onclick = () => loadGround(false);
     const start = async (kind, params) => {

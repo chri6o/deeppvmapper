@@ -383,6 +383,17 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         with _gcon() as con:
             return gstore.features(con, " AND ".join(w), a, min(int(limit), 50000))
 
+    @app.post("/api/ground/{fid}/review")
+    def ground_review(fid: str, body: dict = Body(...)):
+        from ..ground import store as gstore
+        with _gcon() as con:
+            try:
+                return gstore.review(con, fid, body.get("action"), body.get("reason"), body.get("typ"), body.get("note"))
+            except KeyError:
+                raise HTTPException(404, "Fläche nicht gefunden")
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+
     @app.get("/api/roofshape/models")
     def roofshape_models():
         from .. import roofshape

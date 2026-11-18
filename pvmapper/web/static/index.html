@@ -252,12 +252,17 @@
       orange: neu gefunden (Grobsuche), grau gestrichelt: verworfen.</p>
     <div class="row">
       <select id="g-region" style="flex:1"></select>
-      <select id="g-filter"><option value="">alle</option><option value="suche" selected>nur neue Kandidaten</option>
-        <option value="bestand_osm">OSM</option><option value="bestand_tzsam">TZ-SAM</option></select>
     </div>
     <div class="row">
-      <label><input type="checkbox" id="g-dropped"> verworfene zeigen</label>
+      <select id="g-filter" title="Herkunft"><option value="">alle Herkünfte</option><option value="suche" selected>neu gefunden</option>
+        <option value="bestand_osm">OSM</option><option value="bestand_tzsam">TZ-SAM</option></select>
+      <select id="g-status" title="Prüfstand"><option value="kandidat" selected>noch zu prüfen</option>
+        <option value="manuell_geprueft,gegenprobe_bestaetigt">bestätigt</option><option value="verworfen">verworfen</option>
+        <option value="kandidat,manuell_geprueft,gegenprobe_bestaetigt">alle außer verworfene</option><option value="">alle</option></select>
+    </div>
+    <div class="row">
       <label><input type="checkbox" id="g-ortho" checked> Orthofoto</label>
+      <button id="g-next" class="primary small" title="nächste ungeprüfte Fläche der Liste öffnen (Taste N)">Nächste →</button>
       <button id="g-reload" class="secondary small" title="neu laden">↻</button>
     </div>
     <div id="g-stats" class="stats"></div>

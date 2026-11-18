@@ -59,15 +59,16 @@ def _val(k, v):
 
 def upsert(con, rows: list[dict]) -> dict:
     """insert or update; rows reviewed by hand keep their review status, type and geometries (only `quellen` is refreshed);
-    a row discarded by hand (verwurf_grund 'manuell') stays discarded"""
+    a row discarded by hand (verwurf_grund 'manuell:<reason>') stays discarded"""
     n = {"neu": 0, "aktualisiert": 0, "geschuetzt": 0}
     cols = ("id",) + FIELDS
     ph = ", ".join(f"ST_SetSRID(ST_GeomFromWKB(decode(%s,'hex')),4326)" if c in GEOMS else
                    ("%s::jsonb" if c in JSONS else "%s") for c in cols)
-    upd = ", ".join(f"{c} = EXCLUDED.{c}" for c in FIELDS)
+    upd = ", ".join(("typ = CASE WHEN freiflaeche.historie @> '[{\"aktion\": \"type\"}]'::jsonb THEN freiflaeche.typ ELSE EXCLUDED.typ END"
+                     if c == "typ" else f"{c} = EXCLUDED.{c}") for c in FIELDS)   # a type set by hand survives re-imports
     sql = (f"INSERT INTO freiflaeche ({', '.join(cols)}) VALUES ({ph}) ON CONFLICT (id) DO UPDATE SET {upd}, updated_at = now() "
            f"WHERE freiflaeche.pruefstatus NOT IN ('manuell_geprueft','gegenprobe_bestaetigt') "
-           f"AND coalesce(freiflaeche.verwurf_grund,'') <> 'manuell' RETURNING (xmax = 0)")
+           f"AND coalesce(freiflaeche.verwurf_grund,'') NOT LIKE 'manuell%%' RETURNING (xmax = 0)")
     prot = ("UPDATE freiflaeche SET quellen = freiflaeche.quellen || %s::jsonb, updated_at = now() WHERE id = %s")
     with con.transaction():
         for r in rows:
@@ -94,9 +95,9 @@ def mark_imported(con, source: str, version: str, rows: int):
 def features(con, where: str = "TRUE", args=(), limit: int = 20000) -> dict:
     """GeoJSON FeatureCollection (fence polygons, all fields as properties)"""
     rows = con.execute(
-        f"SELECT id, ST_AsBinary(geom_zaun), ST_AsBinary(geom_module), {', '.join(c for c in FIELDS if c not in GEOMS)} "
+        f"SELECT id, ST_AsBinary(geom_zaun), ST_AsBinary(geom_module), {', '.join(c for c in FIELDS if c not in GEOMS)}, historie "
         f"FROM freiflaeche WHERE {where} ORDER BY id LIMIT %s", list(args) + [limit]).fetchall()
-    names = [c for c in FIELDS if c not in GEOMS]
+    names = [c for c in FIELDS if c not in GEOMS] + ["historie"]
     out = []
     for r in rows:
         p = {k: (v.isoformat() if hasattr(v, "isoformat") else v) for k, v in zip(names, r[3:])}
@@ -111,3 +112,37 @@ def stats(con, region: str | None = None) -> dict:
     rows = con.execute(f"SELECT herkunft, pruefstatus, count(*), round(sum(flaeche_zaun_m2)/1e4) FROM freiflaeche WHERE {w} "
                        f"GROUP BY 1, 2 ORDER BY 1, 2", a).fetchall()
     return {"rows": [{"herkunft": h, "pruefstatus": p, "n": n, "ha": float(ha or 0)} for h, p, n, ha in rows]}
+
+
+TYPES = ("fest_sued", "fest_ost_west", "tracker", "agri_vertikal", "floating", "unbekannt")
+REASONS = ("keine_pv", "gewaechshaus", "baustelle", "dach", "doppelt", "sonstiges")
+
+
+def review(con, fid: str, action: str, reason: str | None = None, typ: str | None = None, note: str | None = None) -> dict:
+    """decision by hand: confirm | discard (reason) | type (typ) | reset → back to 'kandidat'. Logged in `historie`."""
+    row = con.execute("SELECT pruefstatus, typ, verwurf_grund FROM freiflaeche WHERE id = %s", [fid]).fetchone()
+    if row is None:
+        raise KeyError(fid)
+    old = {"pruefstatus": row[0], "typ": row[1], "verwurf_grund": row[2]}
+    if action == "confirm":
+        new = {"pruefstatus": "manuell_geprueft", "verwurf_grund": None}
+    elif action == "discard":
+        if reason not in REASONS:
+            raise ValueError("Grund fehlt")
+        new = {"pruefstatus": "verworfen", "verwurf_grund": f"manuell:{reason}"}
+    elif action == "type":
+        if typ not in TYPES:
+            raise ValueError("unbekannter Typ")
+        new = {"typ": typ}
+    elif action == "reset":
+        new = {"pruefstatus": "kandidat", "verwurf_grund": None}
+    else:
+        raise ValueError("unbekannte Aktion")
+    entry = {"zeit": __import__("datetime").datetime.now().isoformat(timespec="seconds"), "aktion": action, "von": "manuell",
+             "alt": {k: old[k] for k in new}, "neu": new}
+    if note:
+        entry["notiz"] = note[:500]
+    sets = ", ".join(f"{k} = %s" for k in new)
+    con.execute(f"UPDATE freiflaeche SET {sets}, historie = historie || %s::jsonb, updated_at = now() WHERE id = %s",
+                list(new.values()) + [json.dumps([entry], ensure_ascii=False), fid])
+    return {**old, **new}
