@@ -243,6 +243,9 @@ def test_geotiff_and_polygons(tmp_path):
     import cv2
     m = np.zeros((200, 200), np.uint8)
     m[20:80, 30:130] = 1
+    wcf = arr[1].astype("float32")
+    wcf[20:25, 30:130] = float("nan")
+    assert coarse.worldcover_shares(wcf, m)["baum"] > 0.4
     sh = coarse.worldcover_shares(arr[1], m)
     assert sh["baum"] == pytest.approx(0.5, abs=0.01) and sh["acker"] == pytest.approx(0.5, abs=0.01)
 

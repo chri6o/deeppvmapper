@@ -34,7 +34,7 @@ BACKEND = "https://openeo.dataspace.copernicus.eu"
 UDP_ID = "eurac_pv_farm_detection"
 UDP_URL = ("https://raw.githubusercontent.com/ESA-APEx/apex_algorithms/refs/heads/main/algorithm_catalog/eurac/"
            "eurac_pv_farm_detection/openeo_udp/eurac_pv_farm_detection.json")
-CREDITS_PER_KM2 = 0.01            # catalogue figure for a 3-month window; measured values replace it in the job log
+CREDITS_PER_KM2 = 0.02            # measured 18.11.2026: 8 credits for a 395 km² tile with WorldCover (catalogue: 0.01)
 WC_CLASSES = {10: "baum", 20: "strauch", 30: "gras", 40: "acker", 50: "bebaut", 60: "kahl", 70: "schnee", 80: "wasser",
               90: "feucht", 95: "mangrove", 100: "moos"}
 
@@ -136,6 +136,7 @@ def polygons(mask: np.ndarray, aff: tuple, crs: str, min_px: int = 20) -> list:
 
 def worldcover_shares(classes: np.ndarray, mask_poly_px: np.ndarray) -> dict:
     v = classes[mask_poly_px > 0]
+    v = v[np.isfinite(v)] if v.dtype.kind == "f" else v             # no-data at the tile edge
     if v.size == 0:
         return {}
     u, n = np.unique(v, return_counts=True)
@@ -327,6 +328,7 @@ def run(job, cfg: dict):
             continue
         arr, aff, crs = read_geotiff(f)
         pv = arr[0] if arr.ndim == 3 else arr
+        pv = np.nan_to_num(pv, nan=0.0)
         wc = arr[1] if arr.ndim == 3 and arr.shape[0] > 1 else None
         polys = polygons(pv, aff, crs)
         wc_info = None
