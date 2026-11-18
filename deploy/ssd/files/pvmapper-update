@@ -13,11 +13,11 @@ if [ -z "${PVMAPPER_UPDATE_RESTARTED:-}" ] && ! cmp -s "$NEW" "$0"; then
 fi
 # system packages and databases (PostGIS, osmium); idempotent
 bash "$APP/app/deploy/ssd/files/pvmapper-system.sh"
-sudo -u pvmapper "$APP/venv/bin/pip" install -q -r "$APP/app/requirements-pvmapper.txt" pyogrio
+sudo -u pvmapper "$APP/venv/bin/pip" install -q -r "$APP/app/requirements-pvmapper.txt"
 # keep the systemd unit in sync with the repository
 if ! cmp -s "$APP/app/deploy/ssd/files/pvmapper.service" /etc/systemd/system/pvmapper.service; then
   sudo cp "$APP/app/deploy/ssd/files/pvmapper.service" /etc/systemd/system/pvmapper.service
   sudo systemctl daemon-reload
 fi
 sudo systemctl restart pvmapper
-echo "PV-Mapper aktualisiert: $(git -C "$APP/app" log -1 --format='%h %s')"
+echo "PV-Mapper aktualisiert: $(sudo -u pvmapper git -C "$APP/app" log -1 --format="%h %s")"
