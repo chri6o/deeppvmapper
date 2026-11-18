@@ -60,13 +60,22 @@ def _load(path: str):
 
 
 def settings(cfg: dict | None = None) -> dict:
-    """typology.yml, optionally replaced by `typology_file` (path) in the main settings; cached per path"""
-    p = (cfg or {}).get("typology_file") or CONFIG_PATH
+    """typology.yml (or `typology_file`), plus the capacity calibration of the active model where there is one
+    (model_dir/calibration/<profile>.json, pvmapper/calibration.py: fill factors per layout from register capacities)"""
+    cfg = cfg or {}
+    p = cfg.get("typology_file") or CONFIG_PATH
     st = os.stat(p).st_mtime
     hit = _CACHE.get(p)
     if hit is None or hit[0] != st:
         hit = _CACHE[p] = (st, _load(p))
-    return copy.deepcopy(hit[1])
+    conf = copy.deepcopy(hit[1])
+    prof = cfg.get("_profile") or cfg.get("profile")
+    if prof and cfg.get("model_dir") and cfg.get("kwp_calibration", True):
+        from . import calibration
+        cal = calibration.load(cfg["model_dir"], prof)
+        if cal:
+            calibration.apply(conf, cal)
+    return conf
 
 
 _CACHE: dict = {}

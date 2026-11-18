@@ -179,6 +179,35 @@ Das Register (MaStR-Inbetriebnahmedatum) wird dafür bewusst nicht genutzt; es d
 
 Abschalten: Einstellungen → „Baujahr aus älteren Luftbildern“. Sichtbar in der Vorschau, im Karten-Popup, in der Tabelle bei „Fläche auswerten“ und bei der Probe.
 
+## Freie Dachfläche und PV-Potenzial
+
+Gebäude prüfen → „Freie Dachfläche und PV-Potenzial ermitteln“ (für eine vorgegebene Gebäudeliste, braucht Umrisse). Je Gebäude bestimmt `pvmapper/roofs.py`:
+
+- **Dachform:** aus OSM `roof:shape`; sonst aus dem Bild. Steildach nur bei einfachem, fast rechteckigem Umriss und zwei gleichmäßigen, deutlich verschieden hellen Dachhälften. Steildächer gelten als Satteldach mit First in Längsrichtung, Neigung 35°.
+- **Aufbauten:** alles, was sich deutlich von der Dachfläche abhebt (Farbe, sehr dunkel, sehr hell, starke Struktur), zuzüglich 0,5 m Schutzabstand. Größere abweichende Flächen (über 300 m²) gelten als eigener Dachabschnitt.
+- **Verschattung:** deutlich dunklere Bereiche in Dachfarbe (≥ 2 m²) zur Flugzeit.
+- **Randabstand:** 1,0 m beim Flachdach, 0,5 m beim Steildach, dazu ein Streifen am First.
+- **Vorhandene PV:** samt Reihenabständen nicht frei.
+- **Freie Fläche:** ohne Streifen unter 1 m Breite und ohne Stücke unter 5 m². Beim Steildach wird die Nordseite (±60°) nicht genutzt.
+- **Potenzial:** freie Fläche × Belegungsgrad (Flachdach: Ost-West, Steildach: flächig) / cos(Neigung) × Wirkungsgrad heutiger Module, mit Spanne.
+
+Ausgabe: Spalten `roof_type`, `roof_area_m2`, `usable_area_m2`, `kwp_potential` (+ Spanne), `roof_potential.geojson` (freie Flächen und Aufbauten), Kartenebene „Freie Dachflächen und Aufbauten“, Angaben in der Vorschau. Abstände in den Einstellungen (`roof_setback_flat_m`, `roof_setback_pitched_m`, `roof_obstacle_clearance_m`).
+
+Das ist Bildanalyse ohne trainiertes Netz – eine erste Schätzung. Die im Masken-Editor gezeichneten „Gaube / kein PV“-Flächen sind das Material für ein späteres Aufbauten-Modell.
+
+## Fläche auswerten nur auf OSM-Gebäuden
+
+„Nur auf Gebäuden aus OpenStreetMap suchen“ (Standard an) lädt die Gebäudeumrisse des Gebiets über die Overpass-API. Kacheln ohne Gebäude werden übersprungen, Erkennungen außerhalb der Umrisse (+1,5 m) verworfen, und jede Anlage ist ihrem Gebäude zugeordnet. Die Umrisse liegen als `buildings_osm.geojson` im Auftrag (© OpenStreetMap-Mitwirkende, ODbL). Ein eigener Gebäudelayer ersetzt OSM.
+
+## Leistung kalibrieren mit Registerleistungen (optional)
+
+Die Belegungsgrade je Bauform lassen sich an Registerleistungen (MaStR über PV-Map) anpassen – nur wenn man es ausdrücklich wählt:
+
+- **Einzeln:** Im Masken-Editor „Register kalibriert“ anhaken. Fehlen die Registerdaten, werden sie abgefragt. Die Infozeile zeigt „Register / Schätzung“.
+- **Für einen Datensatz:** Masken → „Training mit diesem Datensatz“ → „Registerleistungen (MaStR) in die Leistungsschätzung einfließen lassen“. Quelle: nur markierte Bilder oder alle geprüften Bilder mit Registerdaten. Das wirkt beim Nachtraining für das neue Modell. „Nur Leistungsschätzung kalibrieren“ speichert es ohne Nachtraining für das gewählte Ausgangsmodell, mit Link zum Zurücknehmen.
+
+Je Bild: Belegungsgrad, der genau die Registerleistung ergäbe = Register-kWp × cos(Neigung) / (Umriss × Wirkungsgrad). Der Wirkungsgrad richtet sich nach dem Baujahr aus den Luftbildern, sonst nach dem Register. Je Bauform gilt der Median, ab 3 Bildern. Registerangaben, die mehr als Faktor 3 von der Schätzung abweichen, bleiben außen vor; ebenso Gebäude mit mehreren Registergebäuden in der Nähe. Gespeichert wird unter `model_dir/calibration/<Modell>.json`. Die Kalibrierung gilt automatisch, wenn dieses Modell läuft (abschaltbar mit `kwp_calibration: false`).
+
 ## Funde als Trainingsdaten, Registerdaten
 
 - **Fläche auswerten:** In der Ergebnistabelle Anlagen ankreuzen (oder „Zufällig wählen“), Ziel wählen (neuer Datensatz oder anhängen), „Als Trainingsdatensatz →“. Jede Anlage wird ein Bild (Anlage + 4 m), der erkannte Umriss die Maskenvorlage.

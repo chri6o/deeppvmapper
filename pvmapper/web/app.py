@@ -356,8 +356,9 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def dataset_items(jid: str):
         items = annotate.list_items(_ds(jid))
         keep = ("id", "name", "label", "effective_label", "label_kind", "sub", "size_bin", "pv_kwp", "has_mask",
-                "mask_source", "status", "val", "source", "ai")
-        return {"stats": annotate.stats(items), "items": [{k: m.get(k) for k in keep} for m in items]}
+                "mask_source", "status", "val", "source", "ai", "use_register")
+        return {"stats": annotate.stats(items), "items": [{**{k: m.get(k) for k in keep}, "has_register": bool(
+            m.get("register") and any(b.get("register") for b in m["register"].get("buildings") or []))} for m in items]}
 
     @app.get("/api/datasets/{jid}/items/{name}")
     def dataset_item(jid: str, name: str):
@@ -439,6 +440,49 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         except Exception as e:                                   # noqa: BLE001
             raise HTTPException(400, str(e))
         return annotate.register_lookup(d, cl, body.get("names"), float(body.get("radius_m") or 30))
+
+    @app.post("/api/datasets/{jid}/items/{name}/flags")
+    def dataset_flags(jid: str, name: str, body: dict = Body(...)):
+        """per image: use its register capacity for the capacity calibration (`use_register`)"""
+        d, name = _item(jid, name)
+        meta = annotate.read_meta(d, name)
+        if "use_register" in body:
+            meta["use_register"] = bool(body["use_register"])
+        with open(os.path.join(d, name + ".json"), "w", encoding="utf-8") as f:
+            json.dump(meta, f)
+        return {"use_register": meta.get("use_register", False)}
+
+    @app.post("/api/datasets/{jid}/calibrate")
+    def dataset_calibrate(jid: str, body: dict = Body(default={})):
+        """capacity calibration from the register capacities of a dataset (use: marked | all); save=True stores it for
+        `profile` (default: the dataset's model) and every later run with that model uses it"""
+        from .. import calibration
+        job = _job(jid)
+        d = annotate.ds_dir(job.dir)
+        if not os.path.isdir(d):
+            raise HTTPException(404, "Datensatz nicht gefunden")
+        c = cfg()
+        use = body.get("use") or "marked"
+        if use not in ("marked", "all"):
+            raise HTTPException(400, "use: marked oder all")
+        prof = body.get("profile") or job.params.get("profile") or c.get("profile")
+        if body.get("lookup", True):
+            calibration.ensure_register(d, c, use)
+        cal = calibration.compute(d, {**c, "profile": prof}, use)
+        cal["profile"] = prof
+        if body.get("save") and cal["fill_factor"]:
+            cal["path"] = calibration.save(c["model_dir"], prof, cal)
+        return cal
+
+    @app.get("/api/calibration/{profile}")
+    def calibration_get(profile: str):
+        from .. import calibration
+        return calibration.load(cfg()["model_dir"], profile) or {}
+
+    @app.delete("/api/calibration/{profile}")
+    def calibration_delete(profile: str):
+        from .. import calibration
+        return {"removed": calibration.remove(cfg()["model_dir"], profile)}
 
     @app.post("/api/probe/dataset")
     def probe_dataset(body: dict = Body(...)):
@@ -656,7 +700,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         building_mode.ensure_columns(con)
         cur = con.execute(
             "SELECT id,status,pv_area_m2,kwp_est,size_class,in_range,max_prob,footprint_m2,source,lon,lat,"
-            'error,chip,footprint_wkt,pv_wkt,"check",source2,removed,props,kwp_low,kwp_high,layout,installations '
+            'error,chip,footprint_wkt,pv_wkt,"check",source2,removed,props,kwp_low,kwp_high,layout,installations,'
+            'roof_type,roof_area_m2,usable_area_m2,kwp_potential,kwp_pot_low,kwp_pot_high,roof '
             'FROM results' + sql_where +
             (" ORDER BY kwp_est DESC, rowid" if nach else " ORDER BY kwp_est DESC, rowid LIMIT ? OFFSET ?"),
             args if nach else args + [limit, offset])
@@ -673,7 +718,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
             total = len(tagged)
             allr = [t[4] for t in tagged][offset:offset + limit]
             whys = {t[4][0]: t[3] for t in tagged}
-        rows, feats, insts = [], [], []
+        rows, feats, insts, roofs_fc = [], [], [], []
         for r in allr:
             d = dict(zip(["id", "status", "pv_area_m2", "kwp_est", "size_class", "in_range", "max_prob",
                           "footprint_m2", "source", "lon", "lat", "error", "chip"], r[:13]))
@@ -697,8 +742,22 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                               "properties": {"id": d["id"], "kind": "pv"}})
             # installation outlines from the typology (rows with their gaps), own map layer
             insts += typology.map_features(json.loads(r[22] or "[]"), d["id"])
+            # free roof area and obstacles (roofs.py)
+            d.update(roof_type=r[23], roof_area_m2=r[24], usable_area_m2=r[25], kwp_potential=r[26], kwp_pot_low=r[27],
+                     kwp_pot_high=r[28])
+            if r[29]:
+                rf = json.loads(r[29])
+                d["roof"] = {k: rf.get(k) for k in ("roof_type_basis", "obstacles_area_m2", "shade_area_m2", "pv_area_m2",
+                                                     "layout_assumed", "tilt_assumed_deg", "module_efficiency", "faces")}
+                for kind in ("free", "obstacles"):
+                    if rf.get(kind):
+                        roofs_fc.append({"type": "Feature", "geometry": rf[kind], "properties": {
+                            "id": d["id"], "kind": kind, "usable_area_m2": d["usable_area_m2"],
+                            "kwp_potential": d["kwp_potential"], "kwp_pot_low": d["kwp_pot_low"],
+                            "kwp_pot_high": d["kwp_pot_high"], "roof_type": d["roof_type"]}})
         return {"rows": rows, "total": total, "geojson": {"type": "FeatureCollection", "features": feats},
-                "installations": {"type": "FeatureCollection", "features": insts}}
+                "installations": {"type": "FeatureCollection", "features": insts},
+                "roofs": {"type": "FeatureCollection", "features": roofs_fc}}
 
     @app.post("/api/jobs/{jid}/export")
     def reexport(jid: str):

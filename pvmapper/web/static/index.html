@@ -56,6 +56,7 @@
       <label>Modell<select id="b-profile" class="profile-select"></select></label>
       <label>Vorschaubilder<select id="b-chips"><option value="positive">nur Treffer</option><option value="all">alle</option><option value="none">keine</option></select></label>
     </div>
+    <label class="check" title="Für jedes Gebäude: Dachform, Aufbauten (Gauben, Oberlichter, Technik) mit Schutzabstand, Verschattung, vorhandene PV – und die freie Restfläche mit möglicher Leistung. Braucht Gebäudeumrisse."><input type="checkbox" id="b-roof"> Freie Dachfläche und PV-Potenzial ermitteln</label>
     <button id="b-start" class="primary" disabled>Prüfung starten</button>
   </div>
 
@@ -69,7 +70,8 @@
       <label>Bildquelle<select id="a-source" class="source-select"></select></label>
       <label>Modell<select id="a-profile" class="profile-select"></select></label>
     </div>
-    <label>Gebäudelayer zum Abgleich (optional, Pfad)<input id="a-buildings" placeholder="/daten/gebaeude.gpkg"></label>
+    <label class="check" title="Lädt die Gebäudeumrisse des Gebiets aus OpenStreetMap: Kacheln ohne Gebäude werden übersprungen, Erkennungen außerhalb der Umrisse (+1,5 m) verworfen, Teilflächen je Gebäude zu Anlagen zusammengefasst."><input type="checkbox" id="a-osm" checked> nur auf Gebäuden aus OpenStreetMap suchen</label>
+    <label>… oder eigener Gebäudelayer (Pfad, ersetzt OSM)<input id="a-buildings" placeholder="/daten/gebaeude.gpkg"></label>
     <label class="check"><input type="checkbox" id="a-only" checked> nur Anlagen auf Gebäuden behalten</label>
     <button id="a-start" class="primary">Auswertung starten</button>
   </div>
@@ -174,7 +176,11 @@
         <label>Name des neuen Modells<input id="m-name"></label>
         <label>KI-Masken verwenden<select id="m-aiuse"><option value="reviewed">nur geprüfte</option><option value="all">alle</option><option value="none">keine</option></select></label>
       </div>
-      <button id="m-train" class="primary">Training starten</button>
+      <label class="check" title="Die Registerleistung (MaStR über PV-Map) der geprüften Bilder bestimmt die Belegungsgrade je Bauform, mit denen die Leistung geschätzt wird. Gilt danach für das neue Modell."><input type="checkbox" id="m-cal"> Registerleistungen (MaStR) in die Leistungsschätzung einfließen lassen</label>
+      <label>… aus<select id="m-caluse"><option value="marked">nur im Editor markierten Bildern</option><option value="all">allen geprüften Bildern mit Registerdaten</option></select></label>
+      <div class="row"><button id="m-train" class="primary">Training starten</button>
+        <button id="m-calonly" class="secondary" title="Ohne Nachtraining: Belegungsgrade aus den Registerleistungen berechnen und für das Ausgangsmodell speichern">Nur Leistungsschätzung kalibrieren</button></div>
+      <div id="m-calmsg"></div>
     </details>
     <div id="m-msg"></div>
   </div>
@@ -292,6 +298,7 @@
       <button id="e-clear" title="Alle Flächen der aktiven Ebene löschen">Leeren</button>
       <button id="e-fit" title="Ganzes Bild (F oder 0)">⤢</button>
       <span class="sp"></span>
+      <label class="check" title="Registerleistung dieses Bilds für die Kalibrierung der Leistungsschätzung verwenden"><input type="checkbox" id="e-usereg"> Register kalibriert</label>
       <label class="check" title="Label umschalten (L)"><input type="checkbox" id="e-label"> PV vorhanden</label>
       <button id="e-prev" title="Zurück (←)">←</button>
       <button id="e-skip" title="Überspringen (X)">Überspringen</button>

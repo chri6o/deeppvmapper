@@ -1247,3 +1247,142 @@ def test_area_and_probe_to_dataset_and_register_lookup(tmp_path, monkeypatch):
     assert all(a[0] == "point" and a[3] == 40 for a in asked)
     m = annotate.read_meta(d, items[0]["name"])
     assert m["register"]["buildings"][0]["register"]["by_year"]["2019"] == 14.7
+
+
+# --------------------------------------------------------------- free roof area, OSM buildings, capacity calibration
+
+def test_roof_flat_obstacles_pv_and_setback():
+    from pvmapper import roofs
+    H, W = 260, 360                                       # 0.1 m: roof 30 × 20 m
+    img = np.full((H, W, 3), 60, np.uint8)
+    fp = np.zeros((H, W), bool)
+    fp[30:230, 30:330] = True
+    img[fp] = (150, 150, 150)
+    img[100:120, 100:120] = (40, 40, 45)                  # 2 × 2 m technical unit
+    pv = np.zeros((H, W), bool)
+    pv[150:210, 220:310] = True                           # 9 × 6 m existing PV
+    img[pv] = (40, 60, 120)
+    r = roofs.analyse(img, fp, pv, 0.1, {"roof:shape": "flat"}, dict(config.DEFAULTS))
+    assert r["roof_type"] == "flat" and r["roof_type_basis"] == "OSM" and r["roof_area_m2"] == 600
+    assert 3 <= r["obstacles_area_m2"] <= 8, r["obstacles_area_m2"]
+    # 28 × 18 m inside the setback = 504 m², minus the unit with clearance (≈ 9 m²) and the PV with 0.3 m (≈ 64 m²)
+    assert 400 <= r["usable_area_m2"] <= 445, r["usable_area_m2"]
+    assert not r["_free"][100:120, 100:120].any() and not r["_free"][150:210, 220:310].any()
+    assert r["kwp_pot_low"] <= r["kwp_potential"] <= r["kwp_pot_high"] and r["kwp_potential"] > 50
+
+
+def test_roof_pitched_north_face_excluded():
+    from pvmapper import roofs
+    H, W = 200, 400
+    img = np.full((H, W, 3), 60, np.uint8)
+    fp = np.zeros((H, W), bool)
+    fp[40:160, 40:360] = True                             # 32 × 12 m, ridge west–east
+    img[40:100, 40:360] = (90, 70, 60)                    # north face in shade
+    img[100:160, 40:360] = (170, 120, 100)                # south face lit
+    r = roofs.analyse(img, fp, None, 0.1, {}, dict(config.DEFAULTS))
+    assert r["roof_type"] == "pitched" and r["roof_type_basis"] == "Bild", r
+    faces = {f["azimuth_deg"]: f for f in r["faces"]}
+    assert faces[0]["excluded_north"] and faces[0]["usable_area_m2"] == 0
+    assert faces[180]["usable_area_m2"] > 100 and not r["_free"][40:100].any()
+
+
+def test_building_job_with_roof_potential(tmp_path, monkeypatch):
+    cx, cy = 13.40, 52.52
+    b1 = box(cx, cy, cx + 0.0004, cy + 0.0003)
+    inp = tmp_path / "in.geojson"
+    inp.write_text(json.dumps({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "geometry": b1.__geo_interface__, "properties": {"id": "TESTR", "roof:shape": "flat"}}]}))
+
+    class FakeSrc:
+        id = "fake-2024"
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 150, np.uint8)
+        return img, win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), fetch_workers=1, cross_check=False)
+    job = Job(cfg["jobs_dir"], "buildings", {"input": str(inp), "roof_potential": True})
+    job.run(lambda j: building_mode.run(j, cfg))
+    assert job.status == "done", job.error
+    from pvmapper.jobs import open_db
+    db = open_db(os.path.join(job.dir, "results.sqlite"))
+    rt, area, free, kwp = db.execute("SELECT roof_type, roof_area_m2, usable_area_m2, kwp_potential FROM results").fetchone()
+    assert rt == "flat" and area > 500 and 0 < free < area and kwp > 0
+    fc = json.load(open(os.path.join(job.dir, "roof_potential.geojson"), encoding="utf-8"))
+    assert fc["features"][0]["properties"]["kind"] == "free" and fc["features"][0]["geometry"]["type"] in ("Polygon", "MultiPolygon")
+    assert job.counters["dach_bewertet"] == 1
+
+
+def test_area_job_on_osm_buildings_only(tmp_path, monkeypatch):
+    """OSM footprints: cells without a building are skipped, PV outside the footprints is dropped"""
+    from pvmapper import area_mode, osm
+    bb = [13.4000, 52.5200, 13.4010, 52.5203]             # ≈ 68 × 33 m → two 51 m cells
+    bld_w, bld_s, bld_e, bld_n = 13.4001, 52.52005, 13.40045, 52.52025          # one building in the western cell
+    calls = []
+
+    def fake_fetch(q, timeout=180):
+        calls.append(q)
+        ring = [(bld_w, bld_s), (bld_e, bld_s), (bld_e, bld_n), (bld_w, bld_n), (bld_w, bld_s)]
+        return {"elements": [{"type": "way", "id": 1, "tags": {"building": "school", "roof:shape": "flat"},
+                              "geometry": [{"lon": x, "lat": y} for x, y in ring]}]}
+    monkeypatch.setattr(osm, "_fetch", fake_fetch)
+
+    class FakeSrc:
+        id = "fake-2023"
+        name = "Fake"
+        attribution = ""
+
+    def fake_img(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 90, np.uint8)
+        h = img.shape[0]
+        img[h // 3: 2 * h // 3, :] = (40, 120, 250)       # a PV band across the whole cell, on and beside the building
+        return img, win, FakeSrc()
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_img)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), fetch_workers=1,
+               area_cell_px=512, age_check=False)
+    job = Job(cfg["jobs_dir"], "area", {"bbox": bb, "osm_buildings": True})
+    job.run(lambda j: area_mode.run(j, cfg))
+    assert job.status == "done", job.error
+    assert len(calls) == 1 and job.total == 1                              # the eastern cell has no building
+    fc = json.load(open(os.path.join(job.dir, "installations.geojson"), encoding="utf-8"))
+    assert len(fc["features"]) == 1 and fc["features"][0]["properties"]["building_ids"] == "osm:way/1"
+    from shapely.geometry import shape
+    g = shape(fc["features"][0]["geometry"])
+    assert g.within(box(bld_w, bld_s, bld_e, bld_n).buffer(0.00004))      # nothing beyond the footprint + ~2 m
+
+
+def test_capacity_calibration_from_register(tmp_path):
+    from PIL import Image as PImage
+    from pvmapper import annotate, calibration, typology as T
+    d = tmp_path / "ds"
+    d.mkdir()
+    win = geo.window_around(box(13.4, 52.52, 13.4004, 52.5203), "EPSG:25833", 0.1, 3, 64)
+    for k in range(4):
+        img = np.full((win.height, win.width, 3), 150, np.uint8)
+        PImage.fromarray(img).save(d / f"b{k}.jpg")
+        fp = np.zeros((win.height, win.width), np.uint8)
+        fp[5:-5, 5:-5] = 255
+        PImage.fromarray(fp).save(d / f"b{k}.fp.png")
+        meta = {"id": f"TESTK{k}", "name": f"b{k}", "label": 1, "status": "open", "source": "de-nw-2024",
+                "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy, win.width, win.height],
+                "use_register": k < 3, "install_year": 2018,
+                "register": {"buildings": [{"id": f"TESTK{k}", "distance_m": None,
+                                            "register": {"kwp": 22.0 + k, "n": 1, "by_year": {"2018": 22.0 + k}}}]}}
+        json.dump(meta, open(d / f"b{k}.json", "w"))
+        annotate.save_annotation(str(d), f"b{k}", [[[30, 30], [230, 30], [230, 130], [30, 130]]])   # 20 × 10 m flush field
+    cfg = dict(config.DEFAULTS, model_dir=str(tmp_path / "m"), profile="nrw")
+    cal = calibration.compute(str(d), cfg, "marked")
+    assert cal["n_images"] == 3 and list(cal["fill_factor"]) == ["flush_pitched"] or list(cal["fill_factor"]) == ["flush_flat"], cal
+    key = list(cal["fill_factor"])[0]
+    # 200 m² outline at 18 % (built 2018) and 23 kWp in the middle → f = 23 / (200 × 0.18) ≈ 0.64
+    assert abs(cal["fill_factor"][key] - 23 / (200 * 0.18)) < 0.05, cal
+    assert calibration.compute(str(d), cfg, "all")["n_images"] == 4
+    calibration.save(cfg["model_dir"], "nrw", cal)
+    assert T.settings(cfg)["fill_factor"][key]["f"] == cal["fill_factor"][key]
+    assert T.settings({**cfg, "profile": "ign"})["fill_factor"][key]["f"] != cal["fill_factor"][key]   # only for that model
+    assert T.settings({**cfg, "kwp_calibration": False})["fill_factor"][key]["f"] != cal["fill_factor"][key]

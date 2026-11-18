@@ -19,6 +19,8 @@ import queue
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import numpy as np
+
 from shapely import wkt as shp_wkt
 from shapely.geometry import box, mapping, shape
 from shapely.ops import unary_union
@@ -102,7 +104,25 @@ def run(job, cfg: dict):
     cells, utm = make_cells(region, cell_m)
     done = {r[0] for r in db.execute("SELECT id FROM cells WHERE status='ok'")}
     db.execute("DELETE FROM cells WHERE status != 'ok'")
-    job.total, job.done = len(cells), len(done)
+    # building footprints from OpenStreetMap: only cells with buildings, masks clipped to the footprints
+    btree, bgeoms = None, []
+    if p.get("osm_buildings"):
+        from shapely.strtree import STRtree as _Tree
+        from . import osm
+        path = os.path.join(job.dir, "buildings_osm.geojson")
+        if not os.path.isfile(path):
+            job.log("Lade Gebäudeumrisse aus OpenStreetMap …")
+            osm.save(osm.buildings(region, job.log), path)
+        with open(path, encoding="utf-8") as f:
+            bgeoms = [shape(ft["geometry"]) for ft in json.load(f)["features"]]
+        job.log(f"{len(bgeoms)} OSM-Gebäude im Gebiet (© OpenStreetMap-Mitwirkende, ODbL).")
+        p["buildings"], p["only_on_buildings"] = path, True
+        btree = _Tree(bgeoms) if bgeoms else None
+        before = len(cells)
+        cells = [c for c in cells if btree is not None and len(btree.query(c[1])) > 0]
+        job.log(f"{before - len(cells)} von {before} Zellen ohne Gebäude übersprungen.")
+        job.save()
+    job.total, job.done = len(cells), len(done & {c[0] for c in cells})
     job.log(f"Region {geo.ground_area_m2(region) / 1e6:.2f} km² → {len(cells)} Zellen à "
             f"{cell_m:.0f} m, {len(done)} bereits erledigt. Profil {prof.id}, Gerät {det.device}.")
     job.save()
@@ -155,14 +175,23 @@ def run(job, cfg: dict):
                 job.log(f"Zelle {cid}: {err[:160]}")
             continue
         r = det.run([(cid, img)])[cid]
-        # no footprints here: only the filters (contrast, dormer rows, rectangles), no colour completion
-        mask, _ = postproc.clean(img, r.mask, det.p.resolution_m, None, dict(cfg, postproc_complete=False), prob=r.prob)
+        clip = None
+        if btree is not None:                                    # OSM footprints (+1.5 m) of this cell
+            from shapely.geometry import box as _box
+            cb = geo.reproject(_box(win.minx, win.miny, win.maxx, win.maxy), win.crs, "EPSG:4326")
+            near = [bgeoms[i] for i in btree.query(cb)]
+            clip = runtime.clip_mask(unary_union(near), win, img.shape) > 0 if near else np.zeros(img.shape[:2], bool)
+        # without footprints only the filters (contrast, dormer rows, rectangles), no colour completion
+        mask, _ = postproc.clean(img, r.mask, det.p.resolution_m, clip, dict(cfg, postproc_complete=clip is not None),
+                                 prob=r.prob)
+        if clip is not None:
+            mask = mask & clip
         r.mask = mask
         polys = inference.mask_to_polygons(r.mask, win)
         tfeats = []
         if polys and cfg.get("typology", True):
             try:
-                tfeats = typology.for_window(img, r.mask, win, det.p.resolution_m, src, f"z{cid}", None, None, cfg)
+                tfeats = typology.for_window(img, r.mask, win, det.p.resolution_m, src, f"z{cid}", clip, None, cfg)
                 if tfeats and p.get("age_check", cfg.get("age_check", True)):
                     from . import age
                     job.counters["baujahr_bestimmt"] += age.estimate(

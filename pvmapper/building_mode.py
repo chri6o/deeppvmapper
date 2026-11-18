@@ -23,7 +23,7 @@ from shapely.ops import unary_union
 from . import buildings as bld
 from . import config as cfgmod
 from .jobs import Cancelled
-from . import age, geo, inference, postproc, runtime, sources, typology
+from . import age, geo, roofs, inference, postproc, runtime, sources, typology
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS results (
@@ -54,6 +54,26 @@ def apply_typology(row: dict, img, mask, win, clip, src, props: dict, res_m: flo
     return feats
 
 
+def apply_roof(row: dict, img, mask, win, fp, props: dict, res_m: float, cfg: dict):
+    """free roof area and PV potential of one building (roofs.py) → row columns and the 'roof' JSON (free area, obstacles)"""
+    row.update(roof_type=None, roof_area_m2=None, usable_area_m2=None, kwp_potential=None, kwp_pot_low=None,
+               kwp_pot_high=None, roof=None)
+    if fp is None:
+        return
+    try:
+        exact = runtime.clip_mask(fp, win, img.shape, buffer_m=0) > 0
+        r = roofs.analyse(img, exact, mask, res_m, props, cfg)
+    except Exception as e:                                       # noqa: BLE001 – the check itself must go through
+        row["error"] = f"Dachfläche: {type(e).__name__}: {e}"[:300]
+        return
+    free, obst = r.pop("_free"), r.pop("_obst")
+    row.update({k: r.get(k) for k in ("roof_type", "roof_area_m2", "usable_area_m2", "kwp_potential", "kwp_pot_low",
+                                      "kwp_pot_high")})
+    r["free"] = roofs.to_wgs84(free, win)
+    r["obstacles"] = roofs.to_wgs84(obst, win)
+    row["roof"] = json.dumps(r, ensure_ascii=False, separators=(",", ":"))
+
+
 def set_from_installations(row: dict, feats: list, cfg: dict):
     """kWp (sum with range), main layout, size class and the installations JSON of a building from its installations"""
     sm = typology.summarise([f["properties"] for f in feats])
@@ -67,10 +87,12 @@ def set_from_installations(row: dict, feats: list, cfg: dict):
 
 COLUMNS = ["id", "status", "has_pv", "pv_area_m2", "kwp_est", "size_class", "in_range",
            "max_prob", "n_installations", "footprint_m2", "source", "lon", "lat", "error", "chip",
-           "check", "source2", "removed", "kwp_low", "kwp_high", "layout", "kwp_method"]
+           "check", "source2", "removed", "kwp_low", "kwp_high", "layout", "kwp_method",
+           "roof_type", "roof_area_m2", "usable_area_m2", "kwp_potential", "kwp_pot_low", "kwp_pot_high"]
 EXTRA = [("check", "TEXT"), ("source2", "TEXT"), ("removed", "TEXT"),      # added after the first release
          ("kwp_low", "REAL"), ("kwp_high", "REAL"), ("layout", "TEXT"), ("kwp_method", "TEXT"),
-         ("installations", "TEXT")]
+         ("installations", "TEXT"), ("roof_type", "TEXT"), ("roof_area_m2", "REAL"), ("usable_area_m2", "REAL"),
+         ("kwp_potential", "REAL"), ("kwp_pot_low", "REAL"), ("kwp_pot_high", "REAL"), ("roof", "TEXT")]
 
 
 def ensure_columns(db):
@@ -166,6 +188,8 @@ def run(job, cfg: dict):
     confirm = float(cfg.get("sync_confirm_score", 0.9))
     push_typology = bool(cfg.get("typology_push", False))
     age_on = bool(cfg.get("typology", True) and p.get("age_check", cfg.get("age_check", True)))
+    roof_on = bool(p.get("roof_potential", cfg.get("roof_potential", False)))
+    tcfg = {**cfg, "_profile": prof.id}                          # typology settings incl. the calibration of this model
 
     def send(force=False):
         if push and pending and (force or len(pending) >= 200):
@@ -236,7 +260,7 @@ def run(job, cfg: dict):
     t = threading.Thread(target=producer, daemon=True)
     t.start()
 
-    keys = COLUMNS + ["props", "footprint_wkt", "pv_wkt", "installations"]
+    keys = COLUMNS + ["props", "footprint_wkt", "pv_wkt", "installations", "roof"]
     insert = ("INSERT OR REPLACE INTO results (" + ",".join(f'"{k}"' for k in keys) + ") VALUES ("
               + ",".join("?" * len(keys)) + ")")
     group, group_patches = [], 0
@@ -276,7 +300,15 @@ def run(job, cfg: dict):
                 mask, check = postproc.fuse(mask, mask2, prof.resolution_m)
             polys = inference.mask_to_polygons(mask, win)
             row = _summarise(b, polys, fp, search, win, src, r.max_prob, cfg)
-            feats = apply_typology(row, img, mask, win, clips[i], src, b.props, prof.resolution_m, cfg)
+            feats = apply_typology(row, img, mask, win, clips[i], src, b.props, prof.resolution_m, tcfg)
+            if roof_on:
+                apply_roof(row, img, mask, win, fp, b.props, prof.resolution_m, tcfg)
+                if row["usable_area_m2"] is not None:
+                    job.counters["dach_bewertet"] += 1
+                    job.counters["kwp_potenzial"] = round(job.counters.get("kwp_potenzial", 0) + (row["kwp_potential"] or 0), 1)
+            else:
+                row.update(roof_type=None, roof_area_m2=None, usable_area_m2=None, kwp_potential=None, kwp_pot_low=None,
+                           kwp_pot_high=None, roof=None)
             built.append((i, row, feats, mask, img2, src2, check))
         # build year from older flights for every installation found (sets efficiency and kWp)
         dated = [x for x in built if x[2]]
@@ -284,7 +316,7 @@ def run(job, cfg: dict):
             items = [{"img": group[i][3], "win": group[i][4], "src": group[i][5], "mask": mask, "feats": feats,
                       "clip": clips[i], "res_m": prof.resolution_m} for i, row, feats, mask, *_ in dated]
             try:
-                job.counters["baujahr_bestimmt"] += age.estimate(items, det, cfg, int(cfg["fetch_workers"]), job)
+                job.counters["baujahr_bestimmt"] += age.estimate(items, det, tcfg, int(cfg["fetch_workers"]), job)
             except Cancelled:
                 raise
             except Exception as e:                               # noqa: BLE001 – never lose the detections over the age
@@ -292,7 +324,7 @@ def run(job, cfg: dict):
                     job.log(f"Baujahr nicht bestimmbar: {type(e).__name__}: {e}"[:200])
                 job.counters["baujahr_fehler"] += 1
             for i, row, feats, *_ in dated:
-                set_from_installations(row, feats, cfg)
+                set_from_installations(row, feats, tcfg)
         for i, row, feats, mask, img2, src2, check in built:
             b, search, fp, img, win, src, _ = group[i]
             r, info = res[i], infos[i]
@@ -447,7 +479,26 @@ def export(job, db=None):
     compare_with_known(job, db)
     write_fc(os.path.join(job.dir, "pv_polygons.geojson"), pvfeats())
     write_fc(os.path.join(job.dir, "installations.geojson"), instfeats())
-    job.log("Exporte geschrieben: buildings.csv, buildings.geojson, pv_polygons.geojson, installations.geojson")
+
+    def rooffeats():
+        if "roof" not in names:
+            return
+        for r in rows():
+            d = dict(zip(names, r))
+            if not d.get("roof"):
+                continue
+            rf = json.loads(d["roof"])
+            base = {"building_id": d["id"], **{k: rf.get(k) for k in (
+                "roof_type", "roof_type_basis", "roof_area_m2", "usable_area_m2", "obstacles_area_m2", "shade_area_m2",
+                "pv_area_m2", "kwp_potential", "kwp_pot_low", "kwp_pot_high", "layout_assumed", "tilt_assumed_deg",
+                "module_efficiency", "usable_share")}, "faces": rf.get("faces")}
+            if rf.get("free"):
+                yield {"type": "Feature", "geometry": rf["free"], "properties": {**base, "kind": "free"}}
+            if rf.get("obstacles"):
+                yield {"type": "Feature", "geometry": rf["obstacles"], "properties": {"building_id": d["id"], "kind": "obstacles"}}
+
+    write_fc(os.path.join(job.dir, "roof_potential.geojson"), rooffeats())
+    job.log("Exporte geschrieben: buildings.csv, buildings.geojson, pv_polygons.geojson, installations.geojson, roof_potential.geojson")
 
 
 def compare_with_known(job, db):

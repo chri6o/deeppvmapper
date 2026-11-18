@@ -57,6 +57,16 @@ function instPopup(p) {
     `${fmt(p.outline_area_m2, 0)} m² × Belegung ${fmt(p.fill_factor, 2)}${p.fill_factor_source === "derived_pitch" ? " (gemessen)" : ""}<br>` +
     `<b>${fmt(p.kwp_est, 1)} kWp</b> (${fmt(p.kwp_low, 0)}–${fmt(p.kwp_high, 0)})${yearText(p) ? "<br>" + yearText(p).slice(3) : ""}`;
 }
+// free roof area (green) and obstacles (orange) of the roof potential (roofs.py)
+const roofLayer = L.geoJSON(null, {
+  style: (f) => f.properties.kind === "free" ? { color: "#15803d", weight: 1, fillColor: "#22c55e", fillOpacity: .35 }
+    : { color: "#c2410c", weight: 1, fillColor: "#f97316", fillOpacity: .45 },
+  onEachFeature: (f, l) => {
+    if (f.properties.kind === "free") l.bindPopup(() => `<b>${esc(f.properties.id)}</b><br>frei ${fmt(f.properties.usable_area_m2, 0)} m² → <b>${fmt(f.properties.kwp_potential, 0)} kWp</b> (${fmt(f.properties.kwp_pot_low, 0)}–${fmt(f.properties.kwp_pot_high, 0)})`);
+    l.on("click", () => showBuilding(f.properties.id));
+  },
+}).addTo(map);
+layerCtl.addOverlay(roofLayer, "Freie Dachflächen und Aufbauten");
 const drawn = new L.FeatureGroup().addTo(map);
 map.addControl(new L.Control.Draw({
   draw: { polyline: false, circle: false, marker: false, circlemarker: false, polygon: { showArea: true }, rectangle: true },
@@ -137,7 +147,7 @@ function setInput(d) {
 }
 $("#b-start").onclick = async () => {
   const params = { input: S.input.input, id_field: $("#b-id").value, query: $("#b-sql").value.trim() || null,
-    sources: $("#b-source").value, profile: $("#b-profile").value, save_chips: $("#b-chips").value };
+    sources: $("#b-source").value, profile: $("#b-profile").value, save_chips: $("#b-chips").value, roof_potential: $("#b-roof").checked };
   try { const j = await api("/api/jobs", { json: { kind: "buildings", params } }); tab("jobs"); openJob(j.id); }
   catch (e) { info("#b-info", e.message, true); }
 };
@@ -206,7 +216,8 @@ async function showReport(id) {
 // ------------------------------------------------------------------ area tab
 function areaParams() {
   const p = { sources: $("#a-source").value, profile: $("#a-profile").value,
-    buildings: $("#a-buildings").value.trim() || null, only_on_buildings: $("#a-only").checked };
+    buildings: $("#a-buildings").value.trim() || null, only_on_buildings: $("#a-only").checked,
+    osm_buildings: $("#a-osm").checked && !$("#a-buildings").value.trim() };
   const bb = $("#a-bbox").value.trim().split(/[\s,;]+/).map(Number).filter((x) => !isNaN(x));
   if (bb.length === 4) p.bbox = bb; else if (S.drawn) p.geometry = S.drawn.geometry;
   return p;
@@ -307,6 +318,7 @@ async function refreshJob(withResults) {
   else if (j.kind === "train") stats.push([fmt(c.f1_vorher, 2), "F1 vorher"], [fmt(c.f1_nachher, 2), "F1 nachher"], [c.modell ? "gespeichert" : "–", "neues Modell"]);
   else if (j.kind === "area") stats.push([fmt(c.zellen_mit_pv), "Kacheln mit PV"], [fmt(c.anlagen), "Anlagen"], [fmt(c.fehler), "Fehler"], [fmt(c.baujahr_bestimmt), "Baujahr bestimmt"]);
   if (j.kind === "buildings" || j.kind === "sync") stats.push([fmt(c.baujahr_bestimmt), "Baujahr bestimmt"]);
+  if (c.dach_bewertet) stats.push([fmt(c.dach_bewertet), "Dächer bewertet"], [fmt(c.kwp_potenzial, 0) + " kWp", "Potenzial frei"]);
   if (!["train", "ai_masks"].includes(j.kind)) stats.push([fmt(c.kwp_sum, 0) + " kWp", "geschätzt gesamt"]);
   $("#jd-stats").innerHTML = stats.map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
   $("#jd-files").innerHTML = j.files.filter((f) => /\.(csv|geojson|json)$/.test(f) && f !== "job.json")
@@ -356,6 +368,7 @@ async function loadResults() {
     .map((c) => `<option value="${c.name}" ${c.name === $("#jd-class").value ? "selected" : ""}>${c.name} (${esc(c.label || "")})</option>`).join("");
   dataLayer.clearLayers(); dataLayer.addData(d.geojson);
   instLayer.clearLayers(); if (d.installations) instLayer.addData(d.installations);
+  roofLayer.clearLayers(); if (d.roofs) roofLayer.addData(d.roofs);
   instLayer.bringToFront(); showInstLegend(instLayer.getLayers().length > 0);
   if (d.geojson.features.length) map.fitBounds(dataLayer.getBounds(), { maxZoom: 18 });
   const t = $("#jd-table");
@@ -373,8 +386,9 @@ async function loadResults() {
   S.sel = S.selJob === S.job ? (S.sel || new Set()) : new Set(); S.selJob = S.job;
   const nach = $("#jd-status").value === "nacharbeit";
   const NA = { verpasst: "verpasst (Register: PV)", "unvollständig": "unvollständig", verdacht: "Verdacht (Score hoch)" };
-  t.innerHTML = `<tr><th><input type="checkbox" id="jd-selall" title="alle angezeigten"></th>${nach ? "<th>Nacharbeit</th><th>Register kWp</th>" : ""}<th>ID</th><th>Status</th><th>PV m²</th><th>kWp</th><th>Klasse</th><th>Score</th><th>Quelle</th></tr>` +
-    d.rows.map((r) => `<tr class="click" data-id="${esc(r.id)}"><td><input type="checkbox" class="jd-sel" data-id="${esc(r.id)}" ${S.sel.has(r.id) ? "checked" : ""}></td>${nach ? `<td>${esc(NA[r.nacharbeit] || "")}</td><td class="num">${fmt(r.pv_kwp_register, 1)}</td>` : ""}<td>${esc(r.id)}</td><td>${r.status}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${fmt(r.kwp_est, 1)}</td><td>${r.size_class || ""}</td><td class="num">${fmt(r.max_prob, 2)}</td><td>${r.source || esc((r.error || "").slice(0, 40))}</td></tr>`).join("") +
+  const pot = d.rows.some((r) => r.usable_area_m2 != null);
+  t.innerHTML = `<tr><th><input type="checkbox" id="jd-selall" title="alle angezeigten"></th>${nach ? "<th>Nacharbeit</th><th>Register kWp</th>" : ""}<th>ID</th><th>Status</th><th>PV m²</th><th>kWp</th>${pot ? "<th>frei m²</th><th>Potenzial kWp</th>" : ""}<th>Klasse</th><th>Score</th><th>Quelle</th></tr>` +
+    d.rows.map((r) => `<tr class="click" data-id="${esc(r.id)}"><td><input type="checkbox" class="jd-sel" data-id="${esc(r.id)}" ${S.sel.has(r.id) ? "checked" : ""}></td>${nach ? `<td>${esc(NA[r.nacharbeit] || "")}</td><td class="num">${fmt(r.pv_kwp_register, 1)}</td>` : ""}<td>${esc(r.id)}</td><td>${r.status}</td><td class="num">${fmt(r.pv_area_m2, 1)}</td><td class="num">${fmt(r.kwp_est, 1)}</td>${pot ? `<td class="num">${fmt(r.usable_area_m2, 0)}</td><td class="num">${fmt(r.kwp_potential, 0)}</td>` : ""}<td>${r.size_class || ""}</td><td class="num">${fmt(r.max_prob, 2)}</td><td>${r.source || esc((r.error || "").slice(0, 40))}</td></tr>`).join("") +
     (d.total > d.rows.length ? `<tr><td colspan="8" class="hint">${fmt(d.rows.length)} von ${fmt(d.total)} angezeigt – vollständige Liste in buildings.csv</td></tr>` : "");
   $$("#jd-table tr.click").forEach((tr) => tr.onclick = (e) => { if (!e.target.classList.contains("jd-sel")) showBuilding(tr.dataset.id); });
   $$("#jd-table .jd-sel").forEach((cb) => cb.onchange = () => { cb.checked ? S.sel.add(cb.dataset.id) : S.sel.delete(cb.dataset.id); selInfo(); });
@@ -402,6 +416,15 @@ $("#jd-todataset").onclick = async () => {
     S.sel = new Set(); openJob(j.id); loadJobs(); }
   catch (e) { alert(e.message); }
 };
+const ROOF_TXT = { flat: "Flachdach", pitched: "Steildach" };
+function roofText(r) {
+  if (r.usable_area_m2 == null) return "";
+  const R = r.roof || {};
+  const faces = (R.faces || []).map((f) => `${Math.round(f.azimuth_deg)}°: ${f.excluded_north ? "Nordseite, nicht genutzt" : fmt(f.usable_area_m2, 0) + " m²"}`).join(" · ");
+  return `<br><b>Dach</b>: ${esc(ROOF_TXT[r.roof_type] || r.roof_type)} (${esc(R.roof_type_basis || "")}) · ${fmt(r.roof_area_m2, 0)} m² · Aufbauten ${fmt(R.obstacles_area_m2, 0)} m²` +
+    `${R.shade_area_m2 ? " · verschattet " + fmt(R.shade_area_m2, 0) + " m²" : ""}${R.pv_area_m2 ? " · PV " + fmt(R.pv_area_m2, 0) + " m²" : ""}` +
+    ` → <b>frei ${fmt(r.usable_area_m2, 0)} m² ≈ ${fmt(r.kwp_potential, 0)} kWp</b> (${fmt(r.kwp_pot_low, 0)}–${fmt(r.kwp_pot_high, 0)}; Annahme ${esc(LAYOUT_TXT[(R.layout_assumed || "").replace(/_(flat|pitched)$/, "")] || R.layout_assumed || "")}, ${fmt(R.tilt_assumed_deg, 0)}°)${faces ? "<br>Dachseiten: " + faces : ""}`;
+}
 function yearText(i) {
   if (i.install_year == null) return i.install_year_high != null ? ` · Baujahr vor ${i.install_year_high} (ältere Flüge unklar)` : "";
   const lo = i.install_year_low, hi = i.install_year_high;
@@ -430,7 +453,7 @@ function showBuilding(id) {
   if (r.chip) {
     $("#chipimg").src = `/api/jobs/${S.job}/chips/${encodeURIComponent(r.chip)}`;
     $("#chipcap").innerHTML = `<b>${esc(r.id)}</b> · ${r.status} · ${fmt(r.pv_area_m2, 1)} m² · ≈ ${fmt(r.kwp_est, 1)} kWp${r.kwp_low != null ? ` (${fmt(r.kwp_low, 0)}–${fmt(r.kwp_high, 0)})` : ""} · Klasse ${r.size_class || "–"} · Score ${fmt(r.max_prob, 2)} · ${r.source}` +
-      instText(r) + (r.check && r.check !== "ohne" ? `<br>Gegenprobe ${esc(r.source2 || "")}: ${esc(CHECK_TXT[r.check] || r.check)}` : "") +
+      instText(r) + roofText(r) + (r.check && r.check !== "ohne" ? `<br>Gegenprobe ${esc(r.source2 || "")}: ${esc(CHECK_TXT[r.check] || r.check)}` : "") +
       (r.removed && r.removed.length ? `<br><span class="muted">Verworfen: ${r.removed.map((x) => `${esc(x[0])} ${fmt(x[1], 1)} m²`).join(", ")}</span>` : "");
     $("#chipview").classList.remove("hidden");
   }
@@ -457,7 +480,7 @@ async function probe(ll) {
     const d = await api("/api/probe", { json: { lat: ll.lat, lon: ll.lng, source: $("#p-source").value, profile: $("#p-profile").value, radius_m: +$("#p-radius").value } });
     S.probe = { lat: ll.lat, lon: ll.lng, radius_m: +$("#p-radius").value, source: $("#p-source").value, profile: $("#p-profile").value, d };
     $("#p-ds").classList.remove("hidden"); fillTargets("#p-target");
-    dataLayer.clearLayers(); instLayer.clearLayers(); showInstLegend(false);
+    dataLayer.clearLayers(); instLayer.clearLayers(); roofLayer.clearLayers(); showInstLegend(false);
     if (d.polygons) dataLayer.addData({ type: "FeatureCollection", features: d.polygons.features.map((f) => ({ ...f, properties: { kind: "pv" } })) });
     if (d.installations) { instLayer.addData(d.installations); instLayer.bringToFront(); showInstLegend(instLayer.getLayers().length > 0); }
     $("#p-out").innerHTML = `<div class="info"><b>${esc(d.source_name)}</b><br>
@@ -624,7 +647,7 @@ async function openItem(i) {
   M.polys = d.polygons; M.other = d.negatives || []; M.layer = "pv"; setLayerButtons();
   M.hist = []; M.cur = []; M.sel = -1; M.vsel = -1; M.label = d.effective_label; M.dirty = false; M.corners = [];
   M.typo = null; M.typoKey = null;
-  $("#e-label").checked = !!M.label;
+  $("#e-label").checked = !!M.label; $("#e-usereg").checked = !!M.item.use_register;
   M.img = new Image();
   M.img.onload = () => { showEditor(true); fitView(); draw(); };
   M.img.src = base + "/image";
@@ -661,8 +684,10 @@ function regText(m) {
   const R = m.register; if (!R) return "";
   const hit = (R.buildings || []).filter((b) => b.register);
   if (!hit.length) return ` · Register: <span class="muted">nichts (${(R.buildings || []).length ? "Gebäude ohne Register-PV" : "kein PV-Map-Gebäude in der Nähe"})</span>`;
+  const est = M.typo && M.typo.summary && M.typo.summary.kwp_est;
+  const cmp = est && hit.length === 1 ? ` · Register / Schätzung ${fmt(hit[0].register.kwp / est, 2)}${m.use_register ? " (für Kalibrierung)" : ""}` : "";
   return " · Register: " + hit.map((b) => { const r = b.register, yrs = Object.entries(r.by_year || {}).sort().map(([y, k]) => `${y}: ${fmt(k, 1)}`).join(", ");
-    return `<b>${fmt(r.kwp, 1)} kWp</b> (${r.n} Einheit${r.n === 1 ? "" : "en"}${yrs ? "; " + yrs : ""}; Zuordnung ${esc(r.grade || "?")}${b.distance_m ? "; " + fmt(b.distance_m, 0) + " m entfernt" : ""}${b.name ? "; " + esc(b.name) : ""})`; }).join(" + ");
+    return `<b>${fmt(r.kwp, 1)} kWp</b> (${r.n} Einheit${r.n === 1 ? "" : "en"}${yrs ? "; " + yrs : ""}; Zuordnung ${esc(r.grade || "?")}${b.distance_m ? "; " + fmt(b.distance_m, 0) + " m entfernt" : ""}${b.name ? "; " + esc(b.name) : ""})`; }).join(" + ") + cmp;
 }
 async function regLookup(names) {
   $("#m-reg-msg").innerHTML = `<div class="info">frage PV-Map …</div>`; if (names && names.length === 1) info2("Register: frage PV-Map …");
@@ -988,9 +1013,31 @@ $("#m-ai-batch").onclick = async () => {
 $("#m-train").onclick = async () => {
   if (!M.ds) return;
   try { const j = await api("/api/jobs", { json: { kind: "train", params: { dataset_from: M.ds, profile: $("#m-profile").value, epochs: +$("#m-epochs").value,
-      name: $("#m-name").value.trim() || $("#m-name").placeholder || null, ai_masks: $("#m-aiuse").value, min_seg_samples: 20 } } });
+      name: $("#m-name").value.trim() || $("#m-name").placeholder || null, ai_masks: $("#m-aiuse").value, min_seg_samples: 20,
+      calibrate_kwp: $("#m-cal").checked ? $("#m-caluse").value : null } } });
     tab("jobs"); openJob(j.id); }
   catch (e) { $("#m-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
+function calText(c) {
+  const L = Object.entries(c.layouts || {}).map(([k, v]) => `${esc(LAYOUT_TXT[k.replace(/_(flat|pitched)$/, "")] || k)}${k.endsWith("_flat") ? " (Flachdach)" : k.endsWith("_pitched") ? " (Steildach)" : ""}: ${v.n} Bilder, Belegung ${fmt(v.f_median, 2)} (bisher ${fmt(v.default, 2)})${c.fill_factor[k] != null ? " ✓" : " – zu wenige"}`).join("<br>");
+  const sk = Object.entries(c.skipped || {}).map(([k, v]) => `${esc(k)}: ${v}`).join(", ");
+  return `${fmt(c.n_images)} Bilder mit Registerleistung${c.ratio_median ? `, Register / Schätzung im Median ${fmt(c.ratio_median, 2)}` : ""}${L ? "<br>" + L : ""}${sk ? `<br><span class="muted">nicht verwendet: ${sk}</span>` : ""}`;
+}
+$("#m-calonly").onclick = async () => {
+  if (!M.ds) return;
+  $("#m-calmsg").innerHTML = `<div class="info">rechne …</div>`;
+  try {
+    const c = await api(`/api/datasets/${M.ds}/calibrate`, { json: { use: $("#m-caluse").value, profile: $("#m-profile").value, save: true } });
+    $("#m-calmsg").innerHTML = `<div class="info">${calText(c)}<br>${c.path ? `Gespeichert für <b>${esc(c.profile)}</b> – gilt ab sofort für dieses Modell. <a href="#" id="m-calundo">Zurücknehmen</a>` : "Nichts gespeichert (je Bauform mindestens " + c.min_n + " Bilder nötig)."}</div>`;
+    const u = $("#m-calundo"); if (u) u.onclick = async (e) => { e.preventDefault(); await api(`/api/calibration/${encodeURIComponent(c.profile)}`, { method: "DELETE" }); $("#m-calmsg").innerHTML = `<div class="info">Kalibrierung für ${esc(c.profile)} entfernt.</div>`; };
+  } catch (e) { $("#m-calmsg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
+$("#e-usereg").onchange = async () => {
+  const m = M.item; if (!m) return; const on = $("#e-usereg").checked;
+  try { await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/flags`, { json: { use_register: on } });
+    m.use_register = on; const it = M.items.find((x) => x.name === m.name); if (it) it.use_register = on;
+    if (on && !m.register) regLookup([m.name]); else info2(); }
+  catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); $("#e-usereg").checked = !on; }
 };
 $("#t-prepare").onclick = async () => {
   const tp = trainParams(); if ($("#t-posonly").checked) tp.negatives = 0;

@@ -61,6 +61,11 @@ DEFAULTS = {
     "typology_file": None,            # own typology.yml (defaults, thresholds); None = the one shipped with pvmapper
     "age_check": True,                # build year of every installation from older flights (pvmapper/age.py) → efficiency, kWp
     "age_max_res_m": 0.4,             # older flights coarser than this are not used
+    "roof_potential": False,          # also the free roof area and PV potential of every building (pvmapper/roofs.py)
+    "roof_setback_flat_m": 1.0,       # edge distance on flat roofs
+    "roof_setback_pitched_m": 0.5,    # … on pitched roofs
+    "roof_obstacle_clearance_m": 0.5, # clearance around obstacles (dormers, skylights, units)
+    "kwp_calibration": True,          # use the capacity calibration of the active model (pvmapper/calibration.py)
     "typology_push": False,           # send the installations to PV-Map (PV-Map migration 137 and later, docs/typology.md)
     "config_version": 2,
     "web_password": "",               # if set: the web UI asks for this password (any user name)

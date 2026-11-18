@@ -777,10 +777,23 @@ def run(job, cfg: dict):
     with open(os.path.join(job.dir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
     better = f1 >= base_f1
+    if p.get("calibrate_kwp"):                                   # register capacities → fill factors (optional, see calibration.py)
+        from . import calibration
+        n_reg = calibration.ensure_register(ds_dir, cfg, p["calibrate_kwp"])
+        if n_reg:
+            job.log(f"Registerdaten für {n_reg} Bilder bei PV-Map abgefragt.")
+        cal = calibration.compute(ds_dir, {**cfg, "profile": base_id}, p["calibrate_kwp"])
+        report["kwp_calibration"] = cal
+        job.log(f"Leistungskalibrierung: {cal['n_images']} Bilder mit Registerleistung, Belegungsgrade "
+                + (", ".join(f"{k} {v}" for k, v in cal["fill_factor"].items()) or "unverändert (zu wenige Bilder je Bauform)")
+                + (f"; übersprungen: {cal['skipped']}" if cal["skipped"] else ""))
     if better or p.get("save_anyway"):
         path = models.save_custom(cfg["model_dir"], name, prof, det.cls, det.seg, thr, det.seg_threshold, report)
         job.log(f"Modell gespeichert als Profil 'custom:{name}' ({path}).")
         job.counters["modell"] = 1
+        if report.get("kwp_calibration", {}).get("fill_factor"):
+            from . import calibration
+            calibration.save(cfg["model_dir"], f"custom:{name}", report["kwp_calibration"])
     else:
         job.log("Das neue Modell ist auf der Validierung nicht besser – nicht gespeichert (report.json ansehen).")
     job.done = job.total
