@@ -100,6 +100,16 @@ def test_tzsam_merge_and_new():
     assert new[0]["id"] == "ff-pl-tz-8" and new[0]["first_seen"] == "2022-03-01" and new[0]["quellen"]["lizenz_nc"]
 
 
+def test_tzsam_large_cluster_does_not_swallow_small_plant():
+    small = sq(17, 52, 150)                                              # 2.25 ha
+    osm, _ = inv.osm_rows([{"key": "w1", "tags": {"power": "plant", "plant:source": "solar"}, "geom": small}], [], "PL", "t", CFG)
+    big = sq(17, 52, 900)                                                # 81 ha cluster that contains the small plant
+    new, c = inv.tzsam_rows([{"cluster_id": 5, "capacity_mw": 83, "geom": big}], None, osm, [], "PL", "t", CFG, "z")
+    q = osm[0]["quellen"]
+    assert "tzsam_kwp_schaetzung" not in q and q["tzsam_teilweise"] == ["5"]
+    assert len(new) == 1 and new[0]["quellen"]["ohne_osm_teil"] and new[0]["flaeche_zaun_m2"] == pytest.approx(81e4 - 2.25e4, rel=0.03)
+
+
 def test_split_is_spatial_and_stable():
     a, b = sq(17.0, 52.0, 50), sq(17.0 + 20 * D / 0.6157, 52.0, 50)       # 20 m apart: same 10 km block
     assert inv.split_of(a) == inv.split_of(b) == inv.split_of(a)

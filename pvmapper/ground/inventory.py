@@ -84,6 +84,15 @@ def building_share(fence, buildings: list, tree: STRtree | None = None) -> float
     return geo.ground_area_m2(inter) / a if a > 0 and not inter.is_empty else 0.0
 
 
+def same_site(a, b) -> bool:
+    """one installation in two sources: overlap > 50 % of the smaller and > 25 % of the larger area (a large cluster that
+    only touches a small plant is a different site)"""
+    if not a.intersects(b):
+        return False
+    i = a.intersection(b).area
+    return i > 0.5 * min(a.area, b.area) and i > 0.25 * max(a.area, b.area)
+
+
 def overlap_small(a, b) -> float:
     """intersection / area of the smaller geometry"""
     if not a.intersects(b):
@@ -247,12 +256,14 @@ def tzsam_rows(records: list[dict], region_geom, osm: list[dict], buildings: lis
         for k in ("constructed_before", "constructed_after"):
             if rec.get(k):
                 info[f"tzsam_{k}"] = str(rec[k])[:10]
-        hit = None
+        hit, touched = None, []
         if otree is not None:
             for i in otree.query(g):
-                if overlap_small(osm[i]["geom_zaun"], g) > 0.5:
+                if same_site(osm[i]["geom_zaun"], g):
                     hit = osm[i]
                     break
+                if osm[i]["geom_zaun"].intersects(g):
+                    touched.append(osm[i])
         if hit is not None:
             q = hit["quellen"]
             q["tzsam"] = sorted(set(q.get("tzsam", []) + info.pop("tzsam")))
@@ -261,7 +272,15 @@ def tzsam_rows(records: list[dict], region_geom, osm: list[dict], buildings: lis
                 hit["baujahr_schaetzung"] = int(info["tzsam_constructed_before"][:4])
             count["tzsam_zusammengefuehrt"] += 1
             continue
-        a = geo.ground_area_m2(g)
+        for t in touched:                       # partial overlap: reference only, no capacity or dates taken over
+            t["quellen"]["tzsam_teilweise"] = sorted(set(t["quellen"].get("tzsam_teilweise", []) + info["tzsam"]))
+            t["quellen"]["lizenz_nc"] = True
+        if touched:
+            g = g.difference(unary_union([t["geom_zaun"] for t in touched]))
+            g = g if g.is_valid else g.buffer(0)
+            info["ohne_osm_teil"] = True
+            count["tzsam_teilweise"] = count.get("tzsam_teilweise", 0) + 1
+        a = geo.ground_area_m2(g) if not g.is_empty else 0
         if a < min_m2:
             count["zu_klein"] += 1
             continue
