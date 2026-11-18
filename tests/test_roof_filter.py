@@ -81,3 +81,24 @@ def test_rule_check_from_sample(tmp_path):
     assert set(r["erfasst_nach_ursache"]) == {"gaube", "schatten", "dachfenster"}
     eff = review.rule_effect(str(tmp_path / "results.sqlite"), b)
     assert eff["pv_treffer"] == 43 and eff["wuerden_moeglich"] >= 12
+
+
+def test_threshold_grid_reaches_below_0_2(monkeypatch):
+    from pvmapper import training
+    metas = [{"id": f"p{i}", "label": 1, "label_kind": "det_pv"} for i in range(10)] + \
+            [{"id": f"n{i}", "label": 0, "label_kind": "neg_high"} for i in range(10)]
+    # real installations score 0.08–0.15 after training on hard negatives, false ones below 0.05
+    scores = {m["id"]: (np.array([0.08 + 0.007 * i if m["label"] else 0.03]), None) for i, m in enumerate(metas)}
+    monkeypatch.setattr(training, "predict", lambda sc, t, min_px: {k: int(v[0].max() >= t) for k, v in sc.items()})
+    monkeypatch.setattr(training, "metrics", lambda ms, pred, a: {"alle": _f1(ms, pred)})
+    thr, f1 = training.tune_threshold(metas, scores, 0)
+    assert thr < 0.2 and f1 == 1.0
+
+
+def _f1(ms, pred):
+    tp = sum(1 for m in ms if m["label"] and pred[m["id"]])
+    fp = sum(1 for m in ms if not m["label"] and pred[m["id"]])
+    fn = sum(1 for m in ms if m["label"] and not pred[m["id"]])
+    p = tp / (tp + fp) if tp + fp else 0
+    r = tp / (tp + fn) if tp + fn else 0
+    return {"f1": 2 * p * r / (p + r) if p + r else 0}

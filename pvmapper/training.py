@@ -409,9 +409,13 @@ def _r(x, d=3):
 
 
 def tune_threshold(metas, scores, min_px):
+    """best F1 on the validation buildings with reliable labels; the grid reaches down to 0.02 – after training on many hard
+    negatives the scores of real installations drop, and a floor at 0.2 cut the optimum off (19.11.2026: both Bonn runs
+    ended exactly at 0.2)"""
     best = (None, -1)
     strong = [m for m in metas if m["label_kind"] != "neg_weak"] or metas
-    for t in np.arange(0.2, 0.96, 0.025):
+    grid = np.concatenate([np.arange(0.02, 0.2, 0.01), np.arange(0.2, 0.96, 0.025)])
+    for t in grid:
         mt = metrics(strong, predict(scores, t, min_px), 1)["alle"]
         f1 = mt["f1"] or 0
         if f1 > best[1]:
