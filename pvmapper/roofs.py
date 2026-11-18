@@ -86,10 +86,32 @@ def _az(vx, vy) -> float:
     return (math.degrees(math.atan2(vx, -vy)) + 360) % 360
 
 
+def _image_roof_type(gray, fp, core, half_a, half_b, xx, yy, cx, cy, u, L, Wd, res_m, C):
+    """gable roof from the image: simple (nearly rectangular) footprint, each half uniform, the halves clearly different
+    all along"""
+    rect = float(fp.sum()) / max(L * Wd, 1.0)
+    along = ((xx - cx) * u[0] + (yy - cy) * u[1])
+    diffs, mads = [], []
+    for k in range(3):
+        lo, hi = -L / 2 + k * L / 3, -L / 2 + (k + 1) * L / 3
+        seg = (along >= lo) & (along < hi)
+        ga, gb = gray[half_a & core & seg], gray[half_b & core & seg]
+        if ga.size < 30 or gb.size < 30:
+            continue
+        ma, mb = float(np.median(ga)), float(np.median(gb))
+        diffs.append(ma - mb)
+        mads += [float(np.median(np.abs(ga - ma))), float(np.median(np.abs(gb - mb)))]
+    same = len(diffs) == 3 and (all(d > 0 for d in diffs) or all(d < 0 for d in diffs))
+    dmin = min(abs(d) for d in diffs) if diffs else 0.0
+    return same and rect >= 0.85 and Wd * res_m >= 5 and dmin >= C["roof_halves_diff"] and dmin >= 1.5 * max(mads or [99])
+
+
 def analyse(img: np.ndarray, fp: np.ndarray, pv: np.ndarray | None, res_m: float, props: dict | None = None,
-            cfg: dict | None = None, conf: dict | None = None) -> dict:
-    """fp: exact footprint (bool), pv: detected PV (bool). Returns areas (plan m²), potential and masks
-    (free, obstacles) in image pixels."""
+            cfg: dict | None = None, conf: dict | None = None, faces: list | None = None,
+            shape_hint: tuple | None = None) -> dict:
+    """fp: exact footprint (bool), pv: detected PV (bool). faces: real roof faces [(face {tilt_deg, azimuth_deg}, mask)] from
+    LoD2 (lod2.py); shape_hint: (class, basis) from the roof-shape model (roofshape.py). Returns areas (plan m²), potential
+    and masks (free, obstacles) in image pixels."""
     from . import typology
     C = _c(cfg)
     conf = conf or typology.settings(cfg)
@@ -113,36 +135,57 @@ def analyse(img: np.ndarray, fp: np.ndarray, pv: np.ndarray | None, res_m: float
     side = ((xx - cx) * (-u[1]) + (yy - cy) * u[0])            # signed distance from the long axis (px)
     half_a, half_b = fp & (side < 0), fp & (side >= 0)
     core = fp & (cv2.distanceTransform(fp.astype(np.uint8), cv2.DIST_L2, 3) > 2 * px_m) & ~pv
+    pitched_tilt = float(C["roof_pitched_tilt_deg"])
+    n = (-u[1], u[0])                                            # normal of the long axis: points to the side>0 half
 
-    # roof type
-    shape_tag = str((props or {}).get("roof:shape") or (props or {}).get("roof_shape") or "").lower()
-    if shape_tag == "flat":
-        rtype, basis = "flat", "OSM"
-    elif shape_tag in PITCHED:
-        rtype, basis = "pitched", "OSM"
-    else:
-        # a gable roof: simple (nearly rectangular) footprint, each half uniform, the halves clearly different all along
-        rect = float(fp.sum()) / max(L * Wd, 1.0)
-        along = ((xx - cx) * u[0] + (yy - cy) * u[1])
-        diffs, mads = [], []
-        for k in range(3):
-            lo, hi = -L / 2 + k * L / 3, -L / 2 + (k + 1) * L / 3
-            seg = (along >= lo) & (along < hi)
-            ga, gb = gray[half_a & core & seg], gray[half_b & core & seg]
-            if ga.size < 30 or gb.size < 30:
+    # roof planes: real faces (LoD2), else from the roof type (OSM tag, roof-shape model, image)
+    planes = []
+    if faces:
+        for f, mk in faces:
+            mk = mk & fp
+            if mk.sum() * a_px < 1.0:
                 continue
-            ma, mb = float(np.median(ga)), float(np.median(gb))
-            diffs.append(ma - mb)
-            mads += [float(np.median(np.abs(ga - ma))), float(np.median(np.abs(gb - mb)))]
-        same = len(diffs) == 3 and (all(d > 0 for d in diffs) or all(d < 0 for d in diffs))
-        dmin = min(abs(d) for d in diffs) if diffs else 0.0
-        pitched = same and rect >= 0.85 and Wd * res_m >= 5 and dmin >= C["roof_halves_diff"] and dmin >= 1.5 * max(mads or [99])
-        rtype, basis = ("pitched" if pitched else "flat"), "Bild"
+            t = float(f.get("tilt_deg") or 0.0)
+            planes.append({"mask": mk, "tilt": t, "azimuth": f.get("azimuth_deg") if t >= 10 else None,
+                           "kind": "pitched" if t >= 10 else "flat"})
+        kinds = {p["kind"] for p in planes}
+        rtype = "flat" if kinds == {"flat"} else "pitched" if kinds == {"pitched"} else "mixed"
+        basis = "LoD2"
+        covered = np.zeros_like(fp)
+        for p in planes:
+            covered |= p["mask"]
+        rest = fp & ~covered                                     # footprint parts the model does not cover: flat
+        if rest.sum() * a_px >= 5:
+            planes.append({"mask": rest, "tilt": 0.0, "azimuth": None, "kind": "flat"})
+    if not planes:
+        shape_tag = str((props or {}).get("roof:shape") or (props or {}).get("roof_shape") or "").lower()
+        if shape_hint and shape_hint[0]:
+            cls, basis = shape_hint
+        elif shape_tag:
+            cls, basis = ("flat" if shape_tag == "flat" else "gabled" if shape_tag in PITCHED else None), "OSM"
+        else:
+            cls, basis = None, None
+        if cls is None:
+            cls = "gabled" if _image_roof_type(gray, fp, core, half_a, half_b, xx, yy, cx, cy, u, L, Wd, res_m, C) else "flat"
+            basis = "Bild"
+        if cls in ("gabled", "hipped"):
+            rtype = "pitched"
+            for sgn, half in ((1, half_b), (-1, half_a)):
+                planes.append({"mask": half, "tilt": pitched_tilt, "azimuth": round(_az(sgn * n[0], sgn * n[1])),
+                               "kind": "pitched"})
+        elif cls == "mono":
+            rtype = "pitched"
+            planes.append({"mask": fp, "tilt": 15.0, "azimuth": None, "kind": "pitched"})
+        elif cls == "complex":
+            rtype = "complex"
+            planes.append({"mask": fp, "tilt": 30.0, "azimuth": None, "kind": "pitched"})
+        else:
+            rtype = "flat"
+            planes.append({"mask": fp, "tilt": 0.0, "azimuth": None, "kind": "flat"})
     out.update(roof_type=rtype, roof_type_basis=basis)
 
-    # obstacles: compared with the roof's own surface (per half on pitched roofs, the halves are lit differently).
-    # Large deviating areas are another roof section (other material or level): their obstacles are found against their own
-    # surface colour in a second pass.
+    # obstacles: compared with the surface of each plane (lit differently). Large deviating areas are another roof section
+    # (other material or level): their obstacles are found against their own surface colour in a second pass.
     tex = cv2.blur(gray * gray, (7, 7)) - cv2.blur(gray, (7, 7)) ** 2
     tex = np.sqrt(np.maximum(tex, 0))
     inner_fp = fp & (cv2.distanceTransform(fp.astype(np.uint8), cv2.DIST_L2, 3) > 1)
@@ -164,71 +207,77 @@ def analyse(img: np.ndarray, fp: np.ndarray, pv: np.ndarray | None, res_m: float
         o = cv2.morphologyEx(o.astype(np.uint8), cv2.MORPH_OPEN, _disk(1)).astype(bool)
         return cv2.morphologyEx(o.astype(np.uint8), cv2.MORPH_CLOSE, _disk(2)).astype(bool)
 
-    regions = [half_a, half_b] if rtype == "pitched" else [fp]
     obst, shade = np.zeros_like(fp), np.zeros_like(fp)
     big_px = int(C["roof_max_obstacle_m2"] / a_px)
-    for reg in regions:
-        o, sh = deviating(reg)
+    for pl in planes:
+        o, sh = deviating(pl["mask"])
         o = clean(o)
         small = _comp_filter(o, int(0.2 / a_px), big_px)
         obst |= small
         shade |= _comp_filter(sh & ~o, int(2.0 / a_px))
-        n, labs, st, _ = cv2.connectedComponentsWithStats((o & ~small).astype(np.uint8), connectivity=8)
-        for i in range(1, n):                                   # another roof section: its own obstacles
+        nl, labs, st, _ = cv2.connectedComponentsWithStats((o & ~small).astype(np.uint8), connectivity=8)
+        for i in range(1, nl):                                   # another roof section: its own obstacles
             if st[i, cv2.CC_STAT_AREA] < big_px:
                 continue
-            sec = labs == i
-            o2, sh2 = deviating(sec)
+            o2, sh2 = deviating(labs == i)
             obst |= _comp_filter(clean(o2), int(0.2 / a_px), big_px)
             shade |= _comp_filter(sh2, int(2.0 / a_px))
     shade &= ~obst
     out["obstacles_area_m2"] = round(float(obst.sum()) * a_px, 1)
     out["shade_area_m2"] = round(float(shade.sum()) * a_px, 1)
 
-    # free area
-    set_m = C["roof_setback_pitched_m"] if rtype == "pitched" else C["roof_setback_flat_m"]
+    # free area: setback from the edge (by roof kind), clearance around obstacles, existing PV with its row gaps, shade;
+    # a strip along ridges and valleys between planes; no north faces
+    any_pitched = any(p["kind"] == "pitched" for p in planes)
+    set_m = C["roof_setback_pitched_m"] if (any_pitched and rtype != "mixed") else C["roof_setback_flat_m"]
     inner = cv2.distanceTransform(fp.astype(np.uint8), cv2.DIST_L2, 5) > set_m * px_m
-    # existing PV: the whole installation (rows with their gaps, as the typology outline) plus 0.3 m
     pv_area = cv2.morphologyEx(pv.astype(np.uint8), cv2.MORPH_CLOSE, _disk(round(1.5 * px_m))).astype(bool) | pv
     blocked = cv2.dilate(obst.astype(np.uint8), _disk(round(C["roof_obstacle_clearance_m"] * px_m))).astype(bool) \
         | cv2.dilate(pv_area.astype(np.uint8), _disk(round(0.3 * px_m))).astype(bool) | shade
-    free = inner & ~blocked
-    faces = []
-    if rtype == "pitched":
-        free &= np.abs(side) > C["roof_ridge_m"] * px_m
-        n = (-u[1], u[0])                                        # normal of the long axis: points to the side>0 half
-        for sgn, half in ((1, half_b), (-1, half_a)):
-            az = _az(sgn * n[0], sgn * n[1])
-            north = min(az, 360 - az) <= C["roof_exclude_north_deg"]
-            faces.append({"azimuth_deg": round(az), "excluded_north": north, "_mask": half})
-            if north:
-                free &= ~half
+    base_free = inner & ~blocked
+    ridge_px = max(1, round(C["roof_ridge_m"] * px_m))
     w_px = max(1, int(round(C["roof_min_width_m"] * px_m)))
-    free = cv2.morphologyEx(free.astype(np.uint8), cv2.MORPH_OPEN, np.ones((w_px, w_px), np.uint8)).astype(bool)
-    free = _comp_filter(free, int(C["roof_min_area_m2"] / a_px))
 
-    # potential
     eff_tab = conf["module"].get("efficiency_by_year") or {}
     eff = typology.efficiency_for_year(max(map(int, eff_tab)) if eff_tab else None, conf)
     er = conf["module"]["efficiency_range"]
     F = conf["fill_factor"]
-    if rtype == "pitched":
-        key, tilt = "flush_pitched", float(C["roof_pitched_tilt_deg"])
-    else:
-        key = C["roof_flat_layout"] if C["roof_flat_layout"] in F else "east_west"
-        tilt = float(conf["tilt"].get(key, {}).get("deg", 12)) if isinstance(conf.get("tilt"), dict) else 12.0
-    f, (flo, fhi) = float(F[key]["f"]), F[key].get("range", [F[key]["f"], F[key]["f"]])
-    cosv = max(math.cos(math.radians(tilt)), 0.087)
+    flat_key = C["roof_flat_layout"] if C["roof_flat_layout"] in F else "east_west"
+    flat_tilt = float(conf.get("tilt", {}).get(flat_key, {}).get("deg", 12)) if isinstance(conf.get("tilt"), dict) else 12.0
+    free = np.zeros_like(fp)
+    total = lo_sum = hi_sum = 0.0
+    face_out = []
+    for pl in planes:
+        mk = pl["mask"]
+        if len(planes) > 1:                                      # strip along ridges / valleys to the neighbouring planes
+            mk = cv2.erode(mk.astype(np.uint8), _disk(ridge_px)).astype(bool)
+        north = pl["kind"] == "pitched" and pl["azimuth"] is not None and \
+            min(pl["azimuth"], 360 - pl["azimuth"]) <= C["roof_exclude_north_deg"]
+        fr = base_free & mk
+        if north:
+            fr[:] = False
+        fr = cv2.morphologyEx(fr.astype(np.uint8), cv2.MORPH_OPEN, np.ones((w_px, w_px), np.uint8)).astype(bool)
+        fr = _comp_filter(fr, int(C["roof_min_area_m2"] / a_px))
+        free |= fr
+        m2 = float(fr.sum()) * a_px
+        if pl["kind"] == "pitched":
+            key, tilt = "flush_pitched", pl["tilt"]
+        else:
+            key, tilt = flat_key, flat_tilt
+        f, (flo, fhi) = float(F[key]["f"]), F[key].get("range", [F[key]["f"], F[key]["f"]])
+        cosv = max(math.cos(math.radians(min(tilt, 85))), 0.087)
+        k_est, k_lo, k_hi = m2 * f / cosv * eff, m2 * flo / cosv * er[0], m2 * fhi / cosv * max(er[1], eff)
+        total, lo_sum, hi_sum = total + k_est, lo_sum + k_lo, hi_sum + k_hi
+        face_out.append({"azimuth_deg": pl["azimuth"], "tilt_deg": round(pl["tilt"], 1), "kind": pl["kind"],
+                         "excluded_north": bool(north), "plan_area_m2": round(float(pl["mask"].sum()) * a_px, 1),
+                         "usable_area_m2": round(m2, 1), "kwp_potential": round(k_est, 1), "layout": key})
     free_m2 = float(free.sum()) * a_px
-    out.update(usable_area_m2=round(free_m2, 1), layout_assumed=key, tilt_assumed_deg=tilt, module_efficiency=eff,
-               kwp_potential=round(free_m2 * f / cosv * eff, 1), kwp_pot_low=round(free_m2 * flo / cosv * er[0], 1),
-               kwp_pot_high=round(free_m2 * fhi / cosv * max(er[1], eff), 1),
-               usable_share=round(free_m2 / roof_m2, 3))
-    out["kwp_pot_low"] = min(out["kwp_pot_low"], out["kwp_potential"])
-    for fc in faces:
-        m2 = float((free & fc.pop("_mask")).sum()) * a_px
-        fc.update(usable_area_m2=round(m2, 1), kwp_potential=round(m2 * f / cosv * eff, 1))
-    out["faces"] = faces
+    out.update(usable_area_m2=round(free_m2, 1), module_efficiency=eff, usable_share=round(free_m2 / roof_m2, 3),
+               kwp_potential=round(total, 1), kwp_pot_low=round(min(lo_sum, total), 1), kwp_pot_high=round(max(hi_sum, total), 1),
+               layout_assumed=("flush_pitched" if rtype == "pitched" else flat_key if rtype == "flat" else "mixed"),
+               tilt_assumed_deg=(pitched_tilt if rtype == "pitched" and basis != "LoD2" else flat_tilt if rtype == "flat" else None))
+    # faces worth listing: pitched ones, and flat ones only on mixed roofs
+    out["faces"] = [f for f in face_out if f["kind"] == "pitched" or rtype == "mixed"][:24]
     return {**out, "_free": free, "_obst": obst}
 
 

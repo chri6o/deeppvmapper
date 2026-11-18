@@ -1464,3 +1464,115 @@ def test_osm_falls_back_to_the_editing_api(monkeypatch):
     assert f[0]["properties"]["roof:shape"] == "flat" or f[1]["properties"].get("roof:shape") == "flat"
     assert osm._DOWN["until"] > 0
     osm._DOWN["until"] = 0
+
+
+# --------------------------------------------------------------- LoD2 roof faces, roof-shape model
+
+def _gable_gml(x0=373100.0, y0=5628100.0, L=20.0, B=10.0, z=60.0, ridge=2.9):
+    """CityGML LoD2 building: gable roof, ridge west–east, faces to north and south (tilt ≈ 30°)"""
+    def ring(pts):
+        return " ".join(f"{x} {y} {zz}" for x, y, zz in pts + [pts[0]])
+    s, n, m = y0, y0 + B, y0 + B / 2
+    south = [(x0, s, z), (x0 + L, s, z), (x0 + L, m, z + ridge), (x0, m, z + ridge)]
+    north = [(x0, m, z + ridge), (x0 + L, m, z + ridge), (x0 + L, n, z), (x0, n, z)]
+    ground = [(x0, s, z - 6), (x0, n, z - 6), (x0 + L, n, z - 6), (x0 + L, s, z - 6)]
+    surf = lambda tag, pts: (f'<bldg:boundedBy><bldg:{tag}><bldg:lod2MultiSurface><gml:MultiSurface><gml:surfaceMember><gml:Polygon>'
+                             f'<gml:exterior><gml:LinearRing><gml:posList srsDimension="3">{ring(pts)}</gml:posList></gml:LinearRing>'
+                             f'</gml:exterior></gml:Polygon></gml:surfaceMember></gml:MultiSurface></bldg:lod2MultiSurface></bldg:{tag}></bldg:boundedBy>')
+    return ('<?xml version="1.0" encoding="UTF-8"?><core:CityModel xmlns:bldg="http://www.opengis.net/citygml/building/1.0" '
+            'xmlns:gml="http://www.opengis.net/gml" xmlns:core="http://www.opengis.net/citygml/1.0"><core:cityObjectMember>'
+            '<bldg:Building gml:id="DENWTEST1"><bldg:roofType>3100</bldg:roofType>'
+            + surf("RoofSurface", south) + surf("RoofSurface", north) + surf("GroundSurface", ground)
+            + '</bldg:Building></core:cityObjectMember></core:CityModel>')
+
+
+def test_lod2_faces_roof_potential_and_tilt(tmp_path, monkeypatch):
+    from pvmapper import lod2, roofs, typology as T
+    from shapely.geometry import box as _box
+    gml = tmp_path / "LoD2_32_373_5628_1_NW.gml"
+    gml.write_text(_gable_gml(), encoding="utf-8")
+    b = lod2.parse_gml(str(gml))
+    assert b[0]["roof_type"] == "3100" and len(b[0]["faces"]) == 2
+    tilts = sorted((f["azimuth_deg"], f["tilt_deg"]) for f in b[0]["faces"])
+    assert tilts[0][0] == 0 and tilts[1][0] == 180 and all(29 <= t <= 31 for _, t in tilts)
+    cfg = dict(config.DEFAULTS, lod2_dir=str(tmp_path), lod2_keep_gml=True)
+    lod2._MEM.clear()
+    fp_utm = _box(373100, 5628100, 373120, 5628110)
+    fp = geo.reproject(fp_utm, "EPSG:25832", "EPSG:4326")
+    m = lod2.match(fp, cfg)
+    assert m and m["class"] == "gabled" and m["roof_shape"] == "gabled" and m["ids"] == ["DENWTEST1"]
+    # roof potential with the real faces: the north face is not used, the south face with its 30° tilt
+    win = geo.window_around(fp, "EPSG:25832", 0.1, 3, 64)
+    img = np.full((win.height, win.width, 3), 140, np.uint8)
+    exact = runtime.clip_mask(fp, win, img.shape, buffer_m=0) > 0
+    faces = lod2.face_masks(m, win, img.shape)
+    assert len(faces) == 2
+    r = roofs.analyse(img, exact, None, 0.1, {}, cfg, faces=faces)
+    assert r["roof_type"] == "pitched" and r["roof_type_basis"] == "LoD2"
+    f = {x["azimuth_deg"]: x for x in r["faces"]}
+    assert f[0]["excluded_north"] and f[0]["usable_area_m2"] == 0 and f[180]["usable_area_m2"] > 50
+    assert abs(f[180]["tilt_deg"] - 30) < 1.5
+    # a flush installation on the south face gets tilt and azimuth from LoD2, its kWp grows by 1/cos(30°)
+    inst = geo.reproject(_box(373104, 5628101, 373116, 5628104), "EPSG:25832", "EPSG:4326")
+    feat = {"type": "Feature", "geometry": inst.__geo_interface__,
+            "properties": {"layout": "flush", "tilt_deg": None, "kwp_est": 10.0, "kwp_low": 9.0, "kwp_high": 11.0}}
+    assert lod2.refine_installations([feat], m) == 1
+    p = feat["properties"]
+    assert p["azimuth_deg"] == 180 and p["tilt_class"] == "21-40" and abs(p["kwp_est"] - 10 / np.cos(np.radians(30))) < 0.3
+    assert lod2.match(geo.reproject(_box(373500, 5628500, 373510, 5628510), "EPSG:25832", "EPSG:4326"), cfg) is None
+
+
+def test_roofshape_training_and_prediction(tmp_path, monkeypatch):
+    """LoD2 labels → crops → small classifier; flat (uniform) vs gabled (two-tone halves) must separate"""
+    pytest.importorskip("torchvision")
+    from pvmapper import lod2, roofshape
+    from shapely.geometry import box as _box
+    rng = np.random.default_rng(0)
+    blds = []
+    for k in range(48):
+        cls = ["flat", "gabled"][k % 2]
+        x, y = 13.40 + (k % 8) * 0.0005, 52.52 + (k // 8) * 0.0004
+        g = _box(x, y, x + 0.0003, y + 0.0001)          # 20 × 11 m, long side west–east
+        blds.append({"id": f"TESTR{k}", "roof_type": "1000" if cls == "flat" else "3100", "class": cls, "area_m2": 180,
+                     "footprint": g.__geo_interface__})
+    monkeypatch.setattr(lod2, "buildings_in", lambda region, cfg, log=None: blds)
+    kind = {b["id"]: b["class"] for b in blds}
+
+    class FakeSrc:
+        id = "fake-2024"
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = np.full((win.height, win.width, 3), 60, np.uint8)
+        fpm = runtime.clip_mask(geom, win, img.shape, buffer_m=0) > 0
+        ys, xs = np.nonzero(fpm)
+        mid = (ys.min() + ys.max()) / 2
+        b = next(b for b in blds if _box(*geom.bounds).equals(_box(*shape_(b).bounds)))
+        if b["class"] == "flat":
+            img[fpm] = 150 + rng.integers(-5, 5)
+        else:
+            yy = np.arange(img.shape[0])[:, None] * np.ones((1, img.shape[1]))
+            img[fpm & (yy < mid)] = (90, 70, 60)
+            img[fpm & (yy >= mid)] = (180, 130, 110)
+        return img, win, FakeSrc()
+
+    from shapely.geometry import shape as shape__
+    shape_ = lambda b: shape__(b["footprint"])
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), fetch_workers=2, device="cpu")
+    job = Job(cfg["jobs_dir"], "roofshape", {"bbox": [13.39, 52.51, 13.41, 52.53], "per_class": 30, "epochs": 4,
+                                             "pretrained": False, "name": "TEST-dach", "batch": 8, "lr": 1e-3})
+    from pvmapper import roofshape as RS
+    job.run(lambda j: RS.run(j, cfg))
+    assert job.status == "done", job.error
+    rep = json.load(open(os.path.join(job.dir, "report.json")))
+    assert rep["n_val"] >= 5 and rep["flat_vs_pitched"] >= 0.8, rep
+    assert [m["name"] for m in roofshape.list_models(cfg)] == ["test-dach"]
+    # prediction on a new gabled roof
+    img = np.full((200, 300, 3), 60, np.uint8)
+    fp = np.zeros((200, 300), bool)
+    fp[50:150, 50:250] = True
+    img[50:100, 50:250] = (90, 70, 60)
+    img[100:150, 50:250] = (180, 130, 110)
+    cls, basis = roofshape.predict(img, fp, 0.1, {**cfg, "roof_model": "test-dach"}, min_p=0.0)
+    assert cls in ("gabled", "hipped", "mono", "complex") and basis.startswith("Modell")

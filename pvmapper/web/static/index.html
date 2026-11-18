@@ -139,6 +139,17 @@
     <details><summary>… oder eigene Labels (GeoJSON mit <code>label</code> 0/1)</summary><label>Pfad<input id="t-file" placeholder="/daten/labels.geojson"></label></details>
     <div class="row"><button id="t-strata" class="secondary">Verfügbare Beispiele anzeigen</button><button id="t-prepare" class="secondary">Nur Datensatz anlegen (zum Maskieren)</button><button id="t-start" class="primary">Training starten</button></div>
     <div id="t-out"></div>
+    <details id="t-roof"><summary>Dachformen-Modell trainieren (Labels aus LoD2, NRW)</summary>
+      <p class="hint">Lernt Flach-, Pult-, Sattel-, Walmdach und komplexe Dächer aus dem Luftbild. Die Labels liefern die amtlichen 3D-Gebäudemodelle (LoD2) von Geobasis NRW – keine Handarbeit. Gebiet in der Karte zeichnen (Rechteck/Polygon) oder unten eintragen; ein gemischtes Gebiet von 2–5 km² (Stadt und Dorf) liefert genug Beispiele aller Formen. Das Modell hilft vor allem außerhalb von NRW.</p>
+      <div class="grid2">
+        <label>Begrenzung (W S O N, leer = gezeichnetes Gebiet)<input id="r-bbox" placeholder="7.18 50.78 7.24 50.81"></label>
+        <label>Beispiele je Dachform<input id="r-per" type="number" value="300"></label>
+        <label>Epochen<input id="r-epochs" type="number" value="8"></label>
+        <label>Name<input id="r-name" placeholder="dach-nrw"></label>
+      </div>
+      <button id="r-start" class="primary">Dachformen-Modell trainieren</button>
+      <div id="r-out"></div>
+    </details>
     <details id="t-clean"><summary>Alte Trainingsdaten löschen</summary>
       <p class="hint">Löscht Datensätze und Luftbilder früherer Trainings- und KI-Aufträge. Gespeicherte eigene Modelle bleiben erhalten.
         Von Hand gezeichnete Masken gehen mit dem Datensatz verloren.</p>
@@ -227,6 +238,8 @@
       <label>Parallele Bilddownloads<input id="s-fetch" type="number"></label>
       <label>Nachbearbeitung der Masken<select id="s-pp"><option value="true">an – Dachaufbauten/helle Flächen verwerfen, Modulreihen ergänzen</option><option value="false">aus</option></select></label>
       <label>Gegenprobe mit zweitem Luftbild (anderer Jahrgang)<select id="s-cross"><option value="true">an, wo vorhanden (NRW, NL) – doppelte Ladezeit</option><option value="false">aus</option></select></label>
+      <label>Dachformen-Modell (für Gebäude ohne LoD2)<select id="s-roofmodel"><option value="">keins – OSM-Dachform bzw. Bildanalyse</option></select></label>
+      <label>Amtliche 3D-Gebäudemodelle (LoD2, NRW) für Dachflächen<select id="s-lod2"><option value="true">an – Dachform, Neigung und Ausrichtung je Dachfläche (lädt 1-km-Kacheln)</option><option value="false">aus</option></select></label>
       <label>Anlagentyp und Leistung je Anlage<select id="s-typ"><option value="true">an – Ost-West/Süd/flächig, Ausrichtung, Belegungsgrad → kWp mit Spanne</option><option value="false">aus – Modulfläche × kWp/m²</option></select></label>
       <label>Baujahr aus älteren Luftbildern<select id="s-age"><option value="true">an, wo vorhanden (NRW, NL) – Wirkungsgrad nach Baujahr, 3–5 Bilder mehr je gefundene Anlage</option><option value="false">aus</option></select></label>
       <label>Segmentierung mit gespiegelten Bildern mitteln<select id="s-tta"><option value="true">an – vollständigere Modulreihen, etwas langsamer</option><option value="false">aus</option></select></label>

@@ -316,6 +316,18 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         except Exception as e:                                   # noqa: BLE001
             raise HTTPException(400, f"PV-Map: {e}")
 
+    @app.get("/api/roofshape/models")
+    def roofshape_models():
+        from .. import roofshape
+        return roofshape.list_models(cfg())
+
+    @app.get("/api/jobs/{jid}/roofimg/{bid}")
+    def roofshape_image(jid: str, bid: str):
+        path = os.path.join(_job(jid).dir, "dataset", os.path.basename(bid) + ".jpg")
+        if not os.path.isfile(path):
+            raise HTTPException(404)
+        return FileResponse(path)
+
     @app.get("/api/jobs/{jid}/report")
     def job_report(jid: str):
         path = os.path.join(_job(jid).dir, "report.json")
@@ -585,7 +597,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area", "train", "ai_masks", "sync"):
+        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape"):
             raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")
@@ -600,6 +612,8 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
                 tgt = _job(params["append_to"])
                 if not os.path.isdir(annotate.ds_dir(tgt.dir)):
                     raise HTTPException(400, "Ziel-Datensatz nicht gefunden")
+        if kind == "roofshape" and not (params.get("bbox") or params.get("geometry")):
+            raise HTTPException(400, "Gebiet fehlt: Rechteck/Polygon in der Karte zeichnen oder Begrenzung eintragen (NRW).")
         if kind == "area":
             try:
                 params["estimate"] = area_mode.estimate(params, cfg())

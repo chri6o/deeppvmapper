@@ -141,6 +141,8 @@ def runner(kind: str):
         from .ai_label import run
     elif kind == "sync":
         from .sync import run
+    elif kind == "roofshape":
+        from .roofshape import run
     else:
         raise ValueError(f"unknown job kind {kind}")
     return run

@@ -286,8 +286,20 @@ $("#t-start").onclick = async () => {
   try { const j = await api("/api/jobs", { json: { kind: "train", params: trainParams() } }); tab("jobs"); openJob(j.id); }
   catch (e) { $("#t-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
+const ROOF_DE = { flat: "Flachdach", mono: "Pultdach", gabled: "Satteldach", hipped: "Walmdach", complex: "komplex" };
+function roofReport(id, r) {
+  const C = r.classes, M = r.confusion;
+  let h = `<h3>Dachformen-Modell „${esc(r.name)}“: ${fmt(r.accuracy * 100, 0)} % richtig</h3><div class="hint">${fmt(r.n_train)} Bilder Training, ${fmt(r.n_val)} Prüfung · flach gegen geneigt ${fmt(r.flat_vs_pitched * 100, 0)} % richtig · ${fmt(r.minutes, 1)} min</div>`;
+  h += `<div class="tablewrap"><table><tr><th>LoD2 ↓ / Modell →</th>${C.map((c) => `<th>${esc(ROOF_DE[c] || c)}</th>`).join("")}<th>Trefferquote</th></tr>` +
+    C.map((c, i) => `<tr><td>${esc(ROOF_DE[c] || c)}</td>${M[i].map((v, j) => `<td class="num">${i === j ? "<b>" + v + "</b>" : v}</td>`).join("")}<td class="num">${fmt(r.per_class[c].recall * 100, 0)} %</td></tr>`).join("") + `</table></div>`;
+  if ((r.wrong || []).length) h += `<h3>Abweichungen (LoD2 → Modell)</h3><div class="hint">Oft liegt LoD2 daneben (generalisierte Dachformen) – ansehen lohnt.</div><div class="roofgrid">` +
+    r.wrong.map((w) => `<figure><img loading="lazy" src="/api/jobs/${id}/roofimg/${encodeURIComponent(w.id)}"><figcaption>${esc(ROOF_DE[w.label] || w.label)} → <b>${esc(ROOF_DE[w.pred] || w.pred)}</b> (${fmt(w.p * 100, 0)} %)</figcaption></figure>`).join("") + `</div>`;
+  h += `<div class="hint">In den Einstellungen unter „Dachformen-Modell“ wählen, damit es für Gebäude ohne LoD2 genutzt wird.</div>`;
+  $("#jd-report").innerHTML = h;
+}
 async function showReport(id) {
   let r; try { r = await api(`/api/jobs/${id}/report`); } catch { $("#jd-report").innerHTML = ""; return; }
+  if (r.kind === "roofshape") return roofReport(id, r);
   const row = (name, a, b) => `<tr><td>${esc(name)}</td><td class="num">${fmt(a?.n)}</td><td class="num">${fmt(a?.recall, 2)} → <b>${fmt(b?.recall, 2)}</b></td><td class="num">${fmt(a?.precision, 2)} → <b>${fmt(b?.precision, 2)}</b></td><td class="num">${fmt(a?.f1, 2)} → <b>${fmt(b?.f1, 2)}</b></td></tr>`;
   const V = r.vorher, N = r.nachher;
   let h = `<h3>Bewertung: vorher → nachher</h3><div class="hint">${r.n_train} Training, ${r.n_val} Validierung · Schwelle ${r.cls_threshold} · Segmentierung ${r.segmentation_trained ? "nachtrainiert" : "unverändert"}</div>
@@ -341,7 +353,7 @@ $("#a-start").onclick = async () => {
 };
 
 // ------------------------------------------------------------------ jobs
-const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training", ai_masks: "KI-Masken", sync: "PV-Map-Abgleich" };
+const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training", ai_masks: "KI-Masken", sync: "PV-Map-Abgleich", roofshape: "Dachformen-Modell" };
 const STATUS = { queued: "wartet", running: "läuft", done: "fertig", failed: "Fehler", cancelled: "abgebrochen" };
 const KEEP_JOBS = 3;             // newest jobs shown; older (not running) ones go to the archive
 function jobCard(j) {
@@ -351,7 +363,7 @@ function jobCard(j) {
     : j.kind === "train" ? ((j.params.prepare_only ? "Datensatz " : "") + (j.params.name || j.params.cc || j.params.dataset_from || "Labels"))
     : j.kind === "ai_masks" ? `${j.params.provider} · ${j.params.dataset}` : (j.params.bbox ? "Rechteck" : "Polygon");
   const busy = ["running", "queued"].includes(j.status);
-  const res = ["buildings", "sync", "area"].includes(j.kind) ? "Ergebnisse" : j.kind === "train" ? (j.params.prepare_only ? "Masken" : "Bericht") : "Details";
+  const res = ["buildings", "sync", "area"].includes(j.kind) ? "Ergebnisse" : j.kind === "train" ? (j.params.prepare_only ? "Masken" : "Bericht") : j.kind === "roofshape" ? "Bericht" : "Details";
   return `<div class="job ${S.job === j.id ? "sel" : ""}" data-id="${j.id}">
     <div class="top"><span>${KIND[j.kind]} · ${esc(what)}</span><span class="jbtns"><span class="badge ${j.status}">${STATUS[j.status]}</span>${busy ? "" : `<button class="jdel" data-id="${j.id}" data-kind="${j.kind}" title="Auftrag löschen">×</button>`}</span></div>
     <div class="progress"><div style="width:${pct}%"></div></div>
@@ -403,7 +415,7 @@ async function refreshJob(withResults) {
   $("#jd-title").textContent = `${KIND[j.kind]} · ${j.id} · ${STATUS[j.status]}`;
   $("#jd-bar").style.width = pct + "%";
   const c = j.counters, stats = [
-    [fmt(j.done) + " / " + fmt(j.total), j.kind === "area" ? "Kacheln" : j.kind === "train" ? "Schritte" : "Gebäude"],
+    [fmt(j.done) + " / " + fmt(j.total), j.kind === "area" ? "Kacheln" : ["train", "roofshape"].includes(j.kind) ? "Schritte" : "Gebäude"],
     [fmt(j.rate_per_s * 3600), "pro Stunde"],
     [j.eta_s ? dur(j.eta_s) : (j.status === "done" ? "fertig" : "–"), "Restzeit"],
   ];
@@ -411,11 +423,12 @@ async function refreshJob(withResults) {
   if (j.kind === "sync") stats.push([fmt(c.gesendet), "an PV-Map gesendet"], [fmt(c.unveraendert), "Luftbild unverändert"]);
   else if (j.kind === "ai_masks") stats.push([fmt(c.maske), "Masken"], [fmt(c.keine_pv_laut_ki), "keine PV laut KI"], [fmt(c.fehler), "Fehler"]);
   else if (j.kind === "train" && j.params.prepare_only) stats.push([fmt(c.datensatz), "Bilder im Datensatz"], [fmt(c.bild_fehlt), "ohne Bild"], ["→ Masken", "nächster Schritt"]);
+  else if (j.kind === "roofshape") stats.push([fmt(c.bild), "Bilder"], [fmt(c.bild_fehlt), "ohne Bild"], [c.treffer != null ? fmt(c.treffer * 100, 0) + " %" : "–", "richtig (Prüfmenge)"]);
   else if (j.kind === "train") stats.push([fmt(c.f1_vorher, 2), "F1 vorher"], [fmt(c.f1_nachher, 2), "F1 nachher"], [c.modell ? "gespeichert" : "–", "neues Modell"]);
   else if (j.kind === "area") stats.push([fmt(c.zellen_mit_pv), "Kacheln mit PV"], [fmt(c.anlagen), "Anlagen"], [fmt(c.fehler), "Fehler"], [fmt(c.baujahr_bestimmt), "Baujahr bestimmt"]);
   if (j.kind === "buildings" || j.kind === "sync") stats.push([fmt(c.baujahr_bestimmt), "Baujahr bestimmt"]);
   if (c.dach_bewertet) stats.push([fmt(c.dach_bewertet), "Dächer bewertet"], [fmt(c.kwp_potenzial, 0) + " kWp", "Potenzial frei"]);
-  if (!["train", "ai_masks"].includes(j.kind)) stats.push([fmt(c.kwp_sum, 0) + " kWp", "geschätzt gesamt"]);
+  if (!["train", "ai_masks", "roofshape"].includes(j.kind)) stats.push([fmt(c.kwp_sum, 0) + " kWp", "geschätzt gesamt"]);
   $("#jd-stats").innerHTML = stats.map(([b, s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
   $("#jd-files").innerHTML = j.files.filter((f) => /\.(csv|geojson|json)$/.test(f) && f !== "job.json")
     .map((f) => `<a class="link" href="/api/jobs/${j.id}/files/${f}">${f}</a>`).join(" · ");
@@ -423,9 +436,9 @@ async function refreshJob(withResults) {
   $("#jd-cancel").classList.toggle("hidden", !["running", "queued"].includes(j.status));
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
   $("#jd-status").classList.toggle("hidden", !["buildings", "sync"].includes(j.kind));
-  $$(".filters").forEach((x) => x.classList.toggle("hidden", j.kind === "train" || j.kind === "ai_masks"));
+  $$(".filters").forEach((x) => x.classList.toggle("hidden", ["train", "ai_masks", "roofshape"].includes(j.kind)));
   ["#jd-selrand", "#jd-seln", "#jd-todataset", "#jd-selinfo", "#jd-target"].forEach((q) => $(q).classList.toggle("hidden", !["buildings", "sync", "area"].includes(j.kind)));
-  if (j.kind === "train" || j.kind === "ai_masks") { $("#jd-table").innerHTML = ""; if (j.kind === "train" && (withResults || j.status === "done")) showReport(j.id); else $("#jd-report").innerHTML = ""; }
+  if (["train", "ai_masks", "roofshape"].includes(j.kind)) { $("#jd-table").innerHTML = ""; if (["train", "roofshape"].includes(j.kind) && (withResults || j.status === "done")) showReport(j.id); else $("#jd-report").innerHTML = ""; }
   else { $("#jd-report").innerHTML = ""; if (withResults || (j.status !== S.lastStatus && j.status === "done")) loadResults(); }
   S.lastStatus = j.status;
   if (!["running", "queued"].includes(j.status)) { clearInterval(S.poll); loadJobs(); }
@@ -512,14 +525,16 @@ $("#jd-todataset").onclick = async () => {
     S.sel = new Set(); openJob(j.id); loadJobs(); }
   catch (e) { alert(e.message); }
 };
-const ROOF_TXT = { flat: "Flachdach", pitched: "Steildach" };
+const ROOF_TXT = { flat: "Flachdach", pitched: "Steildach", mixed: "Flach- und Steildachteile", complex: "komplexes Dach" };
 function roofText(r) {
   if (r.usable_area_m2 == null) return "";
   const R = r.roof || {};
-  const faces = (R.faces || []).map((f) => `${Math.round(f.azimuth_deg)}°: ${f.excluded_north ? "Nordseite, nicht genutzt" : fmt(f.usable_area_m2, 0) + " m²"}`).join(" · ");
+  const fs = (R.faces || []).filter((f) => f.kind === "pitched").sort((a, b) => (b.plan_area_m2 || 0) - (a.plan_area_m2 || 0));
+  const faces = fs.slice(0, 6).map((f) => `${f.azimuth_deg != null ? Math.round(f.azimuth_deg) + "°" : "?"}/${fmt(f.tilt_deg, 0)}° Neigung: ${f.excluded_north ? "Nordseite, nicht genutzt" : fmt(f.usable_area_m2, 0) + " m² → " + fmt(f.kwp_potential, 0) + " kWp"}`).join(" · ") + (fs.length > 6 ? ` · +${fs.length - 6} weitere` : "");
+  const assume = R.roof_type_basis === "LoD2" ? "Dachflächen aus LoD2" : `Annahme ${esc(LAYOUT_TXT[(R.layout_assumed || "").replace(/_(flat|pitched)$/, "")] || R.layout_assumed || "")}${R.tilt_assumed_deg != null ? ", " + fmt(R.tilt_assumed_deg, 0) + "°" : ""}`;
   return `<br><b>Dach</b>: ${esc(ROOF_TXT[r.roof_type] || r.roof_type)} (${esc(R.roof_type_basis || "")}) · ${fmt(r.roof_area_m2, 0)} m² · Aufbauten ${fmt(R.obstacles_area_m2, 0)} m²` +
     `${R.shade_area_m2 ? " · verschattet " + fmt(R.shade_area_m2, 0) + " m²" : ""}${R.pv_area_m2 ? " · PV " + fmt(R.pv_area_m2, 0) + " m²" : ""}` +
-    ` → <b>frei ${fmt(r.usable_area_m2, 0)} m² ≈ ${fmt(r.kwp_potential, 0)} kWp</b> (${fmt(r.kwp_pot_low, 0)}–${fmt(r.kwp_pot_high, 0)}; Annahme ${esc(LAYOUT_TXT[(R.layout_assumed || "").replace(/_(flat|pitched)$/, "")] || R.layout_assumed || "")}, ${fmt(R.tilt_assumed_deg, 0)}°)${faces ? "<br>Dachseiten: " + faces : ""}`;
+    ` → <b>frei ${fmt(r.usable_area_m2, 0)} m² ≈ ${fmt(r.kwp_potential, 0)} kWp</b> (${fmt(r.kwp_pot_low, 0)}–${fmt(r.kwp_pot_high, 0)}; ${assume})${faces ? "<br>Dachflächen: " + faces : ""}`;
 }
 function yearText(i) {
   if (i.install_year == null) return i.install_year_high != null ? ` · Baujahr vor ${i.install_year_high} (ältere Flüge unklar)` : "";
@@ -599,7 +614,7 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
   "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
-const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-age": "age_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push" };
+const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-age": "age_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push", "#s-lod2": "lod2" };
 Object.assign(SET, { "#s-sync-filter": "sync_filter", "#s-sync-start": "sync_start", "#s-sync-end": "sync_end", "#s-sync-profile": "sync_profile",
   "#s-sync-recheck": "sync_recheck_days", "#s-sync-score": "sync_confirm_score" });
 const PRIO = { 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };
@@ -622,6 +637,10 @@ function renderSettings() {
     `<br><span class="hint">Konfiguration: ${esc(S.info.config_path)}</span>`;
   for (const [sel, k] of Object.entries(SET)) $(sel).value = c[k] ?? "";
   for (const [sel, k] of Object.entries(SET_BOOL)) $(sel).value = c[k] === false ? "false" : "true";
+  api("/api/roofshape/models").then((ms) => {
+    $("#s-roofmodel").innerHTML = `<option value="">keins – OSM-Dachform bzw. Bildanalyse</option>` + ms.map((m) => `<option value="${esc(m.name)}">${esc(m.name)} · ${m.accuracy != null ? Math.round(m.accuracy * 100) + " % richtig" : ""} · ${fmt(m.n_train)} Bilder</option>`).join("");
+    $("#s-roofmodel").value = c.roof_model || "";
+  }).catch(() => {});
   renderClasses(c.size_classes || []);
 }
 function renderClasses(list) {
@@ -647,6 +666,7 @@ $("#s-save").onclick = async () => {
   }
   const cls = readClasses().sort((a, b) => (a.max ?? Infinity) - (b.max ?? Infinity));
   body.size_classes = cls;
+  body.roof_model = $("#s-roofmodel").value || null;
   try { await api("/api/config", { json: body }); S.info = await api("/api/info"); renderSettings(); $("#s-msg").innerHTML = `<div class="info">Gespeichert.</div>`; }
   catch (e) { $("#s-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
@@ -1134,6 +1154,13 @@ $("#e-usereg").onchange = async () => {
     m.use_register = on; const it = M.items.find((x) => x.name === m.name); if (it) it.use_register = on;
     if (on && !m.register) regLookup([m.name]); else info2(); }
   catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); $("#e-usereg").checked = !on; }
+};
+$("#r-start").onclick = async () => {
+  const bb = $("#r-bbox").value.trim().split(/[\s,;]+/).map(Number).filter((x) => !isNaN(x));
+  const params = { per_class: +$("#r-per").value || 300, epochs: +$("#r-epochs").value || 8, name: $("#r-name").value.trim() || null };
+  if (bb.length === 4) params.bbox = bb; else if (S.drawn) params.geometry = S.drawn.geometry;
+  try { const j = await api("/api/jobs", { json: { kind: "roofshape", params } }); tab("jobs"); openJob(j.id); }
+  catch (e) { $("#r-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 $("#t-prepare").onclick = async () => {
   const tp = trainParams(); if ($("#t-posonly").checked) tp.negatives = 0;

@@ -197,6 +197,19 @@ Ausgabe: Spalten `roof_type`, `roof_area_m2`, `usable_area_m2`, `kwp_potential` 
 
 Das ist Bildanalyse ohne trainiertes Netz – eine erste Schätzung. Die im Masken-Editor gezeichneten „Gaube / kein PV“-Flächen sind das Material für ein späteres Aufbauten-Modell.
 
+## Dachformen: LoD2 und eigenes Modell
+
+**Amtliche 3D-Gebäudemodelle (LoD2, NRW):** Für das Dachpotenzial holt PV-Mapper die LoD2-Kachel (1 km², Geobasis NRW, dl-de/zero-2.0) des Gebäudes. Gecacht wird unter `jobs/_lod2`: einmal heruntergeladen, als kompaktes JSON gespeichert (etwa 0,4 MB statt 50 MB je Kachel). Aus den 3D-Dachflächen ergeben sich je Fläche Neigung, Ausrichtung und Grundriss. Das Dachpotenzial rechnet dann je echter Dachfläche:
+- Nordflächen ab 10° Neigung bleiben ungenutzt.
+- Flache Teile werden als Ost-West-Belegung gerechnet, geneigte mit ihrer Neigung.
+- Aufbauten werden je Fläche gegen deren eigene Farbe gesucht.
+
+Flächig verlegte PV auf diesen Dächern bekommt Neigung und Ausrichtung aus LoD2. Ihre kWp-Schätzung wächst damit um 1/cos(Neigung).
+
+Einstellung „Amtliche 3D-Gebäudemodelle (LoD2, NRW)“, Standard an. Außerhalb von NRW gilt: Dachformen-Modell, sonst OSM-Dachform, sonst Bildanalyse.
+
+**Dachformen-Modell trainieren:** Training → „Dachformen-Modell trainieren“. Ein Gebiet in NRW zeichnen oder eintragen; ein Mix aus Stadt und Dorf, 2–5 km², reicht. Die Labels sind die LoD2-Dachformen (Flach, Pult, Sattel, Walm, komplex), ohne Handarbeit. Je Gebäude lernt das Modell aus einem Bildausschnitt mit horizontal gedrehter Längsseite. Der Bericht zeigt Treffer je Dachform, eine Verwechslungstabelle und Bilder der Abweichungen; LoD2 liegt dabei selbst manchmal daneben. Danach in den Einstellungen unter „Dachformen-Modell“ wählen. Gespeichert wird unter `model_dir/roofshape/<Name>.pth`.
+
 ## Fläche auswerten nur auf OSM-Gebäuden
 
 „Nur auf Gebäuden aus OpenStreetMap suchen“ (Standard an) lädt die Gebäudeumrisse des Gebiets über die Overpass-API. Kacheln ohne Gebäude werden übersprungen, Erkennungen außerhalb der Umrisse (+1,5 m) verworfen, und jede Anlage ist ihrem Gebäude zugeordnet. Die Umrisse liegen als `buildings_osm.geojson` im Auftrag (© OpenStreetMap-Mitwirkende, ODbL). Ein eigener Gebäudelayer ersetzt OSM.

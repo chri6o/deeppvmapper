@@ -65,6 +65,9 @@ DEFAULTS = {
     "roof_setback_flat_m": 1.0,       # edge distance on flat roofs
     "roof_setback_pitched_m": 0.5,    # … on pitched roofs
     "roof_obstacle_clearance_m": 0.5, # clearance around obstacles (dormers, skylights, units)
+    "lod2": True,                     # official 3D building models (NRW) for roof faces and tilt – downloaded per 1 km tile
+    "lod2_dir": None,                 # cache for the LoD2 tiles (None = jobs/_lod2)
+    "roof_model": None,               # trained roof-shape model (roofshape.py) for buildings without LoD2
     "kwp_calibration": True,          # use the capacity calibration of the active model (pvmapper/calibration.py)
     "typology_push": False,           # send the installations to PV-Map (PV-Map migration 137 and later, docs/typology.md)
     "config_version": 2,

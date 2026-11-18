@@ -23,7 +23,7 @@ from shapely.ops import unary_union
 from . import buildings as bld
 from . import config as cfgmod
 from .jobs import Cancelled
-from . import age, geo, roofs, inference, postproc, runtime, sources, typology
+from . import age, geo, lod2, roofs, inference, postproc, runtime, sources, typology
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS results (
@@ -54,7 +54,7 @@ def apply_typology(row: dict, img, mask, win, clip, src, props: dict, res_m: flo
     return feats
 
 
-def apply_roof(row: dict, img, mask, win, fp, props: dict, res_m: float, cfg: dict):
+def apply_roof(row: dict, img, mask, win, fp, props: dict, res_m: float, cfg: dict, lod2m: dict | None = None):
     """free roof area and PV potential of one building (roofs.py) → row columns and the 'roof' JSON (free area, obstacles)"""
     row.update(roof_type=None, roof_area_m2=None, usable_area_m2=None, kwp_potential=None, kwp_pot_low=None,
                kwp_pot_high=None, roof=None)
@@ -62,7 +62,16 @@ def apply_roof(row: dict, img, mask, win, fp, props: dict, res_m: float, cfg: di
         return
     try:
         exact = runtime.clip_mask(fp, win, img.shape, buffer_m=0) > 0
-        r = roofs.analyse(img, exact, mask, res_m, props, cfg)
+        faces, hint = None, None
+        if lod2m:
+            faces = lod2.face_masks(lod2m, win, img.shape)
+        elif cfg.get("roof_model"):
+            from . import roofshape
+            hint = roofshape.predict(img, exact, res_m, cfg)
+        r = roofs.analyse(img, exact, mask, res_m, props, cfg, faces=faces, shape_hint=hint)
+        if lod2m:
+            r["lod2_ids"] = lod2m["ids"][:10]
+            r["lod2_roof_type"] = lod2m["roof_type"]
     except Exception as e:                                       # noqa: BLE001 – the check itself must go through
         row["error"] = f"Dachfläche: {type(e).__name__}: {e}"[:300]
         return
@@ -302,7 +311,19 @@ def run(job, cfg: dict):
             row = _summarise(b, polys, fp, search, win, src, r.max_prob, cfg)
             feats = apply_typology(row, img, mask, win, clips[i], src, b.props, prof.resolution_m, tcfg)
             if roof_on:
-                apply_roof(row, img, mask, win, fp, b.props, prof.resolution_m, tcfg)
+                lm = None
+                if fp is not None and cfg.get("lod2", True):
+                    try:
+                        lm = lod2.match(fp, cfg, job.log if job.counters.get("lod2_kacheln", 0) < 20 else None)
+                    except Exception as e:                       # noqa: BLE001 – LoD2 is optional
+                        if job.counters.get("lod2_fehler", 0) < 3:
+                            job.log(f"LoD2 nicht verfügbar: {type(e).__name__}: {e}"[:200])
+                        job.counters["lod2_fehler"] += 1
+                if lm:
+                    job.counters["lod2"] += 1
+                    if feats and lod2.refine_installations(feats, lm):
+                        set_from_installations(row, feats, tcfg)
+                apply_roof(row, img, mask, win, fp, b.props, prof.resolution_m, tcfg, lm)
                 if row["usable_area_m2"] is not None:
                     job.counters["dach_bewertet"] += 1
                     job.counters["kwp_potenzial"] = round(job.counters.get("kwp_potenzial", 0) + (row["kwp_potential"] or 0), 1)

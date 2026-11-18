@@ -108,3 +108,7 @@ body.e-full #panel { display: none; }
 .pick-ctl a { font-size: 16px; line-height: 30px; text-align: center; cursor: pointer; }
 .pick-ctl a.on { background: #1d4ed8; color: #fff; }
 .leaflet-container.picking { cursor: pointer; }
+
+.roofgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.roofgrid figure { margin: 0; font-size: 11px; }
+.roofgrid img { width: 100%; border-radius: 4px; display: block; }
