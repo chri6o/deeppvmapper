@@ -299,8 +299,9 @@ def run(job, cfg: dict):
     if p.get("max_tiles"):
         ts = ts[: int(p["max_tiles"])]
     km2 = sum(t["km2"] for t in ts)
-    job.log(f"Grobsuche {reg['name']} {month} (Fenster {start} – {end}): {len(ts)} Kacheln, {km2:,.0f} km², "
-            f"geschätzt {km2 * CREDITS_PER_KM2:,.0f} openEO-Credits".replace(",", "."))
+    de = lambda x: f"{x:,.0f}".replace(",", ".")                     # noqa: E731
+    job.log(f"Grobsuche {reg['name']} {month} (Fenster {start} – {end}): {len(ts)} Kacheln, {de(km2)} km², "
+            f"geschätzt {de(km2 * CREDITS_PER_KM2)} openEO-Credits")
     if p.get("dry_run"):
         return
     d = os.path.join(base, "scan", month)
