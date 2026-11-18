@@ -53,6 +53,7 @@ DEFAULTS = {
     "ground_regions": {},             # extra regions: {key: {cc, name, geofabrik: "europe/<path>"}}
     "ground_min_ha": 0.5,             # smaller ground-mounted installations are ignored
     "ground_max_building_share": 0.2, # candidates covered by OSM buildings beyond this share are discarded
+    "ground_calibration": None,       # region key whose MaStR density calibration applies (e.g. de-brandenburg); None = start values
     "ground_scan_enabled": False,     # monthly coarse search (openEO, Copernicus Data Space) for the pilot region
     "ground_scan_day": 5,             # day of the month (Sentinel-2 L2A of the last month is complete by then)
     "ground_scan_months": 3,          # window length: temporal median over the last … months

@@ -437,3 +437,100 @@ def test_capacity_apply_with_pvgis_cache(con):
     assert r == (8000, 10000, "zaunflaeche", pytest.approx(1086.2))
     capacity.apply(con, "t", {}, log=lambda m: None, session=Sess())
     assert len(calls) == 1                                                        # cached
+
+
+# -- registers: MaStR (calibration, DE) and MIOZE (search priority, PL) ------------------------------------------------
+
+from pvmapper.ground import register as greg  # noqa: E402
+
+
+def test_mioze_parse_and_locate():
+    xml = ("<MIOZERegistries>" + "".join(
+        f"<MIOZERegistry><DKN>{i}</DKN><Nazwa>X</Nazwa><IdInstalacji>1</IdInstalacji><MiejscowoscInstalacji>{o}</MiejscowoscInstalacji>"
+        f"<WojewodztwoInstalacji>{w}</WojewodztwoInstalacji><RodzajInstalacji>{t}</RodzajInstalacji><MocEEInstalacji>{mw}</MocEEInstalacji>"
+        f"<DataRozpoczeciaDzialalnosci>2023-05-02</DataRozpoczeciaDzialalnosci></MIOZERegistry>"
+        for i, (o, w, t, mw) in enumerate([("Kłodawa", "wielkopolskie", "PVA", "0.999"), ("Nowa Wieś", "wielkopolskie", "PVA", "1"),
+                                           ("Gniezno", "wielkopolskie", "WIL", "0.5"), ("Łódź", "łódzkie", "PVA", "1"),
+                                           ("Brak", "Wielkopolskie", "PVA", "0,2")])) + "</MIOZERegistries>").encode()
+    u = greg.parse_mioze(xml, "wielkopolskie")
+    assert [x["ort"] for x in u] == ["Kłodawa", "Nowa Wieś", "Brak"] and u[0]["netto_kw"] == 999 and u[2]["netto_kw"] == 200
+    pl = {"klodawa": [(18.9, 52.25, "town")], "nowa wies": [(17.1, 52.1, "village"), (17.9, 52.4, "village")]}
+    n = greg.locate(u, pl)
+    assert n == {"ort": 1, "mehrdeutig": 1, "fehlt": 1} and u[0]["lonlat"] == (18.9, 52.25)
+
+
+def test_mastr_parse_synthetic_zip(tmp_path):
+    import zipfile
+    kat = "<Katalogwerte>" + "".join(f"<Katalogwert><Id>{i}</Id><Wert>{w}</Wert></Katalogwert>" for i, w in
+                                     [(1400, "Brandenburg"), (1401, "Berlin"), (852, "Freifläche"), (853, "Bauliche Anlagen (Hausdach, Gebäude und Fassade)"),
+                                      (35, "In Betrieb"), (31, "In Planung")]) + "</Katalogwerte>"
+    def unit(n, bl, lage, st, lon="13.5", lat="52.3"):
+        return (f"<EinheitSolar><EinheitMastrNummer>SEE{n}</EinheitMastrNummer><Bundesland>{bl}</Bundesland><Lage>{lage}</Lage>"
+                f"<EinheitBetriebsstatus>{st}</EinheitBetriebsstatus><Laengengrad>{lon}</Laengengrad><Breitengrad>{lat}</Breitengrad>"
+                f"<Bruttoleistung>9500.5</Bruttoleistung><Nettonennleistung>8000</Nettonennleistung><Inbetriebnahmedatum>2021-06-30</Inbetriebnahmedatum>"
+                f"<Gemeinde>Werder</Gemeinde><InAnspruchGenommeneFlaeche>11.2</InAnspruchGenommeneFlaeche></EinheitSolar>")
+    body = "<EinheitenSolar>" + unit(1, 1400, 852, 35) + unit(2, 1400, 853, 35) + unit(3, 1401, 852, 35) + unit(4, 1400, 852, 31) \
+        + unit(5, 1400, 852, 35, "", "") + "</EinheitenSolar>"
+    zp = tmp_path / "Gesamtdatenexport_20261118_26.2.zip"
+    with zipfile.ZipFile(zp, "w") as z:
+        z.writestr("Katalogwerte.xml", kat.encode("utf-16"))
+        z.writestr("EinheitenSolar_1.xml", body.encode("utf-16"))
+    u = greg.parse_mastr(str(zp), "Brandenburg", log=lambda m: None)
+    assert [x["unit_id"] for x in u] == ["SEE1", "SEE5"]
+    assert u[0]["brutto_kw"] == 9500.5 and u[0]["netto_kw"] == 8000 and u[0]["lonlat"] == (13.5, 52.3)
+    assert u[0]["attrs"]["flaeche_ha"] == 11.2 and u[1]["geom_kind"] == "fehlt"
+
+
+def test_mastr_match_calibrate_evaluate(con):
+    from pvmapper import typology
+    rows, units = [], []
+    for i in range(14):                                                 # 14 parks of 10 ha, 0.9 MWp/ha, built 2023
+        x = 13.0 + i * 0.05
+        rows.append(_row(f"ff-de-osm-w{i}", land="DE", region="bb", geom_zaun=sq(x, 52.3, 316), flaeche_zaun_m2=100000,
+                         split="test" if i % 3 == 0 else "train"))
+        c = sq(x, 52.3, 316).centroid
+        units.append({"unit_id": f"SEE{i}a", "brutto_kw": 5000, "netto_kw": 4200, "start_date": "2023-04-01", "lonlat": (c.x, c.y), "geom_kind": "einheit"})
+        units.append({"unit_id": f"SEE{i}b", "brutto_kw": 4000, "netto_kw": 3300, "start_date": "2023-05-01", "lonlat": (c.x + 0.0005, c.y), "geom_kind": "einheit"})
+    units.append({"unit_id": "SEEodd", "brutto_kw": 90000, "netto_kw": 80000, "start_date": "2023-01-01",       # absurd → dropped
+                  "lonlat": (13.0 + 14 * 0.05 + 0.0005, 52.3 + 0.0005), "geom_kind": "einheit"})
+    rows.append(_row("ff-de-osm-wodd", land="DE", region="bb", geom_zaun=sq(13.0 + 14 * 0.05, 52.3, 100), flaeche_zaun_m2=10000))
+    units.append({"unit_id": "SEEfar", "brutto_kw": 1000, "lonlat": (14.9, 52.9), "geom_kind": "einheit"})          # no fence
+    store.upsert(con, rows)
+    assert greg.save(con, "mastr", "bb", units) == 30
+    m = greg.match_mastr(con, "bb")
+    assert m == {"einheiten": 30, "zugeordnet": 29, "flaechen": 15}
+    ps = greg.pairs(con, "bb")
+    cal = greg.calibrate(ps)
+    assert cal["verworfen_unplausibel"] == 1 and cal["table"]["2022-"]["median"] == pytest.approx(0.9, abs=0.02)
+    ev = greg.evaluate(ps, cal, capacity.conf(), typology.settings({}))
+    assert ev["kalibriert"]["median_abs_fehler"] <= ev["startwerte"]["median_abs_fehler"] + 1e-9
+    # a re-import of the baseline does not touch matches
+    store.upsert(con, rows)
+    assert greg.match_mastr(con, "bb")["zugeordnet"] == 29
+
+
+def test_mioze_gaps(con):
+    store.upsert(con, [_row(region="pl", geom_zaun=sq(17.0, 52.0, 100))])
+    greg.save(con, "mioze", "pl", [
+        {"unit_id": "1-1", "ort": "A", "netto_kw": 999, "lonlat": (17.001, 52.001), "geom_kind": "ort"},
+        {"unit_id": "2-1", "ort": "B", "netto_kw": 1000, "lonlat": (17.5, 52.2), "geom_kind": "ort"},
+        {"unit_id": "3-1", "ort": "B", "netto_kw": 1000, "lonlat": (17.5, 52.2), "geom_kind": "ort"},
+        {"unit_id": "4-1", "ort": "C", "netto_kw": 100, "lonlat": (17.7, 52.2), "geom_kind": "ort"}])
+    g = {x["ort"]: x for x in greg.gaps(con, "pl")}
+    assert set(g) == {"A", "B"} and g["A"]["luecke"] == 0 and g["B"]["luecke"] == 2 and g["B"]["kw_ac"] == 2000
+
+
+def test_capacity_uses_calibration_only_when_switched_on(tmp_path):
+    import json as _j
+    from pvmapper import typology
+    from pvmapper.ground import inventory as gi
+    d = gi.workdir({"jobs_dir": str(tmp_path)}, "de-brandenburg")
+    _j.dump({"table": {"2022-": {"median": 0.9, "range": [0.85, 0.95], "n": 30}}}, open(os.path.join(d, "calibration.json"), "w"))
+    c, t = capacity.conf(), typology.settings({})
+    row = {"typ": "unbekannt", "baujahr_schaetzung": 2023, "flaeche_zaun_m2": 100000, "herkunft": "bestand_osm"}
+    assert capacity.calibration({"jobs_dir": str(tmp_path)}) is None
+    cal = capacity.calibration({"jobs_dir": str(tmp_path), "ground_calibration": "de-brandenburg"})
+    e = capacity.estimate(row, c, t, cal)
+    assert (e["kwp_min"], e["kwp_max"], e["methode"]) == (8500, 9500, "zaunflaeche_kalibriert")
+    assert capacity.estimate({**row, "typ": "tracker"}, c, t, cal)["methode"] == "zaunflaeche"          # own type: start values
+    assert capacity.estimate({**row, "baujahr_schaetzung": 2015}, c, t, cal)["methode"] == "zaunflaeche"  # bin not calibrated

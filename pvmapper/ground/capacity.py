@@ -3,7 +3,8 @@
 DC = module area × efficiency(build year) × 1 kW/m² ÷ cos(tilt) where module rows are known (OSM generators now, the fine
 analysis later), otherwise fence area × density(type, build year) from ground_density.yml. Always a range and the method.
 AC = DC ÷ (1.2 … 1.4). Yield in kWh/kWp from PVGIS (JRC), fixed mounting at the optimal angle, cached per 0.1° cell.
-Never calibrated against registers; the capacities stated in OSM are only compared in the log.
+Optionally the density comes from a register calibration (MaStR, register.py; `ground_calibration`), decided 18.11.2026.
+The capacities stated in OSM are only compared in the log.
 """
 
 from __future__ import annotations
@@ -56,8 +57,22 @@ def build_year(row: dict) -> int | None:
     return None
 
 
-def estimate(row: dict, c: dict, tconf: dict) -> dict:
-    """{kwp_min, kwp_max, ac_kw_min, ac_kw_max, methode} for one row (fields as in table freiflaeche)"""
+def calibration(cfg: dict | None) -> dict | None:
+    """density calibration from a register (register.py), if switched on with `ground_calibration` (region key)"""
+    key = (cfg or {}).get("ground_calibration")
+    if not key:
+        return None
+    from . import inventory
+    p = os.path.join(inventory.workdir(cfg, key), "calibration.json")
+    if not os.path.exists(p):
+        return None
+    with open(p) as f:
+        return json.load(f)
+
+
+def estimate(row: dict, c: dict, tconf: dict, cal: dict | None = None) -> dict:
+    """{kwp_min, kwp_max, ac_kw_min, ac_kw_max, methode} for one row (fields as in table freiflaeche); with a register
+    calibration the density of fixed/unknown types comes from it (method 'zaunflaeche_kalibriert')"""
     typ, year = row.get("typ") or "unbekannt", build_year(row)
     tilt = (c.get("tilt_deg") or {}).get(typ, (c.get("tilt_deg") or {}).get("unbekannt"))
     mod = row.get("flaeche_module_m2")
@@ -68,10 +83,15 @@ def estimate(row: dict, c: dict, tconf: dict) -> dict:
         kmin, kmax = mod * lo_e / cos_lo, mod * hi_e / cos_hi
         method = "modulflaeche"
     else:
-        d = density(typ, year, c)
+        from . import register
+        d = register.lookup(cal, year) if cal and typ in ("fest_sued", "unbekannt") else None
         ha = (row.get("flaeche_zaun_m2") or 0) / 1e4
+        if d:
+            method = "zaunflaeche_kalibriert"
+        else:
+            d = density(typ, year, c)
+            method = "zaunflaeche" if row.get("herkunft") != "suche" or row.get("geom_module") else "s2_polygon"
         kmin, kmax = ha * d[0] * 1000, ha * d[1] * 1000
-        method = "zaunflaeche" if row.get("herkunft") != "suche" or row.get("geom_module") else "s2_polygon"
     r = c.get("dc_ac_ratio") or [1.2, 1.4]
     return {"kwp_min": round(kmin, 1), "kwp_max": round(kmax, 1), "ac_kw_min": round(kmin / r[1], 1),
             "ac_kw_max": round(kmax / r[0], 1), "methode": method}
@@ -114,7 +134,8 @@ def pvgis_yield(con, lat: float, lon: float, c: dict, session=None) -> float | N
 
 def apply(con, region: str, cfg: dict | None = None, log=print, session=None) -> dict:
     """recompute capacity and yield for all rows of a region (except discarded); OSM capacities only compared"""
-    c, tconf = conf(cfg), typology.settings({})                         # no profile: no register-based calibration
+    c, tconf = conf(cfg), typology.settings({})       # no profile: the roof (MaStR) fill factor calibration does not apply here
+    cal = calibration(cfg)
     rows = con.execute("""
       SELECT id, typ, baujahr_schaetzung, first_seen, flaeche_zaun_m2, flaeche_module_m2, herkunft, geom_module IS NOT NULL,
              ST_Y(ST_Centroid(geom_zaun)), ST_X(ST_Centroid(geom_zaun)), quellen
@@ -123,7 +144,7 @@ def apply(con, region: str, cfg: dict | None = None, log=print, session=None) ->
     for (fid, typ, bj, fs, zaun, mod, herk, has_mod, lat, lon, q) in rows:
         row = {"typ": typ, "baujahr_schaetzung": bj, "first_seen": fs, "flaeche_zaun_m2": zaun, "flaeche_module_m2": mod,
                "herkunft": herk, "geom_module": has_mod}
-        e = estimate(row, c, tconf)
+        e = estimate(row, c, tconf, cal)
         ey = pvgis_yield(con, lat, lon, c, session)
         con.execute("UPDATE freiflaeche SET kwp_min=%s, kwp_max=%s, ac_kw_min=%s, ac_kw_max=%s, methode=%s, ertrag_kwh_kwp=%s, "
                     "updated_at = now() WHERE id = %s",

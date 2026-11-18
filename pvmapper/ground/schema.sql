@@ -48,3 +48,33 @@ CREATE TABLE IF NOT EXISTS ground_import (
   imported   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (source, version)
 );
+
+-- registers (PV-Map docs/freiflaechen.md, decision 18.11.2026): MaStR (DE, coordinates, gross = DC and net = AC) for the
+-- density calibration; MIOZE (PL, place name and AC capacity) to narrow the search regions. Kept apart from freiflaeche so a
+-- re-import of the baseline does not touch them.
+CREATE TABLE IF NOT EXISTS ground_register (
+  source      text NOT NULL,                -- mastr | mioze
+  unit_id     text NOT NULL,
+  region      text,
+  name        text,
+  ort         text,
+  geom        geometry(Point,4326),         -- MaStR: unit coordinates; MIOZE: centre of the place (OSM)
+  geom_kind   text,                         -- einheit | ort | mehrdeutig | fehlt
+  brutto_kw   real,                         -- DC (module) where the register has it
+  netto_kw    real,                         -- AC (inverters)
+  start_date  date,
+  attrs       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  imported    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (source, unit_id)
+);
+CREATE INDEX IF NOT EXISTS ground_register_geom ON ground_register USING gist(geom);
+CREATE TABLE IF NOT EXISTS ground_register_match (
+  source   text NOT NULL,
+  unit_id  text NOT NULL,
+  fid      text NOT NULL,                   -- freiflaeche.id
+  dist_m   real,
+  PRIMARY KEY (source, unit_id)
+);
+ALTER TABLE freiflaeche DROP CONSTRAINT IF EXISTS freiflaeche_methode_check;
+ALTER TABLE freiflaeche ADD CONSTRAINT freiflaeche_methode_check
+  CHECK (methode IN ('modulflaeche','zaunflaeche','zaunflaeche_kalibriert','s2_polygon'));

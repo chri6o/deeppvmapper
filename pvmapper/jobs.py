@@ -149,6 +149,8 @@ def runner(kind: str):
         from .ground.coarse import run
     elif kind == "ground_capacity":
         from .ground.capacity import run
+    elif kind == "ground_register":
+        from .ground.register import run
     else:
         raise ValueError(f"unknown job kind {kind}")
     return run

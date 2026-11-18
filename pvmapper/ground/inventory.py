@@ -29,7 +29,10 @@ GEOFABRIK = "https://download.geofabrik.de"
 ZENODO_CONCEPT = "11368203"          # TZ-SAM, all versions; newer quarters are only on solar.transitionzero.org (manual download)
 UA = "pvmapper/1.0 (+https://github.com/chri6o/deeppvmapper)"
 REGIONS = {
-    "pl-wielkopolskie": {"cc": "PL", "name": "Wielkopolskie", "geofabrik": "europe/poland/wielkopolskie"},
+    "pl-wielkopolskie": {"cc": "PL", "name": "Wielkopolskie", "geofabrik": "europe/poland/wielkopolskie", "register": "mioze",
+                         "register_area": "wielkopolskie"},
+    "de-brandenburg": {"cc": "DE", "name": "Brandenburg", "geofabrik": "europe/germany/brandenburg", "register": "mastr",
+                       "register_area": "Brandenburg"},
     "cz": {"cc": "CZ", "name": "Česko", "geofabrik": "europe/czech-republic"},
 }
 ROOF = {"roof", "rooftop", "roofs"}

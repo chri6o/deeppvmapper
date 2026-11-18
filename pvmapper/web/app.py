@@ -25,7 +25,7 @@ from ..jobs import Job, runner
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
 
-CPU_KINDS = ("ground_inventory", "ground_scan", "ground_capacity")     # no GPU, mostly waiting for downloads/openEO: own lane
+CPU_KINDS = ("ground_inventory", "ground_scan", "ground_capacity", "ground_register")     # no GPU, mostly waiting for downloads/openEO: own lane
 
 
 class JobManager:
@@ -383,6 +383,21 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         with _gcon() as con:
             return gstore.features(con, " AND ".join(w), a, min(int(limit), 50000))
 
+    @app.get("/api/ground/register/gaps")
+    def ground_gaps(region: str):
+        from ..ground import register as greg
+        with _gcon() as con:
+            return {"region": region, "orte": greg.gaps(con, region)}
+
+    @app.get("/api/ground/calibration/{region}")
+    def ground_calibration(region: str):
+        from ..ground import inventory as ginv
+        p = os.path.join(ginv.workdir(cfg(), region), "calibration.json")
+        if not os.path.exists(p):
+            raise HTTPException(404, "Noch keine Kalibrierung für diese Region")
+        with open(p) as f:
+            return json.load(f)
+
     @app.post("/api/ground/{fid}/review")
     def ground_review(fid: str, body: dict = Body(...)):
         from ..ground import store as gstore
@@ -700,7 +715,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def create_job(body: dict = Body(...)):
         kind = body.get("kind")
         params = body.get("params") or {}
-        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory", "ground_scan", "ground_capacity"):
+        if kind not in ("buildings", "area", "train", "ai_masks", "sync", "roofshape", "ground_inventory", "ground_scan", "ground_capacity", "ground_register"):
             raise HTTPException(400, "unknown job kind")
         if kind == "buildings" and not params.get("input"):
             raise HTTPException(400, "Keine Gebäudedatei gewählt")

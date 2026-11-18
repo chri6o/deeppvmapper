@@ -92,7 +92,8 @@ function groundPopup(p) {
     `${osmLinks ? "<br>OSM: " + osmLinks : ""}${(q.tzsam || []).length ? "<br>TZ-SAM: " + esc(q.tzsam.join(", ")) + " (CC BY-NC)" : ""}` +
     (q.osm_name ? `<br><span class="muted">${esc(p.id)}</span>` : "") + groundReviewHtml(p);
 }
-const G_METHOD = { modulflaeche: "Modulfläche × Wirkungsgrad nach Baujahr", zaunflaeche: "Zaunfläche × Leistungsdichte nach Typ und Baujahr", s2_polygon: "Sentinel-2-Fläche × Leistungsdichte (grob)" };
+const G_METHOD = { modulflaeche: "Modulfläche × Wirkungsgrad nach Baujahr", zaunflaeche: "Zaunfläche × Leistungsdichte nach Typ und Baujahr",
+  zaunflaeche_kalibriert: "Zaunfläche × Leistungsdichte (mit MaStR kalibriert)", s2_polygon: "Sentinel-2-Fläche × Leistungsdichte (grob)" };
 const G_TYPES = { fest_sued: "fest, Süd", fest_ost_west: "fest, Ost-West", tracker: "Tracker", agri_vertikal: "Agri-PV vertikal", floating: "Floating", unbekannt: "unbekannt" };
 const G_REASONS = { keine_pv: "keine PV", gewaechshaus: "Gewächshaus/Folie", baustelle: "Baustelle ohne Module", dach: "Dachanlage", doppelt: "doppelt erfasst", sonstiges: "sonstiges" };
 const G_STATUS = { kandidat: "zu prüfen", manuell_geprueft: "bestätigt", gegenprobe_bestaetigt: "bestätigt (Gegenprobe)", verworfen: "verworfen" };
@@ -191,6 +192,7 @@ async function initGround() {
     };
     $("#g-inv").onclick = () => start("ground_inventory", { region: $("#g-region").value });
     $("#g-cap").onclick = () => start("ground_capacity", { region: $("#g-region").value });
+    $("#g-reg").onclick = () => start("ground_register", { region: $("#g-region").value });
     $("#g-scan").onclick = () => start("ground_scan", { region: $("#g-region").value, month: $("#g-month").value, dry_run: $("#g-dry").checked });
     await loadGround(true);
   } else loadGround(false);
