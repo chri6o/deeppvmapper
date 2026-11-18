@@ -92,6 +92,10 @@ class Client:
     def queue(self, limit: int = 1000, model: str | None = None, recheck_days: int = 365, **filters) -> dict:
         return self._get("/detect/queue", {**filters, "limit": limit, "model": model, "recheck_days": recheck_days})
 
+    def pending(self) -> int:
+        """buildings waiting in check requests made in PV-Map (#379) – a small call for the poll"""
+        return int(self._get("/detect/requests/pending", {}).get("n") or 0)
+
     def queue_count(self, model: str | None = None, recheck_days: int = 365, **filters) -> dict:
         return self._get("/detect/queue/count", {**filters, "model": model, "recheck_days": recheck_days})
 
@@ -108,7 +112,7 @@ class Client:
         return self._get("/detect/results/finish", {}, "POST", {})
 
 
-QUEUE_KEYS = FILTER_KEYS + ("model", "recheck_days", "limit")
+QUEUE_KEYS = FILTER_KEYS + ("model", "recheck_days", "limit", "requested")
 
 
 def parse_queue(s: str) -> dict:
@@ -116,8 +120,8 @@ def parse_queue(s: str) -> dict:
     q = (s.split(":", 1)[1] if ":" in s else "").lstrip("?")
     d = {k: v for k, v in parse_qsl(q) if k in QUEUE_KEYS}
     d.pop("pv", None)
-    if not d.get("cc"):
-        raise PVMapError("PV-Map-Arbeitsliste braucht mindestens cc=… (Ländercode)")
+    if not d.get("cc") and d.get("requested") not in ("1", "true"):
+        raise PVMapError("PV-Map-Arbeitsliste braucht mindestens cc=… (Ländercode) oder requested=true (Prüfaufträge)")
     return d
 
 

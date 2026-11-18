@@ -937,16 +937,16 @@ const SET = { "#s-batch": "batch_size", "#s-fetch": "fetch_workers", "#s-overlap
   "#s-kwpmin": "kwp_min", "#s-kwpmax": "kwp_max", "#s-modeldir": "model_dir", "#s-jobsdir": "jobs_dir",
   "#s-extra": "sources_extra", "#s-pmurl": "pvmap_url", "#s-pmtoken": "pvmap_token",
   "#s-anthkey": "anthropic_api_key", "#s-anthmodel": "anthropic_model", "#s-oaikey": "openai_api_key", "#s-oaimodel": "openai_model", "#s-aihint": "ai_prompt_hint", "#s-cell": "area_cell_px", "#s-profile": "profile", "#s-device-sel": "device" };
-const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-age": "age_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push", "#s-lod2": "lod2" };
+const SET_BOOL = { "#s-pp": "postproc", "#s-cross": "cross_check", "#s-typ": "typology", "#s-age": "age_check", "#s-tta": "seg_tta", "#s-sync-on": "sync_enabled", "#s-sync-req": "sync_requests", "#s-sync-reviews": "sync_push_reviews", "#s-sync-typ": "typology_push", "#s-lod2": "lod2" };
 Object.assign(SET, { "#s-sync-filter": "sync_filter", "#s-sync-start": "sync_start", "#s-sync-end": "sync_end", "#s-sync-profile": "sync_profile",
   "#s-sync-recheck": "sync_recheck_days", "#s-sync-score": "sync_confirm_score" });
-const PRIO = { 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };
+const PRIO = { 0: "Prüfaufträge aus PV-Map", 1: "nie geprüft", 2: "nie geprüft, PV im Register", 3: "„möglich“ mit älterem Modell", 4: "Luftbild erneut ansehen" };
 $("#s-sync-status").onclick = async () => {
   $("#s-sync-out").innerHTML = `<div class="info">Frage PV-Map …</div>`;
   try { const d = await api("/api/sync/status");
     const q = d.queue ? Object.entries(d.queue.open).map(([k, v]) => `${PRIO[k] || k}: <b>${fmt(v)}</b>`).join(" · ") + ` · bisher geprüft ${fmt(d.queue.checked)} von ${fmt(d.queue.total)}` : esc(d.queue_error || "");
     const jobs = (d.jobs || []).map((j) => `${esc(j.id)} · ${STATUS[j.status]} · ${fmt(j.done)} Gebäude · ${fmt((j.counters || {}).gesendet)} gesendet`).join("<br>");
-    $("#s-sync-out").innerHTML = `<div class="info">Arbeitsliste (${esc(d.filter || "")}): ${q}<br>Nachtbetrieb ${d.enabled ? `an, ${esc(d.start)}–${esc(d.end)}${d.in_window ? " (läuft gerade im Zeitfenster)" : ""}` : "aus"}${jobs ? "<br>" + jobs : ""}</div>`; }
+    $("#s-sync-out").innerHTML = `<div class="info">Arbeitsliste (${esc(d.filter || "")}): ${q}<br>Prüfaufträge ${d.requests ? "sofort" : "nur im Nachtbetrieb"} · Nachtbetrieb ${d.enabled ? `an, ${esc(d.start)}–${esc(d.end)}${d.in_window ? " (läuft gerade im Zeitfenster)" : ""}` : "aus"}${jobs ? "<br>" + jobs : ""}</div>`; }
   catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 $("#s-sync-now").onclick = async () => {

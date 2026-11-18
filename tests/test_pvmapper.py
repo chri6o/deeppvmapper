@@ -1603,3 +1603,65 @@ def test_geocode_place_search(tmp_path, monkeypatch):
     rs = TestClient(create_app(str(cfgp))).get("/api/geocode?q=Siegburg").json()
     assert rs[0]["name"] == "Siegburg" and rs[0]["bbox"] == [7.17, 50.78, 7.31, 50.83] and rs[0]["geometry"]["type"] == "Polygon"
     assert rs[1]["geometry"] is None and seen["q"] == "Siegburg" and seen["polygon_geojson"] == 1
+
+
+def test_check_requests_poll_and_small_packages(tmp_path, monkeypatch):
+    """PV-Map #379: requests are polled while the GPU is free (also outside the night window) and run as a sync job with requested=true;
+    results go back in small packages; `force` computes again even with the same aerial image"""
+    from pvmapper import pvmap, sync
+    assert pvmap.parse_queue("pvmapqueue:requested=true")["requested"] == "true"
+    with pytest.raises(pvmap.PVMapError):
+        pvmap.parse_queue("pvmapqueue:nuts3=DEA2")
+    monkeypatch.setenv("PVMAPPER_NO_SCHEDULER", "1")
+    from pvmapper.web.app import create_app
+    import pvmapper.web.app as webapp
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), sync_requests=True, pvmap_token="pvm_x"), str(cfgp))
+    app = create_app(str(cfgp))
+    started, waiting = [], {"n": 0}
+    monkeypatch.setattr(webapp.JobManager, "submit", lambda self, job: started.append(job))
+    monkeypatch.setattr(pvmap.Client, "pending", lambda self: waiting["n"])
+    assert app.state.request_tick(1000.0) is None and not started, "nothing waiting"
+    waiting["n"] = 3
+    assert app.state.request_tick(1060.0) is None, "polls only every 2 minutes"
+    job = app.state.request_tick(1121.0)
+    assert job is not None and job.kind == "sync" and job.params["filter"] == "requested=true" and job.params["requests"]
+
+    # the job itself: three buildings, one with the same image but "compute again"
+    cx, cy = 13.40, 52.52
+    blds = {f"TESTr{i}": box(cx + i * 0.001, cy, cx + i * 0.001 + 0.0003, cy + 0.0002) for i in range(12)}
+
+    class FakeSrc:
+        id = "fake"
+        alt = []
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        return np.full((win.height, win.width, 3), 90, np.uint8), win, FakeSrc()
+
+    win = geo.window_around(blds["TESTr0"], "EPSG:25833", 0.1, 3.0, 64)
+    same = sources.image_hash(np.full((win.height, win.width, 3), 90, np.uint8))
+    calls = {"q": None, "n": 0, "batches": []}
+
+    def queue(self, limit=1000, **q):
+        calls["q"] = q; calls["n"] += 1
+        if calls["n"] > 1:
+            return {"features": []}
+        return {"features": [{"type": "Feature", "id": b, "geometry": g.__geo_interface__,
+                              "properties": {"id": b, "prio": 0, "requested": True, "force": b == "TESTr0",
+                                             "scan": {"img_hash": same, "model": "nrw", "result": "none"} if b in ("TESTr0", "TESTr1") else None}}
+                             for b, g in blds.items()]}
+
+    monkeypatch.setattr(pvmap.Client, "queue", queue)
+    monkeypatch.setattr(pvmap.Client, "queue_count", lambda self, **q: calls.__setitem__("cq", q) or {"open": {"0": len(blds)}})
+    monkeypatch.setattr(pvmap.Client, "send_results", lambda self, items, run=None, model=None: calls["batches"].append([x["id"] for x in items]) or {})
+    monkeypatch.setattr(pvmap.Client, "finish", lambda self: {})
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", fake_detector)
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs2"), fetch_workers=1, pvmap_token="pvm_x")
+    j = Job(cfg["jobs_dir"], "sync", {"filter": "requested=true", "requests": True})
+    j.run(lambda jj: sync.run(jj, cfg))
+    assert j.status == "done", j.error
+    assert calls["q"].get("requested") == "true" and "cc" not in calls["q"] and calls["cq"].get("requested") == "true"
+    assert len(calls["batches"]) >= 2 and max(len(b) for b in calls["batches"]) <= 10, calls["batches"]
+    assert j.counters["unveraendert"] == 1, "TESTr1 unchanged, TESTr0 computed again (force)"

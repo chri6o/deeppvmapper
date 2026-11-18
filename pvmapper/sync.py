@@ -26,7 +26,7 @@ def run(job, cfg: dict):
     prof = runtime.detector(cfg, p.get("profile") or cfg.get("sync_profile") or None).p
     job.params.update(input=queue_input(cfg, flt, prof.id), push=True, profile=prof.id,
                       save_chips=p.get("save_chips", "positive"))
-    job.log(f"PV-Map-Abgleich: Arbeitsliste {flt}, Modell {prof.id}"
+    job.log((f"PV-Map-Prüfaufträge, Modell {prof.id}" if p.get("requests") else f"PV-Map-Abgleich: Arbeitsliste {flt}, Modell {prof.id}")
             + (f", bis {dt.datetime.fromisoformat(p['until']).strftime('%H:%M')}" if p.get("until") else "")
             + (f", höchstens {p['max']} Gebäude" if p.get("max") else "") + ".")
     building_mode.run(job, cfg)
