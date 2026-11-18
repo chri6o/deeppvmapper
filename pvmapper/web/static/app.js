@@ -981,6 +981,15 @@ async function loadRequests() {
   } catch (e) { $("#rq-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 }
 $("#rq-load").onclick = loadRequests;
+$("#s-sync-recheck").onclick = () => $("#s-recheck-box").classList.toggle("hidden");
+$("#s-rc-go").onclick = async () => {
+  try {
+    const r = await api("/api/pvmap/requests/from-filter", { json: { filter: $("#s-sync-filter").value.trim() || null, only: $("#s-rc-only").value, profile: $("#s-rc-profile").value } });
+    $("#s-recheck-box").classList.add("hidden");
+    $("#s-sync-out").innerHTML = `<div class="info">Prüfauftrag „Arbeitsliste“ für ${fmt(r.n)} Gebäude angelegt und gestartet. Fortschritt in PV-Map und unter „Prüfaufträge in PV-Map“.</div>`;
+    if (r.job) started(r.job);
+  } catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+};
 $("#s-sync-now").onclick = async () => {
   try { const j = await api("/api/sync/start", { json: { hours: 2 } }); started(j); }
   catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }

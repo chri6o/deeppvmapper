@@ -69,6 +69,11 @@ Abgleich nur für sie (`requested=true`); die Ergebnisse gehen in Paketen zu 10 
 Fortschrittsbalken in PV-Map mitläuft. „Auch bei unverändertem Luftbild neu rechnen“ im Auftrag (`force`) überspringt den Vergleich
 des Luftbild-Fingerabdrucks. Ein laufender Nachtabgleich nimmt angeforderte Gebäude ohnehin zuerst. PV-Map: `docs/pvmapper-ergebnisse.md` (#379).
 
+**Arbeitsliste neu prüfen:** Reiter PV-Map → „Arbeitsliste neu prüfen …“: für den eingestellten Filter (z. B. `cc=DE&lau=DE_05314000`)
+bereits geprüfte, alle, nur mit PV oder nur ohne PV, mit gewähltem Modell. PV-Mapper legt dafür in PV-Map einen Prüfauftrag an
+(„Arbeitsliste Bonn“), startet ihn sofort und rechnet auch bei gleichem Luftbild neu; Fortschritt, „wiederholen“ und Vergleich mit dem
+vorigen Lauf wie bei jedem Prüfauftrag.
+
 **Lauf neu starten:** Reiter „Ergebnisse“ → Lauf öffnen → „Neu starten …“: Modell und Gebäude (alle / nur mit PV / nur ohne PV) wählen.
 Das legt einen neuen Lauf an, der alle diese Gebäude neu rechnet; der alte Lauf bleibt zum Vergleich. „Fortsetzen“ führt dagegen einen
 abgebrochenen Lauf an derselben Stelle weiter und lässt Fertiges aus. Ein PV-Map-Abgleich (Arbeitsliste, Prüfauftrag) hat keine feste

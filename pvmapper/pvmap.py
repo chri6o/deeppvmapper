@@ -100,6 +100,11 @@ class Client:
         """check requests made in PV-Map with their progress and, for a repeat, the comparison with the earlier run (#379)"""
         return self._get("/detect/requests", {"limit": limit})
 
+    def request_filter(self, filters: dict, only: str = "all", force: bool = True, label: str | None = None) -> dict:
+        """a check request in PV-Map for a work-list filter ("Arbeitsliste neu prüfen"); only: all | checked | pv | none | unchecked"""
+        f = {k: v for k, v in filters.items() if k in FILTER_KEYS and k != "pv" and v not in (None, "")}
+        return self._get("/detect/requests", {}, "POST", {"filter": f, "only": only, "force": force, "label": label})
+
     def repeat(self, rid: str, only: str = "all", force: bool = True) -> dict:
         """the same buildings once more (e.g. after retraining): a new request in PV-Map, compared with this one"""
         return self._get(f"/detect/requests/{rid}/repeat", {}, "POST", {"only": only, "force": force})

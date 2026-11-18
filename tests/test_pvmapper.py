@@ -1721,3 +1721,23 @@ def test_restart_job_with_other_model_and_subset(tmp_path, monkeypatch):
     old.status = "running"
     with pytest.raises(ValueError):
         restart.restart(old, jobs)
+
+
+def test_recheck_work_list_creates_request(tmp_path, monkeypatch):
+    """"Arbeitsliste neu prüfen": a request in PV-Map for the sync filter (only the filter keys), started at once with the chosen model"""
+    from pvmapper import pvmap
+    monkeypatch.setenv("PVMAPPER_NO_SCHEDULER", "1")
+    from fastapi.testclient import TestClient
+    from pvmapper.web.app import create_app
+    import pvmapper.web.app as webapp
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "m"), pvmap_token="pvm_x",
+                     sync_filter="cc=DE&lau=DE_05314000&recheck_days=30"), str(cfgp))
+    app = create_app(str(cfgp))
+    started, sent = [], {}
+    monkeypatch.setattr(webapp.JobManager, "submit", lambda self, job: started.append(job))
+    monkeypatch.setattr(pvmap.Client, "_get", lambda self, path, params, method="GET", body=None: sent.update(path=path, body=body) or {"id": "r9", "n": 1450})
+    r = TestClient(app).post("/api/pvmap/requests/from-filter", json={"only": "checked", "profile": "custom:neu"}).json()
+    assert r["n"] == 1450 and sent["path"] == "/detect/requests"
+    assert sent["body"] == {"filter": {"cc": "DE", "lau": "DE_05314000"}, "only": "checked", "force": True, "label": None}
+    assert started[0].params == {"filter": "requested=true", "requests": True, "profile": "custom:neu"}
