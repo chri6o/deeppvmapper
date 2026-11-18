@@ -144,6 +144,51 @@ map.addControl(new L.Control.Draw({
   draw: { polyline: false, circle: false, marker: false, circlemarker: false, polygon: { showArea: true }, rectangle: true },
   edit: { featureGroup: drawn },
 }));
+// place / region search on the map (OSM Nominatim): zooms there and takes the boundary as the selected area
+const SearchCtl = L.Control.extend({
+  options: { position: "topleft" },
+  onAdd() {
+    const box = L.DomUtil.create("div", "leaflet-bar geo-search");
+    box.innerHTML = `<input id="geo-q" type="search" placeholder="Ort, Kreis, Adresse suchen …" autocomplete="off"><div id="geo-res" class="hidden"></div>`;
+    L.DomEvent.disableClickPropagation(box); L.DomEvent.disableScrollPropagation(box);
+    return box;
+  },
+});
+map.addControl(new SearchCtl());
+let geoT = null;
+function geoSearch(q) {
+  clearTimeout(geoT);
+  if (q.trim().length < 2) { $("#geo-res").classList.add("hidden"); return; }
+  geoT = setTimeout(async () => {
+    try {
+      const rs = await api(`/api/geocode?q=${encodeURIComponent(q.trim())}`);
+      S.geo = rs;
+      $("#geo-res").innerHTML = rs.length ? rs.map((r, i) => `<div class="geo-item" data-i="${i}"><b>${esc(r.name)}</b> <span class="muted">${esc(r.kind || "")}</span><br><span class="muted small">${esc(r.label || "")}</span></div>`).join("")
+        : `<div class="geo-item muted">nichts gefunden</div>`;
+      $("#geo-res").classList.remove("hidden");
+      $$("#geo-res .geo-item[data-i]").forEach((el) => el.onclick = () => geoPick(S.geo[+el.dataset.i]));
+    } catch (e) { $("#geo-res").innerHTML = `<div class="geo-item err">${esc(e.message)}</div>`; $("#geo-res").classList.remove("hidden"); }
+  }, 400);
+}
+function geoPick(r) {
+  $("#geo-res").classList.add("hidden"); $("#geo-q").value = r.name;
+  const [w, s, e, n] = r.bbox;
+  map.fitBounds([[s, w], [n, e]], { maxZoom: 18 });
+  if (r.geometry) {                                         // the boundary becomes the selected area (like a drawn polygon)
+    drawn.clearLayers();
+    const lyr = L.geoJSON(r.geometry, { style: { color: "#2563eb", weight: 2, fillOpacity: .05 } });
+    lyr.eachLayer((l) => drawn.addLayer(l));
+    S.drawn = { type: "Feature", geometry: r.geometry, properties: { name: r.name } };
+    $("#a-bbox").value = "";
+    if (typeof onAreaChosen === "function") onAreaChosen(r.name);
+  }
+}
+document.addEventListener("input", (e) => { if (e.target.id === "geo-q") geoSearch(e.target.value); });
+document.addEventListener("keydown", (e) => {
+  if (e.target.id === "geo-q" && e.key === "Enter" && S.geo && S.geo[0]) { e.preventDefault(); geoPick(S.geo[0]); }
+  if (e.target.id === "geo-q" && e.key === "Escape") $("#geo-res").classList.add("hidden");
+});
+
 // map tool "Gebäude wählen": click picks OSM buildings for the roof potential; a polygon drawn while it is on takes all buildings in it
 const PickCtl = L.Control.extend({
   options: { position: "topleft" },

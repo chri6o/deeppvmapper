@@ -1576,3 +1576,30 @@ def test_roofshape_training_and_prediction(tmp_path, monkeypatch):
     img[100:150, 50:250] = (180, 130, 110)
     cls, basis = roofshape.predict(img, fp, 0.1, {**cfg, "roof_model": "test-dach"}, min_p=0.0)
     assert cls in ("gabled", "hipped", "mono", "complex") and basis.startswith("Modell")
+
+
+def test_geocode_place_search(tmp_path, monkeypatch):
+    import requests as _rq
+    from fastapi.testclient import TestClient
+    from pvmapper.web.app import create_app
+
+    class R:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [{"name": "Siegburg", "display_name": "Siegburg, Rhein-Sieg-Kreis, Nordrhein-Westfalen", "addresstype": "town",
+                     "boundingbox": ["50.78", "50.83", "7.17", "7.31"], "lat": "50.79", "lon": "7.21",
+                     "geojson": {"type": "Polygon", "coordinates": [[[7.17, 50.78], [7.31, 50.78], [7.31, 50.83], [7.17, 50.78]]]}},
+                    {"name": "Siegburger Str.", "display_name": "Siegburger Straße, Köln", "addresstype": "road",
+                     "boundingbox": ["50.9", "50.91", "6.98", "6.99"], "lat": "50.9", "lon": "6.98",
+                     "geojson": {"type": "LineString", "coordinates": [[6.98, 50.9], [6.99, 50.91]]}}]
+    seen = {}
+    monkeypatch.setattr(_rq, "get", lambda url, **k: seen.update(k["params"]) or R())
+    cfgp = tmp_path / "pvmapper.yml"
+    config.save(dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs")), str(cfgp))
+    rs = TestClient(create_app(str(cfgp))).get("/api/geocode?q=Siegburg").json()
+    assert rs[0]["name"] == "Siegburg" and rs[0]["bbox"] == [7.17, 50.78, 7.31, 50.83] and rs[0]["geometry"]["type"] == "Polygon"
+    assert rs[1]["geometry"] is None and seen["q"] == "Siegburg" and seen["polygon_geojson"] == 1

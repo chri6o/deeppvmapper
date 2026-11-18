@@ -496,6 +496,30 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         from .. import calibration
         return {"removed": calibration.remove(cfg()["model_dir"], profile)}
 
+    @app.get("/api/geocode")
+    def geocode(q: str, limit: int = 6):
+        """place / region search (OSM Nominatim): name, bbox and boundary (simplified) of matching places"""
+        import requests as _rq
+        q = (q or "").strip()
+        if len(q) < 2:
+            return []
+        try:
+            r = _rq.get("https://nominatim.openstreetmap.org/search", timeout=15,
+                        params={"q": q, "format": "jsonv2", "polygon_geojson": 1, "polygon_threshold": 0.0003,
+                                "limit": max(1, min(int(limit), 10)), "accept-language": "de"},
+                        headers={"User-Agent": "PV-Mapper (https://github.com/chri6o/deeppvmapper)"})
+            r.raise_for_status()
+        except Exception as e:                                   # noqa: BLE001
+            raise HTTPException(502, f"Ortssuche nicht erreichbar: {type(e).__name__}")
+        out = []
+        for x in r.json():
+            s_, n_, w_, e_ = [float(v) for v in x["boundingbox"]]
+            g = x.get("geojson") if (x.get("geojson") or {}).get("type") in ("Polygon", "MultiPolygon") else None
+            out.append({"name": x.get("name") or x.get("display_name", "").split(",")[0], "label": x.get("display_name"),
+                        "kind": x.get("addresstype") or x.get("type"), "bbox": [w_, s_, e_, n_], "geometry": g,
+                        "lat": float(x["lat"]), "lon": float(x["lon"])})
+        return out
+
     @app.post("/api/osm/buildings")
     def osm_buildings(body: dict = Body(...)):
         """OSM building footprints in a bbox [w, s, e, n] or a polygon (GeoJSON geometry); with `inside` only those whose

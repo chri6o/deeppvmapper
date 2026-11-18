@@ -112,3 +112,10 @@ body.e-full #panel { display: none; }
 .roofgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
 .roofgrid figure { margin: 0; font-size: 11px; }
 .roofgrid img { width: 100%; border-radius: 4px; display: block; }
+
+.geo-search { background: #fff; width: 300px; }
+.geo-search input { width: 100%; box-sizing: border-box; border: 0; padding: 7px 9px; font: inherit; font-size: 13px; outline: none; border-radius: 4px; }
+#geo-res { max-height: 320px; overflow: auto; border-top: 1px solid var(--line); }
+.geo-item { padding: 6px 9px; cursor: pointer; font-size: 12px; line-height: 1.35; }
+.geo-item:hover { background: #eef2ff; }
+.geo-item .small { font-size: 11px; }
