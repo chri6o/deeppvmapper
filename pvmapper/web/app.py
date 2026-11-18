@@ -568,6 +568,24 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         except pvmap.PVMapError as e:
             raise HTTPException(502, str(e))
 
+    @app.post("/api/pvmap/requests/from-filter")
+    def pvmap_request_filter(body: dict = Body(default={})):
+        """"Arbeitsliste neu prüfen": a request in PV-Map for the work-list filter (`filter`, default the sync filter), `only`, `profile`;
+        started at once"""
+        from .. import pvmap
+        flt = body.get("filter") or cfg().get("sync_filter") or "cc=DE"
+        try:
+            q = pvmap.parse_queue("pvmapqueue:" + flt)
+            q.pop("limit", None); q.pop("model", None); q.pop("recheck_days", None); q.pop("requested", None)
+            out = pvmap.Client.from_config(cfg()).request_filter(q, body.get("only") or "all", body.get("force", True) is not False)
+        except pvmap.PVMapError as e:
+            raise HTTPException(502, str(e))
+        job = Job(cfg()["jobs_dir"], "sync", {"filter": "requested=true", "requests": True,
+                                              **({"profile": body["profile"]} if body.get("profile") else {})})
+        mgr.submit(job)
+        out["job"] = job.as_dict()
+        return out
+
     @app.post("/api/pvmap/requests/{rid}/repeat")
     def pvmap_repeat(rid: str, body: dict = Body(default={})):
         """repeat a request with the current model (e.g. after retraining); `start`: process it now instead of waiting for the poll"""
