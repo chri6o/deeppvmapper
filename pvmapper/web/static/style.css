@@ -119,3 +119,28 @@ body.e-full #panel { display: none; }
 .geo-item { padding: 6px 9px; cursor: pointer; font-size: 12px; line-height: 1.35; }
 .geo-item:hover { background: #eef2ff; }
 .geo-item .small { font-size: 11px; }
+
+/* ---- structure: Prüfen / Ergebnisse / Trainieren ---- */
+.steps { display: flex; align-items: center; gap: 8px; margin: 16px 0 6px; font-size: 14px; }
+.step { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: var(--navy); color: #fff; font-size: 12px; font-weight: 700; align-items: center; justify-content: center; }
+#panel .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 6px 0 10px; }
+#panel .seg button { background: #fff; border: 0; border-right: 1px solid var(--line); padding: 7px 4px; cursor: pointer; font: inherit; font-size: 12.5px; line-height: 1.25; color: var(--ink); }
+#panel .seg button:last-child { border-right: 0; }
+#panel .seg button.on { background: var(--navy); color: #fff; }
+#panel .seg button:hover:not(.on) { background: #f2f5fa; }
+.mode, .sub { margin-top: 4px; }
+label.check.locked { color: var(--muted); }
+label.check.dim { opacity: .45; }
+button.small, .secondary.small { padding: 3px 8px; margin: 0; font-size: 12px; }
+.jobind { position: relative; overflow: hidden; display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 10px; border-radius: 12px; background: rgba(255,255,255,.12); cursor: pointer; white-space: nowrap; }
+.jobind i { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--accent); }
+.jobind .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+.maphint { position: absolute; top: 12px; left: 330px; z-index: 1000; background: rgba(20,33,61,.88); color: #fff; padding: 6px 12px; border-radius: 16px; font-size: 12.5px; pointer-events: none; max-width: 70%; text-align: center; }
+.toast { position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 1200; background: var(--navy); color: #fff; padding: 10px 14px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 13px; }
+.toast a { color: var(--accent); font-weight: 600; }
+.toast .tclose { background: none; border: 0; color: #fff; font-size: 16px; cursor: pointer; margin-left: 8px; }
+
+#t-models table { font-size: 12.5px; }
+#t-models td, #t-models th { white-space: normal; }
+details > summary { cursor: pointer; margin: 8px 0; font-weight: 500; }

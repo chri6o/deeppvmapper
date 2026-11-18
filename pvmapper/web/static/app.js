@@ -73,7 +73,7 @@ const osmLayer = L.geoJSON(null, {
   style: (f) => S.picked.has(f.properties.id) ? { color: "#1d4ed8", weight: 2, fillColor: "#3b82f6", fillOpacity: .35 }
     : { color: "#64748b", weight: 1, fillOpacity: .03, dashArray: "3 3" },
   onEachFeature: (f, l) => l.on("click", (e) => {
-    if (!S.pickOn || S.drawing) return;
+    if (!pickActive() || S.drawing) return;
     L.DomEvent.stopPropagation(e); togglePick(f.properties.id);
   }),
 }).addTo(map);
@@ -87,8 +87,7 @@ function pickInfo() {
   const n = S.picked.size;
   $("#a-pick-info").classList.toggle("hidden", !n && !S.osm.size);
   $("#a-pick-info").innerHTML = `${fmt(n)} Gebäude ausgewählt${S.osm.size ? ` · ${fmt(S.osm.size)} Umrisse geladen` : ""} <span class="muted">· © OpenStreetMap-Mitwirkende</span>`;
-  $("#a-roof-start").disabled = !n;
-  $("#a-roof-start").textContent = n ? `Dachpotenzial für ${fmt(n)} Gebäude prüfen` : "Dachpotenzial prüfen";
+  summary();
 }
 function restyleOsm() { osmLayer.setStyle(osmLayer.options.style); }
 function togglePick(id) { S.picked.has(id) ? S.picked.delete(id) : S.picked.add(id); restyleOsm(); pickInfo(); }
@@ -116,7 +115,7 @@ async function pickAt(ll) {
   if (hit) togglePick(hit.properties.id); else pickInfo();
 }
 $("#a-pick-poly").onclick = async () => {
-  if (!S.drawn) { info("#a-pick-info", "Erst ein Polygon oder Rechteck zeichnen (Werkzeuge oben links).", true); $("#a-pick-info").classList.remove("hidden"); return; }
+  if (!S.drawn) { info("#a-pick-info", "Erst einen Ort suchen oder ein Rechteck/Polygon zeichnen (Werkzeuge oben links).", true); $("#a-pick-info").classList.remove("hidden"); return; }
   $("#a-pick-info").classList.remove("hidden"); $("#a-pick-info").textContent = "Lade Gebäude aus OpenStreetMap …";
   try {
     const fc = await api("/api/osm/buildings", { json: { geometry: S.drawn.geometry, inside: true } });
@@ -129,16 +128,7 @@ $("#a-pick-view").onclick = async () => {
   try { addOsm(await api("/api/osm/buildings", { json: { bbox: [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()] } })); pickInfo(); }
   catch (e) { info("#a-pick-info", e.message, true); $("#a-pick-info").classList.remove("hidden"); }
 };
-$("#a-pick").onchange = () => setPick($("#a-pick").checked);
 $("#a-pick-clear").onclick = () => { S.picked.clear(); restyleOsm(); pickInfo(); };
-$("#a-roof-start").onclick = async () => {
-  const feats = [...S.picked].map((id) => S.osm.get(id)).filter(Boolean);
-  if (!feats.length) return;
-  try {
-    const j = await api("/api/roofs/start", { json: { features: feats, sources: $("#a-source").value, profile: $("#a-profile").value } });
-    tab("jobs"); openJob(j.id);
-  } catch (e) { info("#a-pick-info", e.message, true); }
-};
 const drawn = new L.FeatureGroup().addTo(map);
 map.addControl(new L.Control.Draw({
   draw: { polyline: false, circle: false, marker: false, circlemarker: false, polygon: { showArea: true }, rectangle: true },
@@ -154,7 +144,9 @@ const SearchCtl = L.Control.extend({
     return box;
   },
 });
-map.addControl(new SearchCtl());
+const searchCtl = new SearchCtl();
+map.addControl(searchCtl);
+{ const corner = searchCtl.getContainer().parentNode; corner.insertBefore(searchCtl.getContainer(), corner.firstChild); }   // search on top
 let geoT = null;
 function geoSearch(q) {
   clearTimeout(geoT);
@@ -190,31 +182,20 @@ document.addEventListener("keydown", (e) => {
 });
 
 // map tool "Gebäude wählen": click picks OSM buildings for the roof potential; a polygon drawn while it is on takes all buildings in it
-const PickCtl = L.Control.extend({
-  options: { position: "topleft" },
-  onAdd() {
-    const bar = L.DomUtil.create("div", "leaflet-bar pick-ctl");
-    const b = L.DomUtil.create("a", "", bar);
-    b.href = "#"; b.id = "pick-btn"; b.innerHTML = "☝"; b.title = "Gebäude wählen (Dachpotenzial): Klick wählt ein Gebäude, gezeichnetes Polygon übernimmt alle darin";
-    L.DomEvent.on(b, "click", (e) => { L.DomEvent.stop(e); setPick(!S.pickOn); });
-    L.DomEvent.disableClickPropagation(bar);
-    return bar;
-  },
-});
-map.addControl(new PickCtl());
-function setPick(on) {
-  S.pickOn = on; $("#a-pick").checked = on;
-  const b = document.getElementById("pick-btn"); if (b) b.classList.toggle("on", on);
-  map.getContainer().classList.toggle("picking", on);
-  if (on) { if (currentTab() !== "area") tab("area"); const box = $("#a-roofbox"); if (box) box.open = true; pickInfo(); }
-}
+function pickActive() { return currentTab() === "check" && S.mode === "pick"; }
 map.on(L.Draw.Event.CREATED, (e) => {
-  drawn.clearLayers(); drawn.addLayer(e.layer); S.drawn = e.layer.toGeoJSON(); $("#a-bbox").value = ""; tab("area");
-  if (S.pickOn) $("#a-pick-poly").click(); else estimateArea();
+  drawn.clearLayers(); drawn.addLayer(e.layer); S.drawn = e.layer.toGeoJSON(); $("#a-bbox").value = "";
+  onAreaChosen();
 });
+// an area was drawn or found by the search: what it means depends on where the user is
+function onAreaChosen() {
+  if (currentTab() !== "check") return;
+  if (S.mode === "pick") $("#a-pick-poly").click();
+  else if (S.mode === "area") { estimateArea(); summary(); }
+}
 map.on(L.Draw.Event.DRAWSTART, () => { S.drawing = true; });
 map.on(L.Draw.Event.DRAWSTOP, () => { setTimeout(() => { S.drawing = false; }, 50); });
-map.on("click", (e) => { if (S.drawing) return; if (S.pickOn) pickAt(e.latlng); else if (currentTab() === "probe") probe(e.latlng); });
+map.on("click", (e) => { if (S.drawing || currentTab() !== "check") return; if (S.mode === "pick") pickAt(e.latlng); else if (S.mode === "point") probe(e.latlng); });
 
 function sourceLayer(src) {
   if (!src) return null;
@@ -234,14 +215,144 @@ function showSource(id) {
 
 // ------------------------------------------------------------------ tabs
 function currentTab() { return $("#tabs button.active").dataset.tab; }
+const MODE_HINT = {
+  area: "Gebiet: Ort suchen (oben links) oder Rechteck/Polygon zeichnen",
+  pick: "Gebäude anklicken · Rechteck/Polygon zeichnen oder Ort suchen übernimmt alle Gebäude darin",
+  list: "", point: "In die Karte klicken: dieser Ort wird sofort ausgewertet",
+};
+// the map does only what the current place in the app needs: drawing and picking while choosing what to check,
+// result layers while looking at results
+function mapMode() {
+  const t = currentTab(), checking = t === "check", drawOK = (checking && ["area", "pick"].includes(S.mode)) || (t === "train" && S.sub === "roof");
+  document.querySelectorAll(".leaflet-draw").forEach((el) => { el.style.display = drawOK ? "" : "none"; });
+  const hint = checking ? MODE_HINT[S.mode] : (t === "train" && S.sub === "roof" ? "Trainingsgebiet: Ort suchen oder Rechteck/Polygon zeichnen (NRW)" : "");
+  $("#maphint").textContent = hint || ""; $("#maphint").classList.toggle("hidden", !hint);
+  map.getContainer().classList.toggle("picking", checking && S.mode === "pick");
+  map.getContainer().style.cursor = checking && S.mode === "point" ? "crosshair" : "";
+  const want = (lyr, on) => { if (on && !map.hasLayer(lyr)) lyr.addTo(map); if (!on && map.hasLayer(lyr)) map.removeLayer(lyr); };
+  want(osmLayer, checking && S.mode === "pick");
+  want(drawn, drawOK);
+  want(roofLayer, t === "results");
+  want(instLayer, t === "results" || (checking && S.mode === "point"));
+  want(dataLayer, t === "results" || (checking && ["list", "point"].includes(S.mode)));
+  showInstLegend(map.hasLayer(instLayer) && instLayer.getLayers().length > 0);
+}
 function tab(name) {
   $$("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== "tab-" + name));
-  map.getContainer().style.cursor = name === "probe" ? "crosshair" : "";
-  if (name === "jobs") loadJobs();
-  if (name === "masks") { loadDatasets(M.ds); if (M.item) showEditor(true); } else showEditor(false);
+  if (name === "results") { loadJobs(); if (S.job) loadResults(); }
+  if (name === "check" && S.mode === "list" && S.input) { dataLayer.clearLayers(); dataLayer.addData(S.input.preview); }
+  if (name === "train" && S.sub === "data") { loadDatasets(M.ds); if (M.item) showEditor(true); } else showEditor(false);
+  if (name === "train" && S.sub === "models") loadModels();
+  if (name === "train" && S.sub === "clean") loadCleanup();
+  mapMode();
 }
 $$("#tabs button").forEach((b) => b.addEventListener("click", () => tab(b.dataset.tab)));
+S.mode = "area"; S.sub = "data";
+function setMode(m) {
+  S.mode = m;
+  $$("#c-modes button").forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
+  $$(".mode").forEach((d) => d.classList.toggle("hidden", d.id !== "mode-" + m));
+  $("#c-what").classList.toggle("hidden", m === "point");
+  const roofOK = m !== "area";
+  $("#c-roof").disabled = !roofOK; $("#c-roof-l").classList.toggle("dim", !roofOK); $("#c-roof-note").classList.toggle("hidden", roofOK);
+  if (m !== "point") { dataLayer.clearLayers(); instLayer.clearLayers(); }
+  if (m === "list" && S.input) dataLayer.addData(S.input.preview);
+  if (m === "pick") pickInfo();
+  mapMode(); summary();
+}
+$$("#c-modes button").forEach((b) => b.onclick = () => setMode(b.dataset.mode));
+function setSub(x) {
+  S.sub = x;
+  $$("#t-subs button").forEach((b) => b.classList.toggle("on", b.dataset.sub === x));
+  $$(".sub").forEach((d) => d.classList.toggle("hidden", d.id !== "sub-" + x));
+  if (x === "data") { loadDatasets(M.ds); if (M.item) showEditor(true); } else showEditor(false);
+  if (x === "models") loadModels();
+  if (x === "clean") loadCleanup();
+  mapMode();
+}
+$$("#t-subs button").forEach((b) => b.onclick = () => setSub(b.dataset.sub));
+
+// ------------------------------------------------------------------ models page (Trainieren → Modelle)
+async function loadModels() {
+  const c = S.info.config;
+  const own = S.info.profiles.filter((p) => p.id.startsWith("custom:"));
+  const base = S.info.profiles.filter((p) => !p.id.startsWith("custom:"));
+  const row = async (p) => {
+    let cal = {}; try { cal = await api(`/api/calibration/${encodeURIComponent(p.id)}`); } catch (e) { /* none */ }
+    const ff = Object.entries(cal.fill_factor || {}).map(([k, v]) => `${esc(k)} ${fmt(v, 2)}`).join(", ");
+    return `<tr><td>${p.id === c.profile ? "★ " : ""}${esc(p.label)}</td><td>${ff ? "Leistung kalibriert (" + ff + ") <a href=\"#\" data-uncal=\"" + esc(p.id) + "\">zurücknehmen</a>" : "–"}</td>` +
+      `<td>${p.id === c.profile ? "Standard" : `<button class="secondary small" data-def="${esc(p.id)}">als Standard</button>`}</td></tr>`;
+  };
+  const rows = await Promise.all([...own, ...base].map(row));
+  let roofs = []; try { roofs = await api("/api/roofshape/models"); } catch (e) { /* none */ }
+  $("#t-models").innerHTML = `<h3>Erkennungsmodelle</h3><div class="tablewrap"><table><tr><th>Modell</th><th>Leistungskalibrierung</th><th></th></tr>${rows.join("")}</table></div>` +
+    `<h3>Dachformen-Modelle</h3>` + (roofs.length ? `<div class="tablewrap"><table><tr><th>Name</th><th>richtig</th><th>Bilder</th><th></th></tr>` +
+      roofs.map((m) => `<tr><td>${m.name === c.roof_model ? "★ " : ""}${esc(m.name)}</td><td class="num">${m.accuracy != null ? fmt(m.accuracy * 100, 0) + " %" : "–"}</td><td class="num">${fmt(m.n_train)}</td>` +
+        `<td>${m.name === c.roof_model ? "aktiv" : `<button class="secondary small" data-roof="${esc(m.name)}">verwenden</button>`}</td></tr>`).join("") + `</table></div>`
+      : `<p class="hint">Noch keins – unter „Dachformen“ trainieren.</p>`);
+  const set = async (body) => { await api("/api/config", { json: body }); S.info = await api("/api/info"); renderSettings(); $$(".profile-select").forEach((el) => { el.value = S.info.config.profile; }); loadModels(); };
+  $$("#t-models [data-def]").forEach((b) => b.onclick = () => set({ profile: b.dataset.def }));
+  $$("#t-models [data-roof]").forEach((b) => b.onclick = () => set({ roof_model: b.dataset.roof }));
+  $$("#t-models [data-uncal]").forEach((a) => a.onclick = async (e) => { e.preventDefault(); await api(`/api/calibration/${encodeURIComponent(a.dataset.uncal)}`, { method: "DELETE" }); loadModels(); });
+}
+
+// ------------------------------------------------------------------ step 3: summary and start
+function summary() {
+  const m = S.mode, el = $("#c-summary"), btn = $("#c-start");
+  let txt = "", ok = false;
+  if (m === "area") { ok = !!(S.drawn || $("#a-bbox").value.trim()); txt = ok ? ($("#a-est").textContent || "Gebiet gewählt") : "Noch kein Gebiet: Ort suchen oder in der Karte zeichnen."; }
+  else if (m === "pick") { ok = S.picked.size > 0; txt = ok ? `${fmt(S.picked.size)} Gebäude ausgewählt` : "Noch keine Gebäude ausgewählt."; }
+  else if (m === "list") { ok = !!(S.input && S.input.count); txt = ok ? `${fmt(S.input.count)} Gebäude in der Liste` : "Noch keine Gebäudeliste geladen."; }
+  el.textContent = txt; btn.disabled = !ok;
+  btn.textContent = m === "area" ? "Gebiet auswerten" : ok ? `${fmt(m === "pick" ? S.picked.size : S.input.count)} Gebäude prüfen` : "Prüfung starten";
+}
+function checkFlags() {
+  return { typology: $("#c-typ").checked, age_check: $("#c-age").checked, cross_check: $("#c-cross").checked,
+           roof_potential: S.mode !== "area" && $("#c-roof").checked, sources: $("#c-source").value, profile: $("#c-profile").value,
+           save_chips: $("#c-chips").value };
+}
+$("#c-start").onclick = async () => {
+  const f = checkFlags();
+  try {
+    let j;
+    if (S.mode === "area") j = await api("/api/jobs", { json: { kind: "area", params: { ...areaParams(), ...f } } });
+    else if (S.mode === "pick") {
+      const feats = [...S.picked].map((id) => S.osm.get(id)).filter(Boolean);
+      j = await api("/api/roofs/start", { json: { features: feats, ...f } });
+    } else {
+      j = await api("/api/jobs", { json: { kind: "buildings", params: { input: S.input.input, id_field: $("#b-id").value,
+        query: ($("#b-sql").value || "").trim() || null, ...f } } });
+    }
+    started(j);
+  } catch (e) { info("#c-msg", e.message, true); }
+};
+// a job was started: stay here, say so, offer the way to its results
+function started(j) {
+  toast(`${esc(KIND[j.kind] || j.kind)}-Auftrag gestartet. <a href="#" data-job="${esc(j.id)}">Ergebnisse ansehen →</a>`);
+  S.job = j.id; loadJobs(); jobIndicator();
+}
+function toast(html, ms = 9000) {
+  const t = $("#toast"); t.innerHTML = html + ` <button class="tclose" title="schließen">×</button>`; t.classList.remove("hidden");
+  const a = t.querySelector("a[data-job]"); if (a) a.onclick = (e) => { e.preventDefault(); t.classList.add("hidden"); tab("results"); openJob(a.dataset.job); };
+  t.querySelector(".tclose").onclick = () => t.classList.add("hidden");
+  clearTimeout(S.toastT); S.toastT = setTimeout(() => t.classList.add("hidden"), ms);
+}
+// running job in the header, on every page
+async function jobIndicator() {
+  try {
+    const js = await api("/api/jobs");
+    const run = js.find((j) => j.status === "running") || js.find((j) => j.status === "queued");
+    const el = $("#jobind");
+    if (!run) { el.classList.add("hidden"); return; }
+    const pct = run.total ? Math.round(100 * run.done / run.total) : 0;
+    const more = js.filter((j) => ["running", "queued"].includes(j.status)).length - 1;
+    el.innerHTML = `<span class="dot"></span>${esc(KIND[run.kind] || run.kind)} · ${pct} %${more > 0 ? ` · +${more}` : ""}<i style="width:${pct}%"></i>`;
+    el.classList.remove("hidden"); el.onclick = () => { tab("results"); openJob(run.id); };
+  } catch (e) { /* server busy */ }
+}
+setInterval(jobIndicator, 5000);
+
 
 // ------------------------------------------------------------------ init
 async function init() {
@@ -257,7 +368,10 @@ async function init() {
   const profOpts = S.info.profiles.map((p) => `<option value="${p.id}">${esc(p.label)}${p.downloaded ? "" : " (wird geladen)"}</option>`).join("");
   $$(".profile-select").forEach((el) => { el.innerHTML = profOpts; el.value = S.info.config.profile; });
   $("#s-sync-profile").innerHTML = `<option value="">Standard-Modell</option>` + profOpts;
-  renderSources(); renderSettings(); loadJobs();
+  const c = S.info.config;                                   // defaults of "Was prüfen?" from the settings
+  $("#c-typ").checked = c.typology !== false; $("#c-age").checked = c.age_check !== false;
+  $("#c-cross").checked = c.cross_check !== false; $("#c-roof").checked = !!c.roof_potential;
+  renderSources(); renderSettings(); loadJobs(); setMode(S.mode); jobIndicator();
 }
 
 // ------------------------------------------------------------------ buildings tab
@@ -284,14 +398,8 @@ function setInput(d) {
   $("#b-id").innerHTML = `<option value="">automatisch</option>` + d.fields.map((f) => `<option>${esc(f)}</option>`).join("");
   dataLayer.clearLayers(); dataLayer.addData(d.preview); instLayer.clearLayers(); showInstLegend(false);
   if (d.bbox) map.fitBounds([[d.bbox[1], d.bbox[0]], [d.bbox[3], d.bbox[2]]], { maxZoom: 18 });
-  $("#b-start").disabled = !d.count;
+  summary();
 }
-$("#b-start").onclick = async () => {
-  const params = { input: S.input.input, id_field: $("#b-id").value, query: $("#b-sql").value.trim() || null,
-    sources: $("#b-source").value, profile: $("#b-profile").value, save_chips: $("#b-chips").value, roof_potential: $("#b-roof").checked };
-  try { const j = await api("/api/jobs", { json: { kind: "buildings", params } }); tab("jobs"); openJob(j.id); }
-  catch (e) { info("#b-info", e.message, true); }
-};
 
 function regionParams(v) {
   const p = {}; const parts = v.split(",").map((x) => x.trim()).filter(Boolean);
@@ -328,7 +436,7 @@ $("#t-strata").onclick = async () => {
   } catch (e) { $("#t-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 $("#t-start").onclick = async () => {
-  try { const j = await api("/api/jobs", { json: { kind: "train", params: trainParams() } }); tab("jobs"); openJob(j.id); }
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: trainParams() } }); started(j); }
   catch (e) { $("#t-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 const ROOF_DE = { flat: "Flachdach", mono: "Pultdach", gabled: "Satteldach", hipped: "Walmdach", complex: "komplex" };
@@ -368,7 +476,7 @@ async function showReport(id) {
 
 // ------------------------------------------------------------------ area tab
 function areaParams() {
-  const p = { sources: $("#a-source").value, profile: $("#a-profile").value,
+  const p = { sources: $("#c-source").value, profile: $("#c-profile").value,
     buildings: $("#a-buildings").value.trim() || null, only_on_buildings: $("#a-only").checked,
     osm_buildings: $("#a-osm").checked && !$("#a-buildings").value.trim() };
   const bb = $("#a-bbox").value.trim().split(/[\s,;]+/).map(Number).filter((x) => !isNaN(x));
@@ -382,7 +490,9 @@ async function estimateArea() {
     const e = await api("/api/area/estimate", { json: p });
     info("#a-est", `${fmt(e.km2, 2)} km² · ${fmt(e.cells)} Kacheln à ${fmt(e.cell_m)} m · ${fmt(e.gigapixel, 1)} Gigapixel`);
   } catch (err) { info("#a-est", err.message, true); }
+  summary();
 }
+$("#a-bbox").addEventListener("input", () => summary());
 $("#a-bbox").addEventListener("change", () => {
   const bb = $("#a-bbox").value.trim().split(/[\s,;]+/).map(Number);
   if (bb.length === 4 && bb.every((x) => !isNaN(x))) {
@@ -391,11 +501,7 @@ $("#a-bbox").addEventListener("change", () => {
   }
   estimateArea();
 });
-$("#a-profile").addEventListener("change", estimateArea);
-$("#a-start").onclick = async () => {
-  try { const j = await api("/api/jobs", { json: { kind: "area", params: areaParams() } }); tab("jobs"); openJob(j.id); }
-  catch (e) { info("#a-est", e.message, true); }
-};
+$("#c-profile").addEventListener("change", estimateArea);
 
 // ------------------------------------------------------------------ jobs
 const KIND = { buildings: "Gebäude", area: "Fläche", train: "Training", ai_masks: "KI-Masken", sync: "PV-Map-Abgleich", roofshape: "Dachformen-Modell" };
@@ -429,7 +535,7 @@ async function loadJobs() {
   $$(".job").forEach((el) => el.onclick = () => openJob(el.dataset.id));
   $$(".jopen").forEach((b) => b.onclick = (e) => {
     e.stopPropagation();
-    if (b.dataset.kind === "train" && b.dataset.prep) { M.ds = b.dataset.id; M.item = null; tab("masks"); return; }   // dataset → mask editor
+    if (b.dataset.kind === "train" && b.dataset.prep) { M.ds = b.dataset.id; M.item = null; S.sub = "data"; tab("train"); setSub("data"); return; }   // dataset → mask editor
     openJob(b.dataset.id);
     const t = $("#jd-table") || $("#job-detail"); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
   });
@@ -482,7 +588,7 @@ async function refreshJob(withResults) {
   $("#jd-resume").classList.toggle("hidden", !["cancelled", "failed"].includes(j.status));
   $("#jd-status").classList.toggle("hidden", !["buildings", "sync"].includes(j.kind));
   $$(".filters").forEach((x) => x.classList.toggle("hidden", ["train", "ai_masks", "roofshape"].includes(j.kind)));
-  ["#jd-selrand", "#jd-seln", "#jd-todataset", "#jd-selinfo", "#jd-target"].forEach((q) => $(q).classList.toggle("hidden", !["buildings", "sync", "area"].includes(j.kind)));
+  $("#jd-trainbox").classList.toggle("hidden", !["buildings", "sync", "area"].includes(j.kind));
   if (["train", "ai_masks", "roofshape"].includes(j.kind)) { $("#jd-table").innerHTML = ""; if (["train", "roofshape"].includes(j.kind) && (withResults || j.status === "done")) showReport(j.id); else $("#jd-report").innerHTML = ""; }
   else { $("#jd-report").innerHTML = ""; if (withResults || (j.status !== S.lastStatus && j.status === "done")) loadResults(); }
   S.lastStatus = j.status;
@@ -496,8 +602,7 @@ $("#jd-delete").onclick = async () => {
     if (r.hand_masks) alert(`Gelöscht (darunter ${r.hand_masks} Bilder mit eigenen Masken).`); }
   catch (e) { alert(e.message); }
 };
-$("#t-clean").ontoggle = async () => {
-  if (!$("#t-clean").open) return;
+async function loadCleanup() {
   const l = await api("/api/cleanup");
   $("#t-clean-list").innerHTML = l.length ? `<table><tr><th></th><th>Auftrag</th><th>Art</th><th>Bilder</th><th>eigene Masken</th></tr>` +
     l.map((j) => `<tr><td><input type="checkbox" data-id="${j.id}" ${j.hand_masks ? "" : "checked"}></td><td>${esc(j.id)} ${esc(j.name)}</td><td>${j.kind === "train" ? "Training/Datensatz" : "KI-Masken"}</td><td class="num">${fmt(j.images)}</td><td class="num">${j.hand_masks ? "<b>" + fmt(j.hand_masks) + "</b>" : "–"}</td></tr>`).join("") + "</table>"
@@ -507,7 +612,7 @@ $("#t-clean-go").onclick = async () => {
   const ids = $$("#t-clean-list input:checked").map((x) => x.dataset.id);
   if (!ids.length || !confirm(`${ids.length} Aufträge mit allen Dateien löschen?`)) return;
   try { const r = await api("/api/cleanup", { json: { ids } }); $("#t-clean-msg").innerHTML = `<div class="info">${r.deleted.length} gelöscht.</div>`;
-    $("#t-clean").ontoggle(); loadJobs(); if (typeof loadDatasets === "function") loadDatasets(); }
+    loadCleanup(); loadJobs(); if (typeof loadDatasets === "function") loadDatasets(); }
   catch (e) { $("#t-clean-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 $("#jd-resume").onclick = async () => { await api(`/api/jobs/${S.job}/resume`, { method: "POST" }); openJob(S.job); loadJobs(); };
@@ -633,8 +738,8 @@ $("#p-todataset").onclick = async () => {
 async function probe(ll) {
   $("#p-out").innerHTML = `<div class="info">Lade Luftbild und analysiere ${ll.lat.toFixed(5)}, ${ll.lng.toFixed(5)} …</div>`;
   try {
-    const d = await api("/api/probe", { json: { lat: ll.lat, lon: ll.lng, source: $("#p-source").value, profile: $("#p-profile").value, radius_m: +$("#p-radius").value } });
-    S.probe = { lat: ll.lat, lon: ll.lng, radius_m: +$("#p-radius").value, source: $("#p-source").value, profile: $("#p-profile").value, d };
+    const d = await api("/api/probe", { json: { lat: ll.lat, lon: ll.lng, source: $("#c-source").value, profile: $("#c-profile").value, radius_m: +$("#p-radius").value } });
+    S.probe = { lat: ll.lat, lon: ll.lng, radius_m: +$("#p-radius").value, source: $("#c-source").value, profile: $("#c-profile").value, d };
     $("#p-ds").classList.remove("hidden"); fillTargets("#p-target");
     dataLayer.clearLayers(); instLayer.clearLayers(); roofLayer.clearLayers(); showInstLegend(false);
     if (d.polygons) dataLayer.addData({ type: "FeatureCollection", features: d.polygons.features.map((f) => ({ ...f, properties: { kind: "pv" } })) });
@@ -672,7 +777,7 @@ $("#s-sync-status").onclick = async () => {
   catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 $("#s-sync-now").onclick = async () => {
-  try { const j = await api("/api/sync/start", { json: { hours: 2 } }); tab("jobs"); openJob(j.id); }
+  try { const j = await api("/api/sync/start", { json: { hours: 2 } }); started(j); }
   catch (e) { $("#s-sync-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 function renderSettings() {
@@ -700,7 +805,7 @@ function readClasses() {
   }).filter((c) => c.name);
 }
 $("#s-addclass").onclick = () => { const l = readClasses(); l.push({ name: "", label: "", max: null }); renderClasses(l); };
-$("#s-save").onclick = async () => {
+async function saveSettings(msg) {
   const body = {};
   for (const [sel, k] of Object.entries(SET)) {
     const v = $(sel).value.trim(), num = $(sel).type === "number";
@@ -712,9 +817,11 @@ $("#s-save").onclick = async () => {
   const cls = readClasses().sort((a, b) => (a.max ?? Infinity) - (b.max ?? Infinity));
   body.size_classes = cls;
   body.roof_model = $("#s-roofmodel").value || null;
-  try { await api("/api/config", { json: body }); S.info = await api("/api/info"); renderSettings(); $("#s-msg").innerHTML = `<div class="info">Gespeichert.</div>`; }
-  catch (e) { $("#s-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
-};
+  try { await api("/api/config", { json: body }); S.info = await api("/api/info"); renderSettings(); $(msg).innerHTML = `<div class="info">Gespeichert.</div>`; }
+  catch (e) { $(msg).innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
+}
+$("#s-save").onclick = () => saveSettings("#s-msg");
+$("#s-save-pm").onclick = () => saveSettings("#s-msg-pm");
 $("#s-download").onclick = async () => {
   $("#s-msg").innerHTML = `<div class="info">Lade Gewichte für „${$("#s-profile").value}“ (bis ~650 MB) …</div>`;
   try { await api("/api/models/download", { json: { profile: $("#s-profile").value } }); $("#s-msg").innerHTML = `<div class="info">Modell bereit.</div>`; init(); }
@@ -1116,7 +1223,7 @@ async function suggest(provider) {
     info2(provider ? `KI: ${d.pv_visible ? "PV sichtbar" : "keine PV"} (${fmt(d.confidence, 2)}) ${esc(d.note || "")} – prüfen und speichern` : `Modellvorschlag (Score ${fmt(d.max_prob, 2)}) – prüfen und speichern`);
   } catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); }
 }
-function editorActive() { return currentTab() === "masks" && !$("#editor").classList.contains("hidden"); }
+function editorActive() { return currentTab() === "train" && S.sub === "data" && !$("#editor").classList.contains("hidden"); }
 document.addEventListener("keydown", (e) => {
   if (!editorActive()) return;
   if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName) && document.activeElement.type !== "checkbox") return;
@@ -1176,7 +1283,7 @@ $("#m-train").onclick = async () => {
   try { const j = await api("/api/jobs", { json: { kind: "train", params: { dataset_from: M.ds, profile: $("#m-profile").value, epochs: +$("#m-epochs").value,
       name: $("#m-name").value.trim() || $("#m-name").placeholder || null, ai_masks: $("#m-aiuse").value, min_seg_samples: 20,
       calibrate_kwp: $("#m-cal").checked ? $("#m-caluse").value : null } } });
-    tab("jobs"); openJob(j.id); }
+    started(j); }
   catch (e) { $("#m-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 function calText(c) {
@@ -1204,11 +1311,11 @@ $("#r-start").onclick = async () => {
   const bb = $("#r-bbox").value.trim().split(/[\s,;]+/).map(Number).filter((x) => !isNaN(x));
   const params = { per_class: +$("#r-per").value || 300, epochs: +$("#r-epochs").value || 8, name: $("#r-name").value.trim() || null };
   if (bb.length === 4) params.bbox = bb; else if (S.drawn) params.geometry = S.drawn.geometry;
-  try { const j = await api("/api/jobs", { json: { kind: "roofshape", params } }); tab("jobs"); openJob(j.id); }
+  try { const j = await api("/api/jobs", { json: { kind: "roofshape", params } }); started(j); }
   catch (e) { $("#r-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
 $("#t-prepare").onclick = async () => {
   const tp = trainParams(); if ($("#t-posonly").checked) tp.negatives = 0;
-  try { const j = await api("/api/jobs", { json: { kind: "train", params: { ...tp, prepare_only: true } } }); tab("jobs"); openJob(j.id); }
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: { ...tp, prepare_only: true } } }); started(j); }
   catch (e) { $("#t-out").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };

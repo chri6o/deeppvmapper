@@ -46,12 +46,19 @@ Danach: `ssh pvmapper@pvmapper.local`. Aktualisieren mit `sudo pvmapper-update`,
 
 ## Oberfläche
 
-- **Gebäude prüfen:** Gebäudedatei hineinziehen (GeoJSON, CSV mit `lat`/`lon` oder WKT, GeoPackage, Shapefile) oder eine PostGIS-Abfrage eingeben. Dann ID-Feld, Bildquelle und Modell wählen und starten. Für jedes Gebäude ergibt sich: PV ja/nein, PV-Fläche, geschätzte kWp, Größenklasse, Score und ein Vorschaubild.
-- **Fläche auswerten:** Rechteck oder Polygon in die Karte zeichnen. Das Gebiet wird in Kacheln zerlegt und vollständig ausgewertet. Optional kann ein Gebäudelayer angegeben werden, um die Treffer Gebäuden zuzuordnen.
-- **Aufträge:** Fortschritt, Durchsatz, Restzeit und Protokoll. Abbrechen und Fortsetzen ist jederzeit möglich. Ergebnistabelle mit Filtern; ein Klick zeigt Gebäude und Vorschaubild (links das Original, rechts die erkannte PV in Rot, gelb der Gebäudeumriss). Exporte: `buildings.csv`, `buildings.geojson`, `pv_polygons.geojson` bzw. `installations.*` und `summary.json`.
-- **Probe:** In die Karte klicken. Das Luftbild wird geladen und sofort analysiert. Das eignet sich, um Quellen und Modelle pro Land zu vergleichen, bevor ein großer Auftrag startet.
-- **Bildquellen:** alle hinterlegten Dienste mit Auflösung und Lizenz, auf Wunsch als Ebene in der Karte.
-- **Einstellungen:** Modell, Gerät, Schwellenwerte, Batchgröße, parallele Downloads, kWp pro m², Mindestfläche, kWp-Filter und **Größenklassen** (Standard: S < 30, M < 100, L < 750, XL ≥ 750 kWp).
+Fünf Bereiche oben in der Leiste. Laufende Aufträge zeigt die Kopfzeile an (Klick öffnet Ergebnisse); nach dem Start bleibt die Ansicht, wo sie ist.
+
+- **Prüfen** in drei Schritten: *1. Was soll geprüft werden?* – vier Arten:
+  - **Gebiet auswerten** (früher „Fläche auswerten“): Ort suchen oder Rechteck/Polygon zeichnen; das Gebiet wird gekachelt und vollständig ausgewertet, optional nur auf OSM-Gebäuden.
+  - **Gebäude auswählen:** Gebäude per Klick in der Karte oder per Polygon wählen (OSM-Umrisse).
+  - **Gebäudeliste:** Datei hineinziehen (GeoJSON, CSV, GeoPackage, Shapefile), PostGIS-Abfrage oder Gebäude aus PV-Map.
+  - **Einzelner Punkt:** in die Karte klicken, Luftbild sofort analysieren (früher „Probe“); Funde lassen sich in einen Trainingsdatensatz übernehmen.
+  
+  *2. Was prüfen?* – PV erkennen ist immer an; zuschaltbar Anlagentyp und Leistung, Anlagenalter, freie Dachfläche, Gegenprobe. Unter *Erweitert* Modell/Profil, Bildquelle, Größenklassen. *3. Start.* Kartenwerkzeuge (Zeichnen, Picker) erscheinen nur in den Arten, die sie brauchen.
+- **Ergebnisse:** Auftragsliste (die drei neuesten oben, ältere im Archiv, löschbar), Fortschritt, Protokoll, Ergebnistabelle mit Filtern, Vorschaubild, Exporte und „Auswahl als Trainingsdaten“.
+- **Trainieren:** Datensätze & Masken (inkl. Registerdaten aus PV-Map), Neues Training, Dachformen, Modelle (Standard setzen, Kalibrierung zurücknehmen), Aufräumen.
+- **PV-Map:** Adresse, Zugangsschlüssel und nächtlicher Abgleich.
+- **Einstellungen:** Gerät, Schwellenwerte, Batchgröße, parallele Downloads, kWp pro m², Mindestfläche, Größenklassen (Standard: S < 30, M < 100, L < 750, XL ≥ 750 kWp) und die Liste der Bildquellen.
 
 ## PV-Map-Konnektor und Training mit Bestands-PV
 

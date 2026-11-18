@@ -554,9 +554,10 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         path = os.path.join(upload_dir, time.strftime("%Y%m%d-%H%M%S-") + f"dachpotenzial-{len(feats)}.geojson")
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"type": "FeatureCollection", "features": feats}, f, ensure_ascii=False)
-        params = {"input": path, "roof_potential": True, "id_field": "id",
+        params = {"input": path, "roof_potential": body.get("roof_potential", True), "id_field": "id",
                   "sources": body.get("sources") or "auto", "profile": body.get("profile") or cfg().get("profile"),
-                  "save_chips": body.get("save_chips") or "all"}
+                  "save_chips": body.get("save_chips") or "all",
+                  **{k: body[k] for k in ("typology", "age_check", "cross_check") if body.get(k) is not None}}
         job = Job(cfg()["jobs_dir"], "buildings", params)
         mgr.submit(job)
         return job.as_dict()

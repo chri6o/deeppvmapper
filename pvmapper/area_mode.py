@@ -88,6 +88,8 @@ def estimate(p: dict, cfg: dict) -> dict:
 def run(job, cfg: dict):
     from .jobs import open_db
     p = job.params
+    # what to check can be chosen per job (Prüfen → "Was prüfen?"); the settings are the defaults
+    cfg = {**cfg, **{k: p[k] for k in ("typology", "age_check", "cross_check", "roof_potential") if p.get(k) is not None}}
     cat = runtime.catalog(cfg)
     det = runtime.detector(cfg, p.get("profile"))
     prof = det.p

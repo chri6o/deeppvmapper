@@ -12,35 +12,53 @@
 <header>
   <div class="brand">PV-Mapper <span class="sub">Solaranlagen in Luftbildern erkennen</span></div>
   <nav id="tabs">
-    <button data-tab="buildings" class="active">Gebäude prüfen</button>
-    <button data-tab="area">Fläche auswerten</button>
-    <button data-tab="jobs">Aufträge</button>
-    <button data-tab="train">Training</button>
-    <button data-tab="masks">Masken</button>
-    <button data-tab="probe">Probe</button>
-    <button data-tab="sources">Bildquellen</button>
+    <button data-tab="check" class="active">Prüfen</button>
+    <button data-tab="results">Ergebnisse</button>
+    <button data-tab="train">Trainieren</button>
+    <button data-tab="pvmap">PV-Map</button>
     <button data-tab="settings">Einstellungen</button>
   </nav>
+  <div id="jobind" class="jobind hidden" title="Laufender Auftrag – Klick zeigt die Ergebnisse"></div>
   <div id="device" class="device">…</div>
 </header>
 
 <main>
 <section id="panel">
 
-  <!-- ===================================================== Gebäude -->
-  <div class="tab" id="tab-buildings">
-    <h2>Gebäudeliste auf PV prüfen</h2>
-    <p class="hint">Für jedes Gebäude wird das passende offene Luftbild geladen und analysiert. Formate: GeoJSON, CSV (lat/lon oder WKT), GeoPackage, Shapefile oder eine PostGIS-Abfrage.</p>
-    <div id="drop" class="drop">Datei hierher ziehen oder <label class="link">auswählen<input type="file" id="file" hidden></label></div>
-    <details>
-      <summary>… oder Pfad / PostGIS-Datenbank</summary>
-      <label>Pfad oder <code>postgresql://user:pw@host/db</code><input id="b-path" placeholder="/daten/gebaeude.gpkg"></label>
-      <label>SQL (nur PostGIS; Spalten <code>id</code> und <code>wkt</code>/<code>geom</code> in WGS84)
-        <textarea id="b-sql" rows="3" placeholder="SELECT osm_id AS id, ST_AsText(ST_Transform(way,4326)) AS wkt, name FROM planet_osm_polygon WHERE amenity IN ('school','townhall')"></textarea></label>
-      <button id="b-inspect" class="secondary">Einlesen</button>
-    </details>
-    <details id="pm-box" open>
-      <summary>… oder aus PV-Map laden</summary>
+  <!-- ===================================================== Prüfen -->
+  <div class="tab" id="tab-check">
+    <h2>Prüfen</h2>
+    <div class="steps"><span class="step">1</span> <b>Was?</b></div>
+    <div class="seg modes" id="c-modes">
+      <button data-mode="area" class="on" title="Ein Gebiet vollständig auswerten (bisher „Fläche auswerten“)">Gebiet auswerten</button>
+      <button data-mode="pick" title="Gebäude auf der Karte anklicken oder per Polygon übernehmen – mit Dachpotenzial">Gebäude wählen</button>
+      <button data-mode="list" title="Eigene Gebäudeliste oder Gebäude aus PV-Map">Gebäudeliste</button>
+      <button data-mode="point" title="Ein einzelner Ort, Ergebnis sofort (bisher „Probe“)">Einzelner Ort</button>
+    </div>
+
+    <div class="mode" id="mode-area">
+      <p class="hint">Ort oder Kreis über die Suche in der Karte wählen (oben links) oder ein Rechteck/Polygon zeichnen. Das Gebiet wird in Kacheln zerlegt und flächendeckend ausgewertet.</p>
+      <label>Begrenzung (W S O N, WGS84, optional)<input id="a-bbox" placeholder="7.18 50.78 7.24 50.81"></label>
+      <div id="a-est" class="info hidden"></div>
+      <label class="check" title="Lädt die Gebäudeumrisse des Gebiets aus OpenStreetMap: Kacheln ohne Gebäude werden übersprungen, Erkennungen außerhalb der Umrisse (+1,5 m) verworfen, Teilflächen je Gebäude zu Anlagen zusammengefasst."><input type="checkbox" id="a-osm" checked> nur auf Gebäuden aus OpenStreetMap suchen</label>
+      <details><summary>Eigener Gebäudelayer statt OSM</summary>
+        <label>Pfad<input id="a-buildings" placeholder="/daten/gebaeude.gpkg"></label>
+        <label class="check"><input type="checkbox" id="a-only" checked> nur Anlagen auf Gebäuden behalten</label>
+      </details>
+    </div>
+
+    <div class="mode hidden" id="mode-pick">
+      <p class="hint">In der Karte Gebäude anklicken (zweiter Klick nimmt es heraus), oder ein Rechteck/Polygon zeichnen bzw. einen Ort suchen: alle Gebäude darin werden übernommen (bis 4 km²). Umrisse aus OpenStreetMap.</p>
+      <div class="row"><button id="a-pick-poly" class="secondary" title="Alle Gebäude im gezeichneten oder gesuchten Gebiet übernehmen">Gebäude im Gebiet übernehmen</button>
+        <button id="a-pick-view" class="secondary" title="Umrisse im Kartenausschnitt anzeigen (ab Zoomstufe 16)">Umrisse zeigen</button>
+        <button id="a-pick-clear" class="secondary">Auswahl leeren</button></div>
+      <div id="a-pick-info" class="info hidden"></div>
+    </div>
+
+    <div class="mode hidden" id="mode-list">
+      <div id="drop" class="drop">Datei hierher ziehen oder <label class="link">auswählen<input type="file" id="file" hidden></label>
+        <div class="hint">GeoJSON, CSV (lat/lon oder WKT), GeoPackage, Shapefile</div></div>
+      <details id="pm-box"><summary>Gebäude aus PV-Map</summary>
       <div class="grid2">
         <label>Land<select id="pm-cc"><option>DE</option><option>NL</option><option>AT</option><option>FR</option><option>BE</option><option>PL</option><option>IT</option><option>ES</option></select></label>
         <label>Region (NUTS3 oder LAU, Komma)<input id="pm-region" placeholder="DE300 oder DE_11000000"></label>
@@ -48,46 +66,50 @@
         <label>PV laut PV-Map<select id="pm-pv"><option value="any">alle</option><option value="none">ohne bekannte PV</option><option value="known">mit bekannter PV (Abgleich)</option></select></label>
       </div>
       <button id="pm-load" class="secondary">Gebäude abfragen</button>
-    </details>
-    <div id="b-info" class="info hidden"></div>
-    <div class="grid2">
+      </details>
+      <details><summary>Pfad oder PostGIS-Datenbank</summary>
+      <label>Pfad oder <code>postgresql://user:pw@host/db</code><input id="b-path" placeholder="/daten/gebaeude.gpkg"></label>
+      <label>SQL (nur PostGIS; Spalten <code>id</code> und <code>wkt</code>/<code>geom</code> in WGS84)
+        <textarea id="b-sql" rows="3" placeholder="SELECT osm_id AS id, ST_AsText(ST_Transform(way,4326)) AS wkt, name FROM planet_osm_polygon WHERE amenity IN ('school','townhall')"></textarea></label>
+      <button id="b-inspect" class="secondary">Einlesen</button>
+      </details>
+      <div id="b-info" class="info hidden"></div>
       <label>ID-Feld<select id="b-id"><option value="">automatisch</option></select></label>
-      <label>Bildquelle<select id="b-source" class="source-select"></select></label>
-      <label>Modell<select id="b-profile" class="profile-select"></select></label>
-      <label>Vorschaubilder<select id="b-chips"><option value="positive">nur Treffer</option><option value="all">alle</option><option value="none">keine</option></select></label>
     </div>
-    <label class="check" title="Für jedes Gebäude: Dachform, Aufbauten (Gauben, Oberlichter, Technik) mit Schutzabstand, Verschattung, vorhandene PV – und die freie Restfläche mit möglicher Leistung. Braucht Gebäudeumrisse."><input type="checkbox" id="b-roof"> Freie Dachfläche und PV-Potenzial ermitteln</label>
-    <button id="b-start" class="primary" disabled>Prüfung starten</button>
+
+    <div class="mode hidden" id="mode-point">
+      <p class="hint">In die Karte klicken: Das Luftbild wird geladen und sofort ausgewertet – gut zum Ausprobieren von Quellen und Modellen.</p>
+      <label>Radius (m)<input id="p-radius" type="number" value="40" min="10" max="200"></label>
+      <div id="p-out"></div>
+      <div id="p-ds" class="row hidden"><select id="p-target" title="Neuer Datensatz oder an einen bestehenden anhängen"><option value="">neuer Datensatz</option></select>
+        <button id="p-todataset" class="secondary" title="Diesen Ausschnitt mit der erkannten PV als Trainingsbild übernehmen">In Trainingsdatensatz →</button></div>
+    </div>
+
+    <div id="c-what">
+      <div class="steps"><span class="step">2</span> <b>Was prüfen?</b></div>
+      <label class="check locked"><input type="checkbox" checked disabled> PV erkennen (immer)</label>
+      <label class="check"><input type="checkbox" id="c-typ"> Anlagentyp und Leistung je Anlage</label>
+      <label class="check"><input type="checkbox" id="c-age"> Baujahr aus älteren Luftbildern (NRW, NL)</label>
+      <label class="check" id="c-roof-l"><input type="checkbox" id="c-roof"> Freie Dachfläche und PV-Potenzial</label>
+      <div id="c-roof-note" class="hint hidden">Dachpotenzial gibt es je Gebäude: Modus „Gebäude wählen“ (ein Gebiet übernimmt alle Gebäude darin) oder „Gebäudeliste“.</div>
+      <label class="check"><input type="checkbox" id="c-cross"> Gegenprobe mit zweitem Luftbild (NRW, NL)</label>
+      <details><summary>Erweitert: Modell, Bildquelle, Vorschaubilder</summary>
+        <div class="grid2">
+          <label>Modell<select id="c-profile" class="profile-select"></select></label>
+          <label>Bildquelle<select id="c-source" class="source-select"></select></label>
+          <label>Vorschaubilder<select id="c-chips"><option value="positive">nur Treffer</option><option value="all">alle</option><option value="none">keine</option></select></label>
+        </div>
+      </details>
+      <div class="steps"><span class="step">3</span> <b>Starten</b></div>
+      <div id="c-summary" class="hint"></div>
+      <button id="c-start" class="primary" disabled>Prüfung starten</button>
+      <div id="c-msg"></div>
+    </div>
   </div>
 
-  <!-- ===================================================== Fläche -->
-  <div class="tab hidden" id="tab-area">
-    <h2>Fläche flächendeckend auswerten</h2>
-    <p class="hint">Rechteck oder Polygon in der Karte zeichnen (Werkzeuge oben links). Das Gebiet wird in Kacheln zerlegt und vollständig analysiert.</p>
-    <label>Begrenzung (W S O N, WGS84)<input id="a-bbox" placeholder="13.30 52.45 13.36 52.48"></label>
-    <div id="a-est" class="info hidden"></div>
-    <div class="grid2">
-      <label>Bildquelle<select id="a-source" class="source-select"></select></label>
-      <label>Modell<select id="a-profile" class="profile-select"></select></label>
-    </div>
-    <label class="check" title="Lädt die Gebäudeumrisse des Gebiets aus OpenStreetMap: Kacheln ohne Gebäude werden übersprungen, Erkennungen außerhalb der Umrisse (+1,5 m) verworfen, Teilflächen je Gebäude zu Anlagen zusammengefasst."><input type="checkbox" id="a-osm" checked> nur auf Gebäuden aus OpenStreetMap suchen</label>
-    <label>… oder eigener Gebäudelayer (Pfad, ersetzt OSM)<input id="a-buildings" placeholder="/daten/gebaeude.gpkg"></label>
-    <label class="check"><input type="checkbox" id="a-only" checked> nur Anlagen auf Gebäuden behalten</label>
-    <button id="a-start" class="primary">Auswertung starten</button>
-    <details id="a-roofbox" open><summary>Dachpotenzial für ausgewählte Gebäude</summary>
-      <p class="hint">Werkzeug <b>☝</b> in der Karte (links, unter den Zeichenwerkzeugen) einschalten: Ein Klick wählt ein Gebäude aus OpenStreetMap, ein zweiter nimmt es wieder heraus; ein dann gezeichnetes Polygon oder Rechteck übernimmt alle Gebäude darin. Geprüft werden PV, Bauform, Baujahr und die freie Dachfläche mit Potenzial.</p>
-      <label class="check"><input type="checkbox" id="a-pick"> Gebäude wählen (wie Werkzeug ☝)</label>
-      <div class="row"><button id="a-pick-poly" class="secondary" title="Alle OSM-Gebäude im gezeichneten Polygon übernehmen">Gebäude im Polygon übernehmen</button>
-        <button id="a-pick-view" class="secondary" title="Umrisse im Kartenausschnitt anzeigen (ab Zoomstufe 16)">Umrisse im Ausschnitt zeigen</button>
-        <button id="a-pick-clear" class="secondary">Auswahl leeren</button></div>
-      <div id="a-pick-info" class="info hidden"></div>
-      <button id="a-roof-start" class="primary" disabled>Dachpotenzial prüfen</button>
-    </details>
-  </div>
-
-  <!-- ===================================================== Jobs -->
-  <div class="tab hidden" id="tab-jobs">
-    <h2>Aufträge</h2>
+  <!-- ===================================================== Ergebnisse -->
+  <div class="tab hidden" id="tab-results">
+    <h2>Ergebnisse</h2>
     <div id="job-list"></div>
     <div id="job-detail" class="hidden">
       <h3 id="jd-title"></h3>
@@ -102,67 +124,38 @@
       <div class="row filters">
         <select id="jd-status"><option value="">alle</option><option value="pv" selected>mit PV</option><option value="kein_pv">ohne PV</option><option value="fehler">Fehler</option><option value="nacharbeit">Nacharbeit: verpasst / unvollständig</option></select>
         <select id="jd-class"><option value="">alle Größen</option></select>
-        <button id="jd-reload" class="secondary">Aktualisieren</button>
-        <span class="sp"></span>
-        <span id="jd-selinfo" class="hint"></span>
-        <button id="jd-selrand" class="secondary" title="Zufällige Auswahl aus der angezeigten Liste">Zufällig wählen</button>
-        <input id="jd-seln" type="number" value="40" min="1" style="width:5em" title="Anzahl">
-        <select id="jd-target" title="Neuer Datensatz oder an einen bestehenden anhängen (iteratives Training)"><option value="">neuer Datensatz</option></select>
-        <button id="jd-todataset" class="primary" title="Ausgewählte Gebäude als Trainingsdatensatz anlegen und im Reiter „Masken“ prüfen">Als Trainingsdatensatz →</button>
+        <button id="jd-reload" class="secondary small" title="Ergebnisse neu laden">↻</button>
       </div>
+      <details id="jd-trainbox" class="filters"><summary>Auswahl als Trainingsdaten</summary>
+        <p class="hint">Zeilen in der Tabelle ankreuzen oder zufällig wählen, dann als neuen Datensatz anlegen oder an einen bestehenden anhängen. Weiter geht es unter Trainieren → Datensätze &amp; Masken.</p>
+        <div class="row">
+          <input id="jd-seln" type="number" value="40" min="1" style="width:5em" title="Anzahl">
+          <button id="jd-selrand" class="secondary small" title="Zufällige Auswahl aus der angezeigten Liste">zufällig wählen</button>
+          <span id="jd-selinfo" class="hint" style="margin:0 6px"></span>
+        </div>
+        <div class="row">
+          <select id="jd-target" title="Neuer Datensatz oder an einen bestehenden anhängen (iteratives Training)" style="flex:1"><option value="">neuer Datensatz</option></select>
+          <button id="jd-todataset" class="primary" title="Ausgewählte als Trainingsdatensatz anlegen">Als Trainingsdatensatz →</button>
+        </div>
+      </details>
       <div id="jd-report"></div>
       <div class="tablewrap"><table id="jd-table"></table></div>
       <details><summary>Protokoll</summary><pre id="jd-log"></pre></details>
     </div>
   </div>
 
-  <!-- ===================================================== Training -->
+  <!-- ===================================================== Trainieren -->
   <div class="tab hidden" id="tab-train">
-    <h2>Modell mit Bestands-PV trainieren</h2>
-    <p class="hint">PV-Map liefert Gebäude mit bekannter PV (Register, Meldungen, Erkennungsebenen) und ohne PV – geschichtet nach Gebäudeart und Anlagengröße. Ein Viertel bleibt zur Bewertung zurück; gespeichert wird das neue Modell nur, wenn es dort besser abschneidet.</p>
-    <div class="grid2">
-      <label>Land<select id="t-cc"><option>DE</option><option>NL</option><option>AT</option><option>FR</option><option>BE</option></select></label>
-      <label>Region (NUTS-Code, z. B. DEA22 Kreis, DEA2 Bezirk, DEA Land; optional)<input id="t-region" placeholder="ganzes Land"></label>
-      <label>Gebäudeart<select id="t-sub"><option value="">alle</option><option value="Education">Bildung</option><option value="Health">Gesundheit</option><option value="Offices">Verwaltung</option><option value="Sport">Sport</option><option value="Other">Sonstige</option></select></label>
-      <label>Größenklassen (kWp-Grenzen)<input id="t-bins" value="10,30,100,750"></label>
-      <label>Positive je Schicht<input id="t-per" type="number" value="100"></label>
-      <label>Negative je Schicht<input id="t-neg" type="number" value="100"></label>
-      <label>Ausgangsmodell<select id="t-profile" class="profile-select"></select></label>
-      <label>Epochen<input id="t-epochs" type="number" value="6"></label>
-      <label>Name des neuen Modells<input id="t-name" placeholder="z. B. de-schulen"></label>
-      <label>Bildquelle<select id="t-source" class="source-select"></select></label>
+    <h2>Trainieren</h2>
+    <div class="seg subs" id="t-subs">
+      <button data-sub="data" class="on">Datensätze &amp; Masken</button>
+      <button data-sub="new">Neues Training</button>
+      <button data-sub="roof">Dachformen</button>
+      <button data-sub="models">Modelle</button>
+      <button data-sub="clean">Aufräumen</button>
     </div>
-    <label>PV-Leistung laut Register ab (kWp, optional)<input id="t-minkwp" type="number" placeholder="alle"></label>
-    <label class="check"><input type="checkbox" id="t-secure" checked> nur sichere PV-Angaben (Register Stufe A/B, Meldungen)</label>
-    <label class="check"><input type="checkbox" id="t-posonly" checked> Datensatz nur mit PV-Gebäuden (Negativbeispiele lädt das Training selbst)</label>
-    <label class="check"><input type="checkbox" id="t-weak" checked> „keine PV bekannt“ als schwache Negative nutzen</label>
-    <details><summary>… oder eigene Labels (GeoJSON mit <code>label</code> 0/1)</summary><label>Pfad<input id="t-file" placeholder="/daten/labels.geojson"></label></details>
-    <div class="row"><button id="t-strata" class="secondary">Verfügbare Beispiele anzeigen</button><button id="t-prepare" class="secondary">Nur Datensatz anlegen (zum Maskieren)</button><button id="t-start" class="primary">Training starten</button></div>
-    <div id="t-out"></div>
-    <details id="t-roof"><summary>Dachformen-Modell trainieren (Labels aus LoD2, NRW)</summary>
-      <p class="hint">Lernt Flach-, Pult-, Sattel-, Walmdach und komplexe Dächer aus dem Luftbild. Die Labels liefern die amtlichen 3D-Gebäudemodelle (LoD2) von Geobasis NRW – keine Handarbeit. Gebiet in der Karte zeichnen (Rechteck/Polygon) oder unten eintragen; ein gemischtes Gebiet von 2–5 km² (Stadt und Dorf) liefert genug Beispiele aller Formen. Das Modell hilft vor allem außerhalb von NRW.</p>
-      <div class="grid2">
-        <label>Begrenzung (W S O N, leer = gezeichnetes Gebiet)<input id="r-bbox" placeholder="7.18 50.78 7.24 50.81"></label>
-        <label>Beispiele je Dachform<input id="r-per" type="number" value="300"></label>
-        <label>Epochen<input id="r-epochs" type="number" value="8"></label>
-        <label>Name<input id="r-name" placeholder="dach-nrw"></label>
-      </div>
-      <button id="r-start" class="primary">Dachformen-Modell trainieren</button>
-      <div id="r-out"></div>
-    </details>
-    <details id="t-clean"><summary>Alte Trainingsdaten löschen</summary>
-      <p class="hint">Löscht Datensätze und Luftbilder früherer Trainings- und KI-Aufträge. Gespeicherte eigene Modelle bleiben erhalten.
-        Von Hand gezeichnete Masken gehen mit dem Datensatz verloren.</p>
-      <div id="t-clean-list"></div>
-      <div class="row"><button id="t-clean-go" class="secondary">Ausgewählte löschen</button></div>
-      <div id="t-clean-msg"></div>
-    </details>
-  </div>
-
-  <!-- ===================================================== Masken -->
-  <div class="tab hidden" id="tab-masks">
-    <h2>Trainingsdatensatz und Masken</h2>
-    <p class="hint">Modulflächen einzeichnen oder Vorschläge prüfen. Das Bild öffnet sich rechts; mit <kbd>→</kbd> geht es zum nächsten.</p>
+    <div class="sub" id="sub-data">
+      <p class="hint">Modulflächen einzeichnen oder Vorschläge prüfen. Das Bild öffnet sich rechts; mit <kbd>→</kbd> geht es zum nächsten. Neue Datensätze entstehen aus Ergebnissen („Als Trainingsdatensatz“), aus einem einzelnen Ort oder unter „Neues Training“.</p>
     <label>Datensatz<select id="m-ds"></select></label>
     <div id="m-stats" class="stats"></div>
     <div class="row filters2">
@@ -203,27 +196,80 @@
       <div id="m-calmsg"></div>
     </details>
     <div id="m-msg"></div>
-  </div>
-
-  <!-- ===================================================== Probe -->
-  <div class="tab hidden" id="tab-probe">
-    <h2>Probe an einem Ort</h2>
-    <p class="hint">In die Karte klicken: Luftbild wird geladen und analysiert. Gut, um Quellen und Modelle je Land zu vergleichen.</p>
-    <div class="grid2">
-      <label>Bildquelle<select id="p-source" class="source-select"></select></label>
-      <label>Modell<select id="p-profile" class="profile-select"></select></label>
-      <label>Radius (m)<input id="p-radius" type="number" value="40" min="10" max="200"></label>
     </div>
-    <div id="p-out"></div>
-    <div id="p-ds" class="row hidden"><select id="p-target" title="Neuer Datensatz oder an einen bestehenden anhängen"><option value="">neuer Datensatz</option></select>
-      <button id="p-todataset" class="secondary" title="Diesen Ausschnitt mit der erkannten PV als Trainingsbild übernehmen">In Trainingsdatensatz →</button></div>
+    <div class="sub hidden" id="sub-new">
+      <p class="hint">PV-Map liefert Gebäude mit bekannter PV (Register, Meldungen, Erkennungsebenen) und ohne PV – geschichtet nach Gebäudeart und Anlagengröße. Ein Viertel bleibt zur Bewertung zurück; gespeichert wird das neue Modell nur, wenn es dort besser abschneidet. Nachtraining mit eigenen Masken: unter „Datensätze &amp; Masken“.</p>
+    <div class="grid2">
+      <label>Land<select id="t-cc"><option>DE</option><option>NL</option><option>AT</option><option>FR</option><option>BE</option></select></label>
+      <label>Region (NUTS-Code, z. B. DEA22 Kreis, DEA2 Bezirk, DEA Land; optional)<input id="t-region" placeholder="ganzes Land"></label>
+      <label>Gebäudeart<select id="t-sub"><option value="">alle</option><option value="Education">Bildung</option><option value="Health">Gesundheit</option><option value="Offices">Verwaltung</option><option value="Sport">Sport</option><option value="Other">Sonstige</option></select></label>
+      <label>Größenklassen (kWp-Grenzen)<input id="t-bins" value="10,30,100,750"></label>
+      <label>Positive je Schicht<input id="t-per" type="number" value="100"></label>
+      <label>Negative je Schicht<input id="t-neg" type="number" value="100"></label>
+      <label>Ausgangsmodell<select id="t-profile" class="profile-select"></select></label>
+      <label>Epochen<input id="t-epochs" type="number" value="6"></label>
+      <label>Name des neuen Modells<input id="t-name" placeholder="z. B. de-schulen"></label>
+      <label>Bildquelle<select id="t-source" class="source-select"></select></label>
+    </div>
+    <label>PV-Leistung laut Register ab (kWp, optional)<input id="t-minkwp" type="number" placeholder="alle"></label>
+    <label class="check"><input type="checkbox" id="t-secure" checked> nur sichere PV-Angaben (Register Stufe A/B, Meldungen)</label>
+    <label class="check"><input type="checkbox" id="t-posonly" checked> Datensatz nur mit PV-Gebäuden (Negativbeispiele lädt das Training selbst)</label>
+    <label class="check"><input type="checkbox" id="t-weak" checked> „keine PV bekannt“ als schwache Negative nutzen</label>
+    <details><summary>… oder eigene Labels (GeoJSON mit <code>label</code> 0/1)</summary><label>Pfad<input id="t-file" placeholder="/daten/labels.geojson"></label></details>
+    <div class="row"><button id="t-strata" class="secondary">Verfügbare Beispiele anzeigen</button><button id="t-prepare" class="secondary">Nur Datensatz anlegen (zum Maskieren)</button><button id="t-start" class="primary">Training starten</button></div>
+    <div id="t-out"></div>
+    </div>
+    <div class="sub hidden" id="sub-roof">
+      <p class="hint">Lernt Flach-, Pult-, Sattel-, Walmdach und komplexe Dächer aus dem Luftbild. Die Labels liefern die amtlichen 3D-Gebäudemodelle (LoD2) von Geobasis NRW – keine Handarbeit. Gebiet in der Karte zeichnen (Rechteck/Polygon) oder unten eintragen; ein gemischtes Gebiet von 2–5 km² (Stadt und Dorf) liefert genug Beispiele aller Formen. Das Modell hilft vor allem außerhalb von NRW.</p>
+      <div class="grid2">
+        <label>Begrenzung (W S O N, leer = gezeichnetes Gebiet)<input id="r-bbox" placeholder="7.18 50.78 7.24 50.81"></label>
+        <label>Beispiele je Dachform<input id="r-per" type="number" value="300"></label>
+        <label>Epochen<input id="r-epochs" type="number" value="8"></label>
+        <label>Name<input id="r-name" placeholder="dach-nrw"></label>
+      </div>
+      <button id="r-start" class="primary">Dachformen-Modell trainieren</button>
+      <div id="r-out"></div>
+    </div>
+    <div class="sub hidden" id="sub-models">
+      <p class="hint">Eigene Modelle aus dem Training, ihre Leistungskalibrierung und die Dachformen-Modelle. Das Standard-Modell gilt für alle Prüfungen, solange dort nichts anderes gewählt ist.</p>
+      <div id="t-models"></div>
+    </div>
+    <div class="sub hidden" id="sub-clean">
+      <p class="hint">Löscht Datensätze und Luftbilder früherer Trainings- und KI-Aufträge. Gespeicherte eigene Modelle bleiben erhalten.
+        Von Hand gezeichnete Masken gehen mit dem Datensatz verloren.</p>
+      <div id="t-clean-list"></div>
+      <div class="row"><button id="t-clean-go" class="secondary">Ausgewählte löschen</button></div>
+      <div id="t-clean-msg"></div>
+    </div>
   </div>
 
-  <!-- ===================================================== Quellen -->
-  <div class="tab hidden" id="tab-sources">
-    <h2>Offene Luftbildquellen</h2>
-    <p class="hint">Klick auf eine Quelle zeigt sie als Ebene in der Karte. Eigene Dienste lassen sich über eine zusätzliche YAML-Datei einbinden (Einstellungen).</p>
-    <div class="tablewrap"><table id="src-table"></table></div>
+  <!-- ===================================================== PV-Map -->
+  <div class="tab hidden" id="tab-pvmap">
+    <h2>PV-Map</h2>
+    <div class="grid2">
+      <label>PV-Map-Adresse<input id="s-pmurl" placeholder="https://pv-map.solar"></label>
+      <label>PV-Map-API-Token<input id="s-pmtoken" type="password" placeholder="pvm_…"></label>
+    </div>
+    <h3>Nächtlicher Abgleich</h3>
+    <p class="hint">PV-Mapper holt im Zeitfenster die nächsten Gebäude aus der PV-Map-Arbeitsliste (zuerst nie geprüfte), prüft sie und
+      sendet jedes Ergebnis zurück – auch „keine PV“. Bereits geprüfte Gebäude werden nach der Wiederholfrist nur neu gerechnet, wenn es ein
+      neues Luftbild gibt. Was in PV-Map sichtbar ist, stellst du dort unter Verwaltung → Datenquellen ein.</p>
+    <div class="grid2">
+      <label>Nachtbetrieb<select id="s-sync-on"><option value="false">aus</option><option value="true">an</option></select></label>
+      <label>Gebäude (Filter)<input id="s-sync-filter" placeholder="cc=DE&amp;nuts3=DEA2&amp;sub=Education"></label>
+      <label>von (Uhrzeit)<input id="s-sync-start" placeholder="22:00"></label>
+      <label>bis (Uhrzeit)<input id="s-sync-end" placeholder="06:00"></label>
+      <label>Modell<select id="s-sync-profile" class="profile-select"></select></label>
+      <label>Luftbild erneut ansehen nach (Tagen)<input id="s-sync-recheck" type="number" placeholder="365"></label>
+      <label>„Bestätigt“ ab Score (mit Gegenprobe)<input id="s-sync-score" type="number" step="0.01" placeholder="0.9"></label>
+      <label>Anlagentyp und kWp-Spanne an PV-Map senden<select id="s-sync-typ"><option value="true">ja – PV-Map ab Migration 137</option><option value="false">nein</option></select></label>
+      <label>Geprüfte Masken an PV-Map senden<select id="s-sync-reviews"><option value="true">ja</option><option value="false">nein</option></select></label>
+    </div>
+    <div class="row"><button id="s-sync-status" class="secondary">Arbeitsliste anzeigen</button>
+      <button id="s-sync-now" class="secondary">Jetzt abgleichen (2 Stunden)</button></div>
+    <div id="s-sync-out"></div>
+    <div class="row"><button id="s-save-pm" class="primary">Speichern</button></div>
+    <div id="s-msg-pm"></div>
   </div>
 
   <!-- ===================================================== Einstellungen -->
@@ -255,32 +301,16 @@
       <label>Auftragsordner<input id="s-jobsdir"></label>
       <label>Zusätzliche Quellen (YAML-Pfad)<input id="s-extra"></label>
       <label>Kachelgröße Flächenmodus (px)<input id="s-cell" type="number"></label>
-      <label>PV-Map-Adresse<input id="s-pmurl" placeholder="https://pv-map.solar"></label>
-      <label>PV-Map-API-Token<input id="s-pmtoken" type="password" placeholder="pvm_…"></label>
       <label>Anthropic-API-Schlüssel (Claude)<input id="s-anthkey" type="password" placeholder="sk-ant-…"></label>
       <label>Claude-Modell<input id="s-anthmodel" placeholder="claude-sonnet-5-5"></label>
       <label>OpenAI-API-Schlüssel (ChatGPT)<input id="s-oaikey" type="password" placeholder="sk-…"></label>
       <label>ChatGPT-Modell<input id="s-oaimodel" placeholder="gpt-5.1"></label>
       <label>Zusatzhinweis an die KI (optional)<input id="s-aihint" placeholder="z. B. Module meist schwarz auf dunklem Bitumendach"></label>
     </div>
-    <h3>PV-Map-Abgleich (Nachtbetrieb)</h3>
-    <p class="hint">PV-Mapper holt im Zeitfenster die nächsten Gebäude aus der PV-Map-Arbeitsliste (zuerst nie geprüfte), prüft sie und
-      sendet jedes Ergebnis zurück – auch „keine PV“. Bereits geprüfte Gebäude werden nach der Wiederholfrist nur neu gerechnet, wenn es ein
-      neues Luftbild gibt. Was in PV-Map sichtbar ist, stellst du dort unter Verwaltung → Datenquellen ein.</p>
-    <div class="grid2">
-      <label>Nachtbetrieb<select id="s-sync-on"><option value="false">aus</option><option value="true">an</option></select></label>
-      <label>Gebäude (Filter)<input id="s-sync-filter" placeholder="cc=DE&amp;nuts3=DEA2&amp;sub=Education"></label>
-      <label>von (Uhrzeit)<input id="s-sync-start" placeholder="22:00"></label>
-      <label>bis (Uhrzeit)<input id="s-sync-end" placeholder="06:00"></label>
-      <label>Modell<select id="s-sync-profile" class="profile-select"></select></label>
-      <label>Luftbild erneut ansehen nach (Tagen)<input id="s-sync-recheck" type="number" placeholder="365"></label>
-      <label>„Bestätigt“ ab Score (mit Gegenprobe)<input id="s-sync-score" type="number" step="0.01" placeholder="0.9"></label>
-      <label>Anlagentyp und kWp-Spanne an PV-Map senden<select id="s-sync-typ"><option value="true">ja – PV-Map ab Migration 137</option><option value="false">nein</option></select></label>
-      <label>Geprüfte Masken an PV-Map senden<select id="s-sync-reviews"><option value="true">ja</option><option value="false">nein</option></select></label>
-    </div>
-    <div class="row"><button id="s-sync-status" class="secondary">Arbeitsliste anzeigen</button>
-      <button id="s-sync-now" class="secondary">Jetzt abgleichen (2 Stunden)</button></div>
-    <div id="s-sync-out"></div>
+    <details><summary>Offene Luftbildquellen</summary>
+      <p class="hint">Klick auf eine Quelle zeigt sie als Ebene in der Karte. Eigene Dienste über eine zusätzliche YAML-Datei (oben).</p>
+      <div class="tablewrap"><table id="src-table"></table></div>
+    </details>
     <h3>Größenklassen</h3>
     <p class="hint">Obergrenze in kWp (exklusiv). Leere Obergrenze = offen.</p>
     <table id="s-classes"></table>
@@ -339,6 +369,8 @@
       <b>Ablauf</b> Enter speichert und öffnet das nächste Bild · ← → blättern · X überspringen · L Label · M Modell · K KI · R Registerdaten · Cmd/Strg+Z rückgängig · Esc abbrechen
     </div>
   </div>
+  <div id="maphint" class="maphint hidden"></div>
+  <div id="toast" class="toast hidden"></div>
   <div id="chipview" class="hidden"><button id="chipclose">×</button><img id="chipimg" alt=""><div id="chipcap"></div></div>
 </section>
 </main>

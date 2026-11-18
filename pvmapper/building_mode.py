@@ -156,6 +156,8 @@ def _summarise(b, polys, footprint, search, win, src, prob, cfg):
 
 def run(job, cfg: dict):
     p = job.params
+    # what to check can be chosen per job (Prüfen → "Was prüfen?"); the settings are the defaults
+    cfg = {**cfg, **{k: p[k] for k in ("typology", "age_check", "cross_check", "roof_potential") if p.get(k) is not None}}
     src_filter = runtime.source_filter(cfg, p.get("sources"))
     cat = runtime.catalog(cfg)
     det = runtime.detector(cfg, p.get("profile"))
