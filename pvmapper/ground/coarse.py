@@ -218,7 +218,7 @@ def build(conn, bbox, start: str, end: str, worldcover: bool):
 def run_tiles(conn, todo: list[dict], start: str, end: str, d: str, cfg: dict, job, state: dict, save_state):
     """batch jobs, at most `ground_openeo_parallel` at a time; restartable: openEO job ids are kept in state"""
     par = max(1, min(int(cfg.get("ground_openeo_parallel", 2)), 2))
-    wc = bool(cfg.get("ground_scan_worldcover", True))
+    wc = bool(cfg.get("ground_scan_worldcover", True)) if state.get("worldcover") is None else bool(state["worldcover"])
     running: dict[str, object] = {}
     queue = [t for t in todo if not os.path.exists(os.path.join(d, t["id"] + ".tif"))]
     for tid, jid in list(state.get("running", {}).items()):          # resume after a restart
@@ -231,6 +231,7 @@ def run_tiles(conn, todo: list[dict], start: str, end: str, d: str, cfg: dict, j
             cube = build(conn, t["bbox"], start, end, wc)
             bj = cube.create_job(title=f"pvmapper {t['id']} {start}..{end}", out_format="GTiff")
             bj.start()
+            state.setdefault("started", {})[t["id"]] = time.time()
             running[t["id"]] = bj
             state.setdefault("running", {})[t["id"]] = bj.job_id
             save_state()
@@ -249,6 +250,8 @@ def run_tiles(conn, todo: list[dict], start: str, end: str, d: str, cfg: dict, j
                     pass
                 running.pop(tid)
                 state["running"].pop(tid, None)
+                if tid in state.get("started", {}):
+                    state.setdefault("seconds", {})[tid] = round(time.time() - state["started"][tid])
                 state.setdefault("done", []).append(tid)
                 job.step(kacheln=1)
                 save_state()
@@ -326,7 +329,8 @@ def confidence(con, region: str):
 # -- job ---------------------------------------------------------------------------------------------------------------
 
 def run(job, cfg: dict):
-    """job kind 'ground_scan': params region, month ('YYYY-MM', default last month), max_tiles (test runs), dry_run"""
+    """job kind 'ground_scan': params region, month ('YYYY-MM', default last month), tiles / max_tiles (test runs), dry_run,
+    tile_km and worldcover (override the settings; results go to their own folder), measure_only (time and credits only)"""
     p = job.params
     key = p.get("region") or cfg.get("ground_pilot") or "pl-wielkopolskie"
     reg = inventory.regions(cfg)[key]
@@ -340,7 +344,9 @@ def run(job, cfg: dict):
     if not os.path.exists(poly_path):
         raise RuntimeError("Erst den Ausgangsbestand dieser Region laden (Auftrag ground_inventory).")
     region_geom = inventory.read_poly(open(poly_path).read())
-    ts = tiles(region_geom, float(cfg.get("ground_tile_km", 20)))
+    km = float(p.get("tile_km") or cfg.get("ground_tile_km", 20))
+    wc_on = bool(cfg.get("ground_scan_worldcover", True)) if p.get("worldcover") is None else bool(p["worldcover"])
+    ts = tiles(region_geom, km)
     if p.get("tiles"):
         ts = [t for t in ts if t["id"] in set(p["tiles"])]
     if p.get("max_tiles"):
@@ -351,10 +357,13 @@ def run(job, cfg: dict):
             f"geschätzt {de(km2 * CREDITS_PER_KM2)} openEO-Credits")
     if p.get("dry_run"):
         return
-    d = os.path.join(base, "scan", month)
+    variant = "" if (km == float(cfg.get("ground_tile_km", 20)) and wc_on == bool(cfg.get("ground_scan_worldcover", True))) \
+        else f"km{int(km)}{'' if wc_on else '-ohne-wc'}"
+    d = os.path.join(base, "scan", month, variant) if variant else os.path.join(base, "scan", month)
     os.makedirs(d, exist_ok=True)
     sp = os.path.join(d, "state.json")
     state = json.load(open(sp)) if os.path.exists(sp) else {}
+    state["worldcover"] = wc_on
 
     def save_state():
         json.dump(state, open(sp, "w"))
@@ -362,6 +371,13 @@ def run(job, cfg: dict):
     job.done = len(state.get("done", []))
     conn = connect(cfg, job.log)
     run_tiles(conn, ts, start, end, d, cfg, job, state, save_state)
+    if p.get("measure_only"):                                       # test of settings: time and credits, nothing stored
+        for t in ts:
+            sec, cr = (state.get("seconds") or {}).get(t["id"]), (state.get("credits") or {}).get(t["id"])
+            job.log(f"Messung {t['id']} ({km:.0f} km, WorldCover {'an' if wc_on else 'aus'}, {t['km2']:.0f} km²): "
+                    f"{(sec or 0) / 60:.1f} min, {cr if cr is not None else '?'} Credits"
+                    + (f", {cr / t['km2'] * 1000:.1f} Credits je 1.000 km²" if isinstance(cr, (int, float)) and t["km2"] else ""))
+        return
     con = store.connect(cfg)
     store.migrate(con)
     pbf = next((os.path.join(base, f) for f in sorted(os.listdir(base)) if f.endswith(".osm.pbf")

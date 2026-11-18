@@ -534,3 +534,25 @@ def test_capacity_uses_calibration_only_when_switched_on(tmp_path):
     assert (e["kwp_min"], e["kwp_max"], e["methode"]) == (8500, 9500, "zaunflaeche_kalibriert")
     assert capacity.estimate({**row, "typ": "tracker"}, c, t, cal)["methode"] == "zaunflaeche"          # own type: start values
     assert capacity.estimate({**row, "baujahr_schaetzung": 2015}, c, t, cal)["methode"] == "zaunflaeche"  # bin not calibrated
+
+
+def test_scan_measure_only_variant(tmp_path, monkeypatch):
+    from pvmapper.jobs import Job, runner
+    base = tmp_path / "_ground" / "pl-wielkopolskie"
+    base.mkdir(parents=True)
+    (base / "region.poly").write_text("r\n1\n  16.9 52.0\n  16.9 52.4\n  17.5 52.4\n  17.5 52.0\nEND\nEND\n")
+    seen = {}
+
+    def fake_tiles(conn, todo, start, end, d, cfg, job, state, save_state):
+        seen.update(d=d, n=len(todo), wc=state["worldcover"], ids=[t["id"] for t in todo])
+        for t in todo:
+            state.setdefault("seconds", {})[t["id"]] = 240
+            state.setdefault("credits", {})[t["id"]] = 10
+    monkeypatch.setattr(coarse, "connect", lambda cfg, log=print: object())
+    monkeypatch.setattr(coarse, "run_tiles", fake_tiles)
+    monkeypatch.setattr(coarse.store, "connect", lambda cfg: (_ for _ in ()).throw(AssertionError("no DB in measure mode")))
+    cfg = {**CFG, "jobs_dir": str(tmp_path)}
+    job = Job(str(tmp_path), "ground_scan", {"month": "2026-09", "tile_km": 40, "worldcover": False, "max_tiles": 1, "measure_only": True})
+    runner("ground_scan")(job, cfg)
+    assert seen["d"].endswith(os.path.join("2026-09", "km40-ohne-wc")) and seen["wc"] is False and seen["n"] == 1
+    assert seen["ids"][0].startswith("E") and any("4.0 min, 10 Credits" in ln for ln in job.log_lines)
