@@ -111,3 +111,24 @@ def test_patch_threshold_for_small_installations():
     assert training.patch_pv_threshold_px(10_000, res) == pytest.approx(300)     # 100 m² array: 3 m² per patch as before
     assert training.patch_pv_threshold_px(400, res) == pytest.approx(200)        # 4 m² array: half of it (2 m²) is enough
     assert training.patch_pv_threshold_px(40, res) == pytest.approx(50)          # tiny: at least 0.5 m²
+
+
+def test_reviewed_items_accept_checked(tmp_path):
+    import json
+    from pvmapper import training
+    def item(name, **kw):
+        m = {"id": name, "name": name, "label": 1, "label_kind": "det_pv", "status": "open", "has_mask": True,
+             "mask_source": "model", "val": False, **kw}
+        (tmp_path / f"{name}.json").write_text(json.dumps(m))
+    item("big_ok", check="bestaetigt", kwp_detected=80, pv_share=0.4)
+    item("big_single", check="nur_aktuell", kwp_detected=80)
+    item("small_ok", check="bestaetigt", kwp_detected=10)
+    item("odd_share", check="bestaetigt", kwp_detected=90, pv_share=1.4)
+    item("reviewed", status="done", label_override=0, kwp_detected=5)
+    got, n = training.reviewed_items(str(tmp_path))
+    assert [m["id"] for m in got] == ["reviewed"] and n == 4 and got[0]["label"] == 0
+    got, n = training.reviewed_items(str(tmp_path), accept_checked={"min_kwp": 30})
+    ids = {m["id"] for m in got}
+    assert ids == {"big_ok", "reviewed"} and n == 3
+    big = next(m for m in got if m["id"] == "big_ok")
+    assert big["label"] == 1 and big["has_mask"] is False and big["_accepted"]

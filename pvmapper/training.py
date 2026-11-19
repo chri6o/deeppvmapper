@@ -139,7 +139,10 @@ def _from_check_job(job, cfg) -> list[dict]:
     if src.kind == "area":
         return _from_area_job(job, src, ids, cfg)
     con = sqlite3.connect(os.path.join(src.dir, "results.sqlite"))
-    q = "SELECT id,status,kwp_est,size_class,props,footprint_wkt,pv_wkt,lon,lat FROM results WHERE status != 'fehler'"
+    cols = {r[1] for r in con.execute("PRAGMA table_info(results)")}
+    chk_col = '"check"' if "check" in cols else "NULL"             # older runs have no cross-check column
+    q = (f"SELECT id,status,kwp_est,size_class,props,footprint_wkt,pv_wkt,lon,lat,{chk_col},pv_area_m2,footprint_m2 "
+         "FROM results WHERE status != 'fehler'")
     rows = con.execute(q).fetchall()
     con.close()
     if ids:
@@ -148,7 +151,7 @@ def _from_check_job(job, cfg) -> list[dict]:
     from shapely import wkt as shp_wkt
     from shapely.geometry import Point, mapping
     feats = []
-    for bid, status, kwp, size_class, props, fp_wkt, pv_wkt, lon, lat in rows:
+    for bid, status, kwp, size_class, props, fp_wkt, pv_wkt, lon, lat, chk, area, fpa in rows:
         pr = json.loads(props or "{}")
         geom = mapping(shp_wkt.loads(fp_wkt)) if fp_wkt else mapping(Point(lon, lat))
         pos = status == "pv"
@@ -157,7 +160,8 @@ def _from_check_job(job, cfg) -> list[dict]:
             "sub": pr.get("sub") or "?", "size_bin": size_class or ("none" if not pos else "?"),
             "pv_kwp": pr.get("pv_kwp"), "kwp_detected": kwp,
             "pv_geometry": mapping(shp_wkt.loads(pv_wkt)) if pv_wkt else None, "mask_source": "model",
-            "source_job": src.id, "source_model": src.params.get("profile") or cfg.get("profile"), "nacharbeit": _nacharbeit(status, kwp, pr, None)}})
+            "source_job": src.id, "source_model": src.params.get("profile") or cfg.get("profile"), "nacharbeit": _nacharbeit(status, kwp, pr, None),
+            "extra": {"check": chk, "pv_share": round(area / fpa, 3) if area and fpa else None}}})
     job.log(f"{len(feats)} Gebäude aus Prüfauftrag {src.id} übernommen "
             f"({sum(f['properties']['label'] for f in feats)} mit erkannter PV).")
     return feats
@@ -279,6 +283,15 @@ def load_arrays(ds_dir, meta):
     if meta.get("has_mask"):
         mask = np.asarray(Image.open(os.path.join(ds_dir, meta["name"] + ".mask.png"))) > 0
     return img, fp, mask
+
+
+def _suggestion_mask(ds_dir, meta):
+    """the detector's own PV outline of an accepted (unreviewed) item – only to pick the patches that show the PV, so the
+    building-level label 'PV' is not put on roof parts without modules; never a training target"""
+    if not meta.get("_accepted"):
+        return None
+    p = os.path.join(meta.get("_dir") or ds_dir, meta["name"] + ".mask.png")
+    return (np.asarray(Image.open(p)) > 0) if os.path.isfile(p) else None
 
 
 def load_neg(ds_dir, meta):
@@ -547,7 +560,8 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
                 job.log(f"Epoche {ep + 1}/{epochs}: {k}/{len(order)} Gebäude")
             if m["id"] not in cache:
                 img, fp, mask = load_arrays(ds_dir, m)
-                spots = _patches_for(det, img, fp, mask, max_patches, size)
+                sel = mask if mask is not None else _suggestion_mask(ds_dir, m)
+                spots = _patches_for(det, img, fp, sel, max_patches, size)
                 cache[m["id"]] = np.stack([img[y:y + size, x:x + size] for x, y in spots])
                 if mask is not None and m.get("has_mask"):
                     # patch labels from the mask: ≥ 3 m² of modules → PV, none → no PV, a sliver in between → ignored
@@ -660,6 +674,31 @@ def train_segmenter(job, det, ds_dir, train, epochs, lr, neg_weight: float = 3.0
 # job
 # ---------------------------------------------------------------------------
 
+def reviewed_items(ds_dir, ai_mode="reviewed", accept_checked=None):
+    """items of a dataset usable for training: reviewed ones; detector output only once a person saved it.
+    accept_checked={"min_kwp": 30, "max_share": 1.0}: also take *unreviewed* detections that were confirmed in a second,
+    older aerial image (check 'bestaetigt') and are at least min_kwp – positives for the classifier only (the mask is the
+    model's own suggestion and is not used). Returns (items, number left out as unreviewed)."""
+    out, n_unreviewed = [], 0
+    acc = accept_checked if isinstance(accept_checked, dict) else ({} if accept_checked else None)
+    for m in annotate.list_items(ds_dir):
+        if m.get("status") == "skip":
+            continue
+        if str(m.get("label_kind") or "").startswith("det_") and m.get("status") != "done":
+            ok = (acc is not None and m.get("label_kind") == "det_pv" and m.get("check") == "bestaetigt"
+                  and (m.get("kwp_detected") or 0) >= float(acc.get("min_kwp", 30))
+                  and (m.get("pv_share") is None or m["pv_share"] <= float(acc.get("max_share", 1.0))))
+            if not ok:
+                n_unreviewed += 1                                # detector output must be checked by a person
+                continue
+            out.append(dict(m, label=1, has_mask=False, _accepted=True))
+            continue
+        m = dict(m, label=annotate.effective_label(m))
+        m["has_mask"] = annotate.usable_mask(m, ai_mode)
+        out.append(m)
+    return out, n_unreviewed
+
+
 def run(job, cfg: dict):
     p = job.params
     t0 = time.time()
@@ -673,17 +712,22 @@ def run(job, cfg: dict):
         src = Job.load(cfg["jobs_dir"], p["dataset_from"])
         ds_dir = annotate.ds_dir(src.dir)
         ai_mode = p.get("ai_masks", "reviewed")
-        metas = []
-        n_unreviewed = 0
-        for m in annotate.list_items(ds_dir):
-            if m.get("status") == "skip":
-                continue
-            if str(m.get("label_kind") or "").startswith("det_") and m.get("status") != "done":
-                n_unreviewed += 1                                # detector output must be checked by a person
-                continue
-            m = dict(m, label=annotate.effective_label(m))
-            m["has_mask"] = annotate.usable_mask(m, ai_mode)
-            metas.append(m)
+        metas, n_unreviewed = reviewed_items(ds_dir, ai_mode)
+        extra = p.get("dataset_extra") or []
+        for xid in ([extra] if isinstance(extra, str) else extra):   # mix in further datasets (e.g. large PV)
+            xsrc = Job.load(cfg["jobs_dir"], xid)
+            xdir = annotate.ds_dir(xsrc.dir)
+            xm, xn = reviewed_items(xdir, ai_mode, accept_checked=p.get("accept_checked"))
+            for m in xm:
+                m["_dir"] = xdir
+            n_unreviewed += xn
+            have = {m["id"] for m in metas}
+            xm = [m for m in xm if m["id"] not in have]
+            n_acc = sum(1 for m in xm if m.get("_accepted"))
+            job.log(f"Untergemischt aus {xsrc.id} ({xsrc.params.get('name') or ''}): {len(xm)} Gebäude, "
+                    f"davon {sum(m['label'] for m in xm)} mit PV"
+                    + (f", {n_acc} ungeprüft übernommen (in zwei Luftbildern erkannt)" if n_acc else "") + ".")
+            metas += xm
         if not any(m["label"] == 0 for m in metas) and p.get("auto_negatives", True):
             # positives-only dataset (for masking): fetch negatives with the same filters for training
             from . import pvmap
