@@ -499,7 +499,18 @@ def _patches_for(det, img, fp, mask, max_k, size):
     return [(x, y) for _, _, x, y in cand[:max_k]] or [grid[0]]
 
 
-def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patches):
+def patch_pv_threshold_px(mask_total_px: float, res_m: float) -> float:
+    """pixels of modules from which a patch counts as 'PV': 3 m², but for small installations half of their area (at least
+    0.5 m²) – otherwise a 4 m² array split over two patches gave a PV building whose patches all said 'no PV' (19.11.2026:
+    trainings on small installations collapsed to 'never PV')"""
+    px3 = 3.0 / res_m ** 2
+    return min(px3, max(0.5 / res_m ** 2, 0.5 * mask_total_px))
+
+
+def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patches, hard_weight: float = 0.5,
+                     evaluate=None):
+    """fine-tunes the classifier; with `evaluate` (→ F1 on the validation buildings) the weights are checked after every
+    epoch and the best state is kept (epoch 0 = base model), so a training never ends worse than it started"""
     model = det.cls
     size = det.p.patch_px
     for name, prm in model.named_parameters():                     # fine-tune the top of the network only
@@ -516,6 +527,12 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
     n_hard = sum(1 for m in train if m.get("has_neg"))
     if n_hard:
         job.log(f"{n_hard} Gebäude mit „Kein PV“-Markierungen (Gauben, Fenster …) – als harte Gegenbeispiele")
+    import copy as _copy
+    best = None
+    if evaluate is not None:
+        f1_0 = evaluate()
+        best = (f1_0, 0, _copy.deepcopy(model.state_dict()))
+        job.log(f"Vor dem Training: F1 {f1_0:.3f}")
     for ep in range(epochs):
         model.train()
         for mod in model.modules():                               # keep BatchNorm statistics of the base model
@@ -534,7 +551,7 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
                 cache[m["id"]] = np.stack([img[y:y + size, x:x + size] for x, y in spots])
                 if mask is not None and m.get("has_mask"):
                     # patch labels from the mask: ≥ 3 m² of modules → PV, none → no PV, a sliver in between → ignored
-                    px3 = 3.0 / det.p.resolution_m ** 2
+                    px3 = patch_pv_threshold_px(float(mask.sum()), det.p.resolution_m)
                     n_pv = [int(mask[y:y + size, x:x + size].sum()) for x, y in spots]
                     plab[m["id"]] = (np.array([1.0 if n >= px3 else 0.0 for n in n_pv], np.float32),
                                      np.array([1.0 if (n >= px3 or n == 0) else 0.0 for n in n_pv], np.float32))
@@ -564,14 +581,24 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
                 lh = model((xh - det.mean) / det.std)
                 lh = lh[0] if isinstance(lh, tuple) else lh
                 zh = lh[:, 1] - lh[:, 0] if det.p.cls_outputs == 2 else lh[:, 0]
-                loss = loss + 1.5 * F.binary_cross_entropy_with_logits(zh.max(), torch.zeros((), device=zh.device))
+                loss = loss + hard_weight * F.binary_cross_entropy_with_logits(zh.max(), torch.zeros((), device=zh.device))
             opt.zero_grad()
             loss.backward()
             opt.step()
             sched.step()
             losses.append(float(loss.detach()))
         job.log(f"Epoche {ep + 1}/{epochs}: Verlust {np.mean(losses):.4f}")
+        if evaluate is not None:
+            model.eval()
+            f1 = evaluate()
+            job.log(f"Epoche {ep + 1}/{epochs}: F1 auf der Validierung {f1:.3f}" + (" (bisher bester Stand)" if f1 > best[0] else ""))
+            if f1 > best[0]:
+                best = (f1, ep + 1, _copy.deepcopy(model.state_dict()))
         job.step(1)
+    if best is not None:
+        model.load_state_dict(best[2])
+        job.log("Klassifikator: " + (f"bester Stand nach Epoche {best[1]} (F1 {best[0]:.3f}) behalten" if best[1]
+                                     else f"keine Epoche war besser als das Ausgangsmodell (F1 {best[0]:.3f}) – Klassifikator unverändert"))
     model.eval()
     for prm in model.parameters():
         prm.requires_grad = False
@@ -747,8 +774,16 @@ def run(job, cfg: dict):
                 "vermutlich nicht registrierte PV).")
     job.step(len(weak) if weak else 0)
 
+    def _eval_f1():
+        keep = det.cls_threshold
+        det.cls_threshold = 0.0
+        sc = score_buildings(det, ds_dir, val, None, "")
+        det.cls_threshold = keep
+        return tune_threshold(val, sc, min_px)[1] or 0.0
     train_classifier(job, det, ds_dir, train, epochs, float(p.get("lr", 1e-4)),
-                     float(p.get("weak_weight", 0.3)), int(p.get("max_patches", 12)))
+                     float(p.get("weak_weight", 0.3)), int(p.get("max_patches", 12)),
+                     hard_weight=float(p.get("hard_weight", 0.5)),
+                     evaluate=_eval_f1 if p.get("keep_best", True) else None)
     if do_seg:
         train_segmenter(job, det, ds_dir, train, seg_epochs, float(p.get("seg_lr", 5e-5)))
     else:

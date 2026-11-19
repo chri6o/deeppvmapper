@@ -5,6 +5,7 @@ import os
 import sqlite3
 
 import numpy as np
+import pytest
 from shapely.geometry import box
 
 from pvmapper import building_mode, config, geo, review, annotate
@@ -102,3 +103,11 @@ def _f1(ms, pred):
     p = tp / (tp + fp) if tp + fp else 0
     r = tp / (tp + fn) if tp + fn else 0
     return {"f1": 2 * p * r / (p + r) if p + r else 0}
+
+
+def test_patch_threshold_for_small_installations():
+    from pvmapper import training
+    res = 0.1                                                      # 1 px = 0.01 m²
+    assert training.patch_pv_threshold_px(10_000, res) == pytest.approx(300)     # 100 m² array: 3 m² per patch as before
+    assert training.patch_pv_threshold_px(400, res) == pytest.approx(200)        # 4 m² array: half of it (2 m²) is enough
+    assert training.patch_pv_threshold_px(40, res) == pytest.approx(50)          # tiny: at least 0.5 m²
