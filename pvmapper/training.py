@@ -785,7 +785,20 @@ def run(job, cfg: dict):
                      hard_weight=float(p.get("hard_weight", 0.5)),
                      evaluate=_eval_f1 if p.get("keep_best", True) else None)
     if do_seg:
+        # the segmentation decides the area (min_pv_area_m2) and so whether small installations count at all: keep it only if
+        # the whole detection gets better (19.11.2026: classifier F1 0.73, after segmentation training 0.52)
+        import copy as _copy
+        seg_before = _copy.deepcopy(det.seg.state_dict())
+        f1_before = _eval_f1() if p.get("keep_best", True) else None
         train_segmenter(job, det, ds_dir, train, seg_epochs, float(p.get("seg_lr", 5e-5)))
+        if f1_before is not None:
+            f1_after = _eval_f1()
+            if f1_after < f1_before:
+                det.seg.load_state_dict(seg_before)
+                job.log(f"Segmentierung: F1 nach dem Training {f1_after:.3f} statt {f1_before:.3f} – Segmentierung des "
+                        "Ausgangsmodells behalten")
+            else:
+                job.log(f"Segmentierung: F1 {f1_before:.3f} → {f1_after:.3f}, neue Segmentierung behalten")
     else:
         job.log(f"Segmentierung bleibt unverändert ({n_mask} Gebäude mit PV-Polygonen; nötig "
                 f"{p.get('min_seg_samples', 30)}).")
@@ -821,7 +834,7 @@ def run(job, cfg: dict):
               "vorher": base_metrics, "nachher": new_metrics, "abweichungen": diffs, "minutes": round((time.time() - t0) / 60, 1)}
     with open(os.path.join(job.dir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
-    better = f1 > base_f1 + 0.005                                # a tie is no reason for a new model
+    better = f1 > base_f1 + float(p.get("min_gain", 0.005))      # a tie is no reason for a new model
     if p.get("calibrate_kwp"):                                   # register capacities → fill factors (optional, see calibration.py)
         from . import calibration
         n_reg = calibration.ensure_register(ds_dir, cfg, p["calibrate_kwp"])
