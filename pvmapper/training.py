@@ -879,6 +879,7 @@ def run(job, cfg: dict):
                      float(p.get("weak_weight", 0.3)), int(p.get("max_patches", 12)),
                      hard_weight=float(p.get("hard_weight", 0.5)),
                      evaluate=_eval_f1 if p.get("keep_best", True) else None)
+    seg_outline = False
     if do_seg:
         # the segmentation decides the area (min_pv_area_m2) and so whether small installations count at all: keep it only if
         # the whole detection gets better (19.11.2026: classifier F1 0.73, after segmentation training 0.52)
@@ -895,12 +896,19 @@ def run(job, cfg: dict):
         job.log("Segmentierung nachher (Validierung): " + _seg_report_text(r1))
         if f1_before is not None:
             f1_after = _eval_f1()
-            if f1_after < f1_before:
+            # better outlines (kWp estimate) are worth a loss in F1 within the noise of the validation set (19.11.2026: training on
+            # images with PV only gave IoU 0.71 → 0.77 and area 0.82 → 1.04 at F1 0.736 instead of 0.739)
+            tol = float(p.get("seg_f1_tolerance", 0.01))
+            outline_better = (r0["iou"] is not None and r1["iou"] is not None and r1["iou"] >= r0["iou"] + 0.03
+                              and (r1["in_kein_pv"] is None or r0["in_kein_pv"] is None or r1["in_kein_pv"] <= r0["in_kein_pv"] + 0.02))
+            seg_outline = f1_after < f1_before and outline_better and f1_after >= f1_before - tol
+            if f1_after < f1_before and not seg_outline:
                 det.seg.load_state_dict(seg_before)
                 job.log(f"Segmentierung: F1 nach dem Training {f1_after:.3f} statt {f1_before:.3f} – Segmentierung des "
                         "Ausgangsmodells behalten")
             else:
-                job.log(f"Segmentierung: F1 {f1_before:.3f} → {f1_after:.3f}, neue Segmentierung behalten")
+                job.log(f"Segmentierung: F1 {f1_before:.3f} → {f1_after:.3f}, neue Segmentierung behalten"
+                        + (" (Umrisse deutlich besser, F1 im Rauschen)" if seg_outline else ""))
     else:
         job.log(f"Segmentierung bleibt unverändert ({n_mask} Gebäude mit PV-Polygonen; nötig "
                 f"{p.get('min_seg_samples', 30)}).")
@@ -937,6 +945,9 @@ def run(job, cfg: dict):
     with open(os.path.join(job.dir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
     better = f1 > base_f1 + float(p.get("min_gain", 0.005))      # a tie is no reason for a new model
+    if not better and seg_outline and f1 >= base_f1 - float(p.get("seg_f1_tolerance", 0.01)):
+        better = True                                           # … but clearly better outlines are (kWp estimate)
+        job.log("Neues Modell: Erkennung gleich gut, Umrisse der Module deutlich genauer – wird gespeichert.")
     if p.get("calibrate_kwp"):                                   # register capacities → fill factors (optional, see calibration.py)
         from . import calibration
         n_reg = calibration.ensure_register(ds_dir, cfg, p["calibrate_kwp"])

@@ -17,6 +17,8 @@ import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+import numpy as np
+
 from shapely import wkt as shp_wkt
 from shapely.geometry import mapping
 from shapely.ops import unary_union
@@ -82,6 +84,21 @@ def apply_roof(row: dict, img, mask, win, fp, props: dict, res_m: float, cfg: di
     r["free"] = roofs.to_wgs84(free, win)
     r["obstacles"] = roofs.to_wgs84(obst, win)
     row["roof"] = json.dumps(r, ensure_ascii=False, separators=(",", ":"))
+
+
+def north_share(mask, fp):
+    """share of the detected PV pixels north of the footprint's centre (image rows run north → south): small installations face
+    south, a small detection mostly on the north half is often a dormer or window (PV-Map review hint, #384)"""
+    if mask is None or fp is None:
+        return None
+    mask, fp = np.asarray(mask).astype(bool), np.asarray(fp).astype(bool)
+    if mask.ndim != 2 or fp.shape != mask.shape:
+        return None
+    m = mask & fp
+    if not m.any():
+        return None
+    fy = np.nonzero(fp)[0].mean()
+    return round(float((np.nonzero(m)[0] < fy).mean()), 3)
 
 
 def roof_filter(mask, fp, win, shape, cfg: dict) -> tuple:
@@ -427,7 +444,8 @@ def run(job, cfg: dict):
                                 "max_prob": row["max_prob"], "check": check, "source": src.id,
                                 "source2": src2.id if src2 is not None else None, "img_hash": b.props.get("_img_hash"),
                                 "polygons": mapping(shp_wkt.loads(row["pv_wkt"])) if row["pv_wkt"] else None,
-                                "n_installations": row["n_installations"], "size_class": row["size_class"]})
+                                "n_installations": row["n_installations"], "size_class": row["size_class"],
+                                **({"north_share": ns} if (ns := north_share(mask, fp)) is not None else {})})
                 if push_typology and feats:
                     pending[-1].update(kwp_low=row["kwp_low"], kwp_high=row["kwp_high"], layout=row["layout"],
                                        installations=[{**f["properties"], "geometry": f["geometry"]} for f in feats])

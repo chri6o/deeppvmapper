@@ -189,3 +189,11 @@ def test_shape_features():
     g = he.shape_features(t.astype(bool), fp, 0.1)
     assert g["rect_largest"] < 0.7 and g["north_share"] == 1
     assert he.shape_features(np.zeros((200, 200), bool), fp, 0.1) == {}
+
+
+def test_north_share():
+    import numpy as np
+    from pvmapper import building_mode as bm
+    fp = np.zeros((100, 100), bool); fp[10:90, 10:90] = True
+    m = np.zeros((100, 100), bool); m[15:30, 20:40] = True
+    assert bm.north_share(m, fp) == 1.0 and bm.north_share(None, fp) is None and bm.north_share(np.zeros_like(m), fp) is None
