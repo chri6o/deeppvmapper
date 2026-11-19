@@ -154,3 +154,25 @@ def test_nir_stats():
     s = he.nir_stats(nir, fp, sel, np.full((10, 10, 3), 80, np.uint8))
     assert s["nir_pv"] == 40 and s["nir_roof"] == 200 and s["nir_ratio"] == 0.2 and s["nir_vis"] == 0.5
     assert he.nir_stats(nir, fp, np.array([], int)) == {}
+
+
+def test_seg_report(tmp_path):
+    import numpy as np, torch
+    from PIL import Image
+    from types import SimpleNamespace
+    from pvmapper import training
+    img = np.zeros((64, 64, 3), np.uint8); fp = np.zeros((64, 64), np.uint8); fp[8:56, 8:56] = 255
+    mask = np.zeros((64, 64), np.uint8); mask[10:30, 10:30] = 255
+    Image.fromarray(img).save(tmp_path / "a.jpg"); Image.fromarray(fp).save(tmp_path / "a.fp.png"); Image.fromarray(mask).save(tmp_path / "a.mask.png")
+
+    class Det:                                                     # draws the left half of every patch as PV
+        p = SimpleNamespace(patch_px=32); batch_size = 4
+        _to_tensor = staticmethod(lambda ps: torch.zeros((len(ps), 3, 32, 32)))
+        _pad = staticmethod(lambda x, n: x)
+        _bucket = staticmethod(lambda k, cap: k)
+        @staticmethod
+        def _segment(x):
+            m = torch.zeros((x.shape[0], 32, 32), dtype=torch.bool); m[:, :, :16] = True
+            return m
+    r = training.seg_report(Det(), str(tmp_path), [{"name": "a", "has_mask": True}])
+    assert r["iou"] is not None and 0 < r["iou"] < 1 and r["flaeche"] > 1 and r["in_kein_pv"] is None

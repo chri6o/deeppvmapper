@@ -618,10 +618,53 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
         prm.requires_grad = False
 
 
-def train_segmenter(job, det, ds_dir, train, epochs, lr, neg_weight: float = 3.0):
+@torch.no_grad()
+def seg_report(det, ds_dir, metas) -> dict:
+    """how the segmentation draws PV on buildings with a reviewed mask: IoU and predicted ÷ true module area inside the
+    footprint, and the pixels it marks inside areas marked 'no PV' (19.11.2026: every fine-tuning of the segmentation so
+    far dropped the F1 from 0.78 to 0.26 – this shows whether it draws too little, too much or the wrong thing)"""
+    size = det.p.patch_px
+    inter = union = pred_px = true_px = neg_hit = neg_px = 0
+    for m in metas:
+        if not (m.get("has_mask") or m.get("has_neg")):
+            continue
+        img, fp, mask = load_arrays(ds_dir, m)
+        neg = load_neg(ds_dir, m)
+        h, w = img.shape[:2]
+        pred = np.zeros((h, w), bool)
+        grid = inference.patch_grid(w, h, size, 0.0)
+        for b in range(0, len(grid), det.batch_size):
+            xy = grid[b:b + det.batch_size]
+            x = det._to_tensor([img[y:y + size, x0:x0 + size] for x0, y in xy])
+            n = x.shape[0]
+            seg = det._segment(det._pad(x, det._bucket(n, det.batch_size))).cpu().numpy()[:n]
+            for (x0, y), sm in zip(xy, seg):
+                hh, ww = min(size, h - y), min(size, w - x0)
+                pred[y:y + hh, x0:x0 + ww] |= sm[:hh, :ww]
+        pred &= fp
+        if mask is not None and m.get("has_mask"):
+            t = mask & fp
+            inter += int((pred & t).sum()); union += int((pred | t).sum()); pred_px += int(pred.sum()); true_px += int(t.sum())
+        if neg is not None:
+            neg_hit += int((pred & neg).sum()); neg_px += int(neg.sum())
+    return {"iou": round(inter / union, 3) if union else None, "flaeche": round(pred_px / true_px, 2) if true_px else None,
+            "in_kein_pv": round(neg_hit / neg_px, 3) if neg_px else None}
+
+
+def _seg_report_text(r):
+    return (f"IoU {r['iou']}, gezeichnete ÷ echte Modulfläche {r['flaeche']}, "
+            f"Anteil der „Kein PV“-Flächen als PV gezeichnet {r['in_kein_pv']}")
+
+
+def train_segmenter(job, det, ds_dir, train, epochs, lr, neg_weight: float = 3.0, pos_weight="auto", neg_only_share: float | None = None):
     """Fine-tunes the segmentation head on drawn/AI/PV-Map masks. Pixels marked 'no PV' (dormers, skylights …)
-    get `neg_weight`; images with only 'no PV' marks (no PV mask) are trained on those pixels alone."""
+    get `neg_weight`; images with only 'no PV' marks (no PV mask) are trained on those pixels alone.
+    pos_weight: weight of module pixels ("auto": background ÷ module pixels of the patch, at most 10 – small installations
+    are a few hundred of 65,000 pixels, unweighted the head learns to draw nothing); neg_only_share: at most this many images
+    with only 'no PV' marks per image with a PV mask and epoch (None = all)."""
     with_mask = [m for m in train if m.get("has_mask") or m.get("has_neg")]
+    pos_imgs = [m for m in with_mask if m.get("has_mask")]
+    neg_imgs = [m for m in with_mask if not m.get("has_mask")]
     model = det.seg
     size = det.p.patch_px
     for name, prm in model.named_parameters():
@@ -634,6 +677,9 @@ def train_segmenter(job, det, ds_dir, train, epochs, lr, neg_weight: float = 3.0
             if isinstance(mod, nn.BatchNorm2d):
                 mod.eval()
         losses = []
+        if neg_only_share is not None:
+            random.shuffle(neg_imgs)
+            with_mask = pos_imgs + neg_imgs[:int(round(neg_only_share * len(pos_imgs)))]
         random.shuffle(with_mask)
         for m in with_mask:
             job.check_cancel()
@@ -651,7 +697,12 @@ def train_segmenter(job, det, ds_dir, train, epochs, lr, neg_weight: float = 3.0
                     continue
                 xi = det._to_tensor([img[y0:y0 + size, x0:x0 + size]])
                 yi = torch.from_numpy(mask[y0:y0 + size, x0:x0 + size].astype(np.float32))[None, None].to(xi.device)
-                wi = torch.from_numpy(wmap[y0:y0 + size, x0:x0 + size])[None, None].to(xi.device)
+                wp = wmap[y0:y0 + size, x0:x0 + size].copy()
+                mp = mask[y0:y0 + size, x0:x0 + size]
+                if known and mp.any() and pos_weight:
+                    pw = min(10.0, (~mp).sum() / mp.sum()) if pos_weight == "auto" else float(pos_weight)
+                    wp[mp] = max(1.0, pw)
+                wi = torch.from_numpy(wp)[None, None].to(xi.device)
                 if random.random() < 0.5:
                     xi, yi, wi = xi.flip(-1), yi.flip(-1), wi.flip(-1)
                 if random.random() < 0.5:
@@ -834,7 +885,14 @@ def run(job, cfg: dict):
         import copy as _copy
         seg_before = _copy.deepcopy(det.seg.state_dict())
         f1_before = _eval_f1() if p.get("keep_best", True) else None
-        train_segmenter(job, det, ds_dir, train, seg_epochs, float(p.get("seg_lr", 5e-5)))
+        r0 = seg_report(det, ds_dir, val)
+        job.log("Segmentierung vorher (Validierung): " + _seg_report_text(r0))
+        nos = p.get("seg_neg_only_share", 1.0)
+        train_segmenter(job, det, ds_dir, train, seg_epochs, float(p.get("seg_lr", 5e-5)),
+                        neg_weight=float(p.get("seg_neg_weight", 1.5)), pos_weight=p.get("seg_pos_weight", "auto"),
+                        neg_only_share=None if nos is None else float(nos))
+        r1 = seg_report(det, ds_dir, val)
+        job.log("Segmentierung nachher (Validierung): " + _seg_report_text(r1))
         if f1_before is not None:
             f1_after = _eval_f1()
             if f1_after < f1_before:
