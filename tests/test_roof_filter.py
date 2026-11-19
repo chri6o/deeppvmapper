@@ -132,3 +132,14 @@ def test_reviewed_items_accept_checked(tmp_path):
     assert ids == {"big_ok", "reviewed"} and n == 3
     big = next(m for m in got if m["id"] == "big_ok")
     assert big["label"] == 1 and big["has_mask"] is False and big["_accepted"]
+
+
+def test_history_eval_helpers():
+    import numpy as np
+    from pvmapper import history_eval as he
+    tl = [(2010, None, 0.2, "a"), (2016, None, 0.1, "b"), (2020, None, 0.1, "c"), (2024, None, 0.1, "d")]
+    assert [t[0] for t in he.pick_years(tl, 2024, 2)] == [2016, 2020]
+    probs = np.array([0.1, 0.5, 0.9])
+    pix = [np.array([1, 2]), np.array([2, 3, 4]), np.array([4, 5])]
+    n = he.npx_by_threshold(probs, pix)
+    assert n["0.2"] == 4 and n["0.85"] == 2 and n["0.95"] == 0

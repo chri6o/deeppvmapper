@@ -153,6 +153,8 @@ def runner(kind: str):
         from .ground.register import run
     elif kind == "ground_history":
         from .ground.history import run
+    elif kind == "history_eval":
+        from .history_eval import run
     else:
         raise ValueError(f"unknown job kind {kind}")
     return run
