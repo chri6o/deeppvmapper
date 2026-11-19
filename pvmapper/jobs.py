@@ -157,6 +157,8 @@ def runner(kind: str):
         from .history_eval import run
     elif kind == "nir_eval":
         from .history_eval import run_nir as run
+    elif kind == "shape_eval":
+        from .history_eval import run_shape as run
     else:
         raise ValueError(f"unknown job kind {kind}")
     return run

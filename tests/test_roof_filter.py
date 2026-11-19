@@ -176,3 +176,16 @@ def test_seg_report(tmp_path):
             return m
     r = training.seg_report(Det(), str(tmp_path), [{"name": "a", "has_mask": True}])
     assert r["iou"] is not None and 0 < r["iou"] < 1 and r["flaeche"] > 1 and r["in_kein_pv"] is None
+
+
+def test_shape_features():
+    import numpy as np, cv2
+    from pvmapper import history_eval as he
+    fp = np.zeros((200, 200), bool); fp[20:180, 20:180] = True
+    m = np.zeros((200, 200), np.uint8); m[120:160, 40:120] = 1                 # a rectangle on the south half
+    f = he.shape_features(m.astype(bool), fp, 0.1)
+    assert f["n_comp"] == 1 and f["rect_largest"] > 0.95 and f["north_share"] == 0 and abs(f["area_m2"] - 32) < 0.5
+    t = np.zeros((200, 200), np.uint8); cv2.fillPoly(t, [np.array([[40, 30], [140, 30], [40, 90]])], 1)   # triangle, north
+    g = he.shape_features(t.astype(bool), fp, 0.1)
+    assert g["rect_largest"] < 0.7 and g["north_share"] == 1
+    assert he.shape_features(np.zeros((200, 200), bool), fp, 0.1) == {}

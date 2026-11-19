@@ -191,3 +191,63 @@ def run_nir(job, cfg: dict):
                    "thresholds": THRESHOLDS, "items": out}, f)
     job.counters["gebaeude"] = len(out)
     job.log(f"Fertig: {len(out)} Gebäude mit Infrarot (nir_eval.json).")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Test: shape rules for uncertain detections (Christoph 19.11.2026): small old installations face south (south side of the
+# building), many small unconnected pieces speak against PV, small triangular "installations" do not exist.
+
+def shape_features(sel_mask, fp, res_m: float) -> dict:
+    """geometry of the detected PV inside the footprint (image rows run north → south)"""
+    import cv2
+    m = (sel_mask & fp).astype(np.uint8)
+    px_m2 = res_m ** 2
+    n, lab, st, cen = cv2.connectedComponentsWithStats(m, 8)
+    comps = [i for i in range(1, n) if st[i, cv2.CC_STAT_AREA] * px_m2 >= 0.5]
+    if not comps:
+        return {}
+    areas = [float(st[i, cv2.CC_STAT_AREA] * px_m2) for i in comps]
+    rect = []
+    for i in comps:
+        cs, _ = cv2.findContours((lab == i).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        c = max(cs, key=cv2.contourArea)
+        (_, _), (w, h), _ = cv2.minAreaRect(c)
+        rect.append(float(st[i, cv2.CC_STAT_AREA]) / max(1.0, w * h))
+    ys = np.nonzero(fp)[0]
+    fy = float(ys.mean()) if len(ys) else m.shape[0] / 2
+    py = np.nonzero(m)[0]
+    total = float(sum(areas))
+    big = int(np.argmax(areas))
+    return {"area_m2": round(total, 1), "n_comp": len(comps), "largest_share": round(areas[big] / total, 3),
+            "rect_largest": round(rect[big], 3), "rect_mean": round(float(np.average(rect, weights=areas)), 3),
+            "north_share": round(float((py < fy).mean()), 3)}
+
+
+def run_shape(job, cfg: dict):
+    p = job.params
+    from .jobs import Job
+    det = runtime.detector(cfg, p.get("profile") or cfg["profile"])
+    src_job = Job.load(cfg["jobs_dir"], p.get("dataset_from") or "20261118-222231-56f6")
+    ds = annotate.ds_dir(src_job.dir)
+    metas, _ = training.reviewed_items(ds)
+    job.total = len(metas)
+    job.done = 0
+    out = {}
+    for m in metas:
+        job.check_cancel()
+        img, fp, _ = training.load_arrays(ds, m)
+        probs, pix = training.score_buildings(det, ds, [m])[m["id"]]
+        rec = {"label": int(m["label"]), "kwp": m.get("pv_kwp"), "val": bool(m.get("val")), "sub": m.get("sub"),
+               "cause": (m.get("review") or {}).get("cause"), "by_threshold": {}}
+        for t in THRESHOLDS:
+            sel = [pix[i] for i in np.flatnonzero(probs >= t)]
+            mk = np.zeros(fp.size, bool)
+            if sel:
+                mk[np.unique(np.concatenate(sel))] = True
+            rec["by_threshold"][str(t)] = shape_features(mk.reshape(fp.shape), fp, det.p.resolution_m)
+        out[m["id"]] = rec
+        job.step(1)
+    with open(os.path.join(job.dir, "shape_eval.json"), "w", encoding="utf-8") as f:
+        json.dump({"min_pv_area_m2": float(cfg["min_pv_area_m2"]), "thresholds": THRESHOLDS, "items": out}, f)
+    job.counters["gebaeude"] = len(out)
+    job.log(f"Fertig: {len(out)} Gebäude (shape_eval.json).")
