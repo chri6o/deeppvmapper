@@ -1608,7 +1608,7 @@ $("#m-train").onclick = async () => {
   if (!M.ds) return;
   try { const j = await api("/api/jobs", { json: { kind: "train", params: { dataset_from: M.ds, profile: $("#m-profile").value, epochs: +$("#m-epochs").value,
       name: $("#m-name").value.trim() || $("#m-name").placeholder || null, ai_masks: $("#m-aiuse").value, min_seg_samples: 20,
-      calibrate_kwp: $("#m-cal").checked ? $("#m-caluse").value : null } } });
+      calibrate_kwp: $("#m-cal").checked ? $("#m-caluse").value : null, channels: $("#m-nir").checked ? "rgbn" : "rgb", min_gain: 0.02 } } });
     started(j); }
   catch (e) { $("#m-msg").innerHTML = `<div class="info err">${esc(e.message)}</div>`; }
 };
