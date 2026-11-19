@@ -143,3 +143,14 @@ def test_history_eval_helpers():
     pix = [np.array([1, 2]), np.array([2, 3, 4]), np.array([4, 5])]
     n = he.npx_by_threshold(probs, pix)
     assert n["0.2"] == 4 and n["0.85"] == 2 and n["0.95"] == 0
+
+
+def test_nir_stats():
+    import numpy as np
+    from pvmapper import history_eval as he
+    nir = np.full((10, 10), 200, np.uint8); nir[:5] = 40          # modules dark in the infrared, roof bright
+    fp = np.ones((10, 10), bool)
+    sel = np.arange(50)
+    s = he.nir_stats(nir, fp, sel, np.full((10, 10, 3), 80, np.uint8))
+    assert s["nir_pv"] == 40 and s["nir_roof"] == 200 and s["nir_ratio"] == 0.2 and s["nir_vis"] == 0.5
+    assert he.nir_stats(nir, fp, np.array([], int)) == {}

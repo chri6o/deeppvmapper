@@ -107,3 +107,87 @@ def run(job, cfg: dict):
     job.counters["gebaeude"] = len(out)
     job.log(f"Fertig: {len(out)} Gebäude, im Mittel {np.mean(yrs) if yrs else 0:.1f} ältere Bilder je Gebäude "
             "(history_eval.json).")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Test: near infrared as a check of the detections (19.11.2026). Modules absorb NIR (dark), tiles, slate, bitumen and vegetation
+# reflect it; the NIR brightness inside the detected PV is compared with the rest of the roof.
+
+def nir_stats(nir, fp, sel, rgb=None) -> dict:
+    """NIR (0–255) inside the detected pixels `sel` (flat indices) and on the rest of the footprint"""
+    flat = nir.reshape(-1).astype(np.float32)
+    fpi = np.flatnonzero(fp.reshape(-1))
+    if len(sel) == 0 or len(fpi) == 0:
+        return {}
+    rest = np.setdiff1d(fpi, sel, assume_unique=False)
+    pv = float(np.median(flat[sel]))
+    roof = float(np.median(flat[rest])) if len(rest) >= 50 else None
+    out = {"nir_pv": round(pv, 1), "nir_roof": round(roof, 1) if roof is not None else None,
+           "nir_ratio": round(pv / roof, 3) if roof else None, "n_px": int(len(sel))}
+    if rgb is not None:                                          # brightness in the visible image for comparison
+        g = rgb.reshape(-1, 3).astype(np.float32).mean(axis=1)
+        out["vis_pv"] = round(float(np.median(g[sel])), 1)
+        out["nir_vis"] = round(pv / max(1.0, out["vis_pv"]), 3)
+    return out
+
+
+def run_nir(job, cfg: dict):
+    p = job.params
+    from dataclasses import replace
+    from .jobs import Job
+    det = runtime.detector(cfg, p.get("profile") or cfg["profile"])
+    src_job = Job.load(cfg["jobs_dir"], p.get("dataset_from") or "20261118-222231-56f6")
+    ds = annotate.ds_dir(src_job.dir)
+    metas, _ = training.reviewed_items(ds)
+    cat = runtime.catalog(cfg)
+    layer = p.get("nir_layer", "nw_dop_nir")
+    work = os.path.join(job.dir, "nir")
+    os.makedirs(work, exist_ok=True)
+    job.log(f"{len(metas)} geprüfte Gebäude; Infrarot aus Ebene {layer}")
+
+    def fetch(m):
+        base = cat.sources.get(m["source"])
+        if base is None or not base.url:
+            return m, None
+        crs, minx, miny, maxx, maxy, w, h = m["window"]
+        win = geo.Window(crs, minx, miny, maxx, maxy, int(w), int(h))
+        path = os.path.join(work, m["name"] + ".png")
+        if os.path.isfile(path):
+            return m, np.asarray(Image.open(path).convert("L"))
+        try:
+            ns = replace(base, id=base.id + "-nir", layers=layer)
+            ns.user_agent = base.user_agent
+            img = ns.fetch(win)
+        except Exception:                                        # noqa: BLE001
+            return m, None
+        if img.shape[:2] != (int(h), int(w)):
+            return m, None
+        g = img[..., 0] if img.ndim == 3 else img
+        Image.fromarray(g).save(path)
+        return m, g
+
+    job.total = len(metas)
+    job.done = 0
+    out = {}
+    with ThreadPoolExecutor(int(cfg.get("fetch_workers", 4))) as pool:
+        got = list(pool.map(fetch, metas))
+    for m, nir in got:
+        job.check_cancel()
+        if nir is None:
+            job.step(1, ohne_infrarot=1)
+            continue
+        img, fp, _ = training.load_arrays(ds, m)
+        probs, pix = training.score_buildings(det, ds, [m])[m["id"]]
+        rec = {"label": int(m["label"]), "kwp": m.get("pv_kwp"), "kwp_detected": m.get("kwp_detected"), "val": bool(m.get("val")),
+               "max_prob": float(probs.max()) if len(probs) else 0.0, "by_threshold": {}}
+        for t in THRESHOLDS:
+            sel = [pix[i] for i in np.flatnonzero(probs >= t)]
+            idx = np.unique(np.concatenate(sel)) if sel else np.array([], int)
+            rec["by_threshold"][str(t)] = nir_stats(nir, fp, idx, img)
+        out[m["id"]] = rec
+        job.step(1)
+    with open(os.path.join(job.dir, "nir_eval.json"), "w", encoding="utf-8") as f:
+        json.dump({"layer": layer, "min_pv_area_m2": float(cfg["min_pv_area_m2"]), "resolution_m": det.p.resolution_m,
+                   "thresholds": THRESHOLDS, "items": out}, f)
+    job.counters["gebaeude"] = len(out)
+    job.log(f"Fertig: {len(out)} Gebäude mit Infrarot (nir_eval.json).")
