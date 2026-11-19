@@ -80,6 +80,7 @@ class Source:
     notes: str = ""
     alt: list = field(default_factory=list)   # other flights/years of the same area, for the cross-check
     history: dict = field(default_factory=dict)  # older flights for the installation age (pvmapper/age.py)
+    nir_layer: str = ""            # layer with the near infrared of the same flight (training data, 19.11.2026)
 
     def __post_init__(self):
         self._sem = threading.Semaphore(max(1, int(self.concurrency)))
@@ -118,6 +119,16 @@ class Source:
         return a <= lon <= c and b <= lat <= d
 
     # -- public -------------------------------------------------------------
+
+    def fetch_nir(self, win: geo.Window):
+        """near infrared of the window as a 2-D array (None without an infrared layer)"""
+        if not self.nir_layer:
+            return None
+        from dataclasses import replace
+        s = replace(self, id=self.id + "-nir", layers=self.nir_layer, nir_layer="", alt=[], history={})
+        s.user_agent = self.user_agent
+        img = s.fetch(win)
+        return img[..., 0] if img.ndim == 3 else img
 
     def fetch(self, win: geo.Window) -> np.ndarray:
         if self.type == "wms":
@@ -245,7 +256,7 @@ class Catalog:
 
     def as_dicts(self):
         keys = ("id", "name", "country", "region", "type", "native_resolution_m", "license",
-                "attribution", "bbox", "priority", "enabled", "notes", "alt", "history")
+                "attribution", "bbox", "priority", "enabled", "notes", "alt", "history", "nir_layer")
         return [{k: getattr(s, k) for k in keys} for s in self.sources.values()]
 
 

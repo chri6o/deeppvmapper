@@ -136,6 +136,10 @@ def _from_check_job(job, cfg) -> list[dict]:
     from .jobs import Job
     src = Job.load(cfg["jobs_dir"], job.params["from_job"])
     ids = [str(i) for i in job.params.get("ids") or []]
+    if not ids and job.params.get("fresh_sample"):
+        ids = fresh_sample_ids(os.path.join(src.dir, "results.sqlite"), int(job.params.get("fresh_sample")),
+                               int(job.params.get("seed", 1)) if str(job.params.get("seed", 1)).isdigit() else 1)
+        job.log(f"Neue Stichprobe aus Lauf {src.id}: {len(ids)} Gebäude (Register-PV, nur erkannt, ohne bekannte PV).")
     if src.kind == "area":
         return _from_area_job(job, src, ids, cfg)
     con = sqlite3.connect(os.path.join(src.dir, "results.sqlite"))
@@ -159,7 +163,8 @@ def _from_check_job(job, cfg) -> list[dict]:
             "id": bid, "label": int(pos), "label_kind": "det_pv" if pos else "det_none",
             "sub": pr.get("sub") or "?", "size_bin": size_class or ("none" if not pos else "?"),
             "pv_kwp": pr.get("pv_kwp"), "kwp_detected": kwp,
-            "pv_geometry": mapping(shp_wkt.loads(pv_wkt)) if pv_wkt else None, "mask_source": "model",
+            "pv_geometry": (mapping(shp_wkt.loads(pv_wkt)) if pv_wkt and not job.params.get("no_suggestion") else None),
+            "mask_source": "model",
             "source_job": src.id, "source_model": src.params.get("profile") or cfg.get("profile"), "nacharbeit": _nacharbeit(status, kwp, pr, None),
             "extra": {"check": chk, "pv_share": round(area / fpa, 3) if area and fpa else None}}})
     job.log(f"{len(feats)} Gebäude aus Prüfauftrag {src.id} übernommen "
@@ -201,6 +206,49 @@ def is_val(bid: str, share: float) -> bool:
     return (h % 1000) / 1000 < share
 
 
+def split_of(bid: str, val_share: float = 0.2, test_share: float = 0.2) -> str:
+    """train / val / test by a hash of the building id: the test part is never used for training, threshold or the choice of the
+    best epoch – only for the final figures (new datasets from 20.11.2026)"""
+    h = (int(hashlib.md5(str(bid).encode()).hexdigest()[:8], 16) % 1000) / 1000
+    return "test" if h < test_share else ("val" if h < test_share + val_share else "train")
+
+
+def fresh_sample_ids(results_db: str, n: int = 600, seed: int = 1, shares=(200, 150)) -> list:
+    """a clean stratified sample of a run (19.11.2026): buildings with register PV, buildings with PV only from the detection
+    (spread over the size classes, the very small and the north side included), and buildings without any known PV – the old
+    Bonn dataset held detections only, so misses and ordinary roofs were missing"""
+    import sqlite3
+    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+    rows = con.execute("SELECT id, has_pv, kwp_est, props FROM results WHERE status != 'fehler'").fetchall()
+    con.close()
+    rnd = random.Random(seed)
+    reg, det, none = [], [], []
+    for bid, has, kwp, props in rows:
+        pr = json.loads(props or "{}")
+        if pr.get("pv_kwp") or pr.get("pv_conf") in ("register", "reported"):
+            reg.append(bid)
+        elif has:
+            det.append((bid, kwp or 0))
+        else:
+            none.append(bid)
+    rnd.shuffle(reg)
+    pick = reg[:shares[0]]
+    bins = [(0, 3), (3, 10), (10, 30), (30, 1e9)]
+    by = [[b for b, k in det if lo <= k < hi] for lo, hi in bins]
+    for g in by:
+        rnd.shuffle(g)
+    want = min(shares[1] + max(0, shares[0] - len(pick)) // 2, len(det))
+    out_det = []
+    while len(out_det) < want and any(by):                       # round robin over the size classes
+        for g in by:
+            if g and len(out_det) < want:
+                out_det.append(g.pop())
+    pick += out_det
+    rnd.shuffle(none)
+    pick += none[:max(0, n - len(pick))]
+    return pick
+
+
 # ---------------------------------------------------------------------------
 # 2. imagery + masks
 # ---------------------------------------------------------------------------
@@ -239,6 +287,15 @@ def build_dataset(job, cfg, feats, prof, ds_dir: str | None = None) -> list[dict
         except Exception as e:                                   # noqa: BLE001
             return {"id": bid, "error": str(e)[:200]}
         Image.fromarray(img).save(os.path.join(ds_dir, name + ".jpg"), quality=92)
+        has_nir = False
+        if job.params.get("nir", True) and getattr(src, "nir_layer", ""):
+            try:
+                nir = src.fetch_nir(win)
+                if nir is not None and nir.shape[:2] == img.shape[:2]:
+                    Image.fromarray(nir.astype(np.uint8)).save(os.path.join(ds_dir, name + ".nir.png"))
+                    has_nir = True
+            except Exception:                                    # noqa: BLE001 – infrared is optional
+                pass
         fp = _rasterize(g, win)
         Image.fromarray(fp * 255).save(os.path.join(ds_dir, name + ".fp.png"))
         has_mask = False
@@ -255,7 +312,10 @@ def build_dataset(job, cfg, feats, prof, ds_dir: str | None = None) -> list[dict
                 "source_job": pr.get("source_job"), "source_model": pr.get("source_model"), "nacharbeit": pr.get("nacharbeit"),
                 "status": "open", "window": [win.crs, win.minx, win.miny, win.maxx, win.maxy,
                                                                      win.width, win.height],
-                "val": is_val(bid, float(job.params.get("val_share", 0.25)))}
+                "val": is_val(bid, float(job.params.get("val_share", 0.25))), "has_nir": has_nir}
+        if job.params.get("split3"):
+            meta["split"] = split_of(bid, float(job.params.get("val_share", 0.2)), float(job.params.get("test_share", 0.2)))
+            meta["val"] = meta["split"] == "val"
         meta.update({k: v for k, v in (pr.get("extra") or {}).items() if k not in meta})
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f)
@@ -275,9 +335,13 @@ def build_dataset(job, cfg, feats, prof, ds_dir: str | None = None) -> list[dict
     return out
 
 
-def load_arrays(ds_dir, meta):
+def load_arrays(ds_dir, meta, channels: int = 3):
+    """image (H, W, 3 – or 4 with the near infrared as 4th channel), footprint, PV mask"""
     ds_dir = meta.get("_dir") or ds_dir
     img = np.asarray(Image.open(os.path.join(ds_dir, meta["name"] + ".jpg")).convert("RGB"))
+    if channels == 4:
+        nir = np.asarray(Image.open(os.path.join(ds_dir, meta["name"] + ".nir.png")).convert("L"))
+        img = np.dstack([img, nir])
     fp = np.asarray(Image.open(os.path.join(ds_dir, meta["name"] + ".fp.png"))) > 0
     mask = None
     if meta.get("has_mask"):
@@ -312,7 +376,7 @@ def score_buildings(det: inference.Detector, ds_dir, metas, job=None, label: str
     size = det.p.patch_px
     out = {}
     for m in metas:
-        img, fp, _ = load_arrays(ds_dir, m)
+        img, fp, _ = load_arrays(ds_dir, m, getattr(det.p, "channels", 3))
         h, w = img.shape[:2]
         grid = inference.patch_grid(w, h, size, det.overlap)
         patches = [img[y:y + size, x:x + size] for x, y in grid]
@@ -527,7 +591,8 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
     model = det.cls
     size = det.p.patch_px
     for name, prm in model.named_parameters():                     # fine-tune the top of the network only
-        prm.requires_grad = name.startswith(("Mixed_6d", "Mixed_6e", "Mixed_7", "fc"))
+        prm.requires_grad = name.startswith(("Mixed_6d", "Mixed_6e", "Mixed_7", "fc")) or (
+            getattr(det.p, "channels", 3) != 3 and name.startswith("Conv2d_1a_3x3"))     # the infrared weights must learn
     opt = torch.optim.AdamW([q for q in model.parameters() if q.requires_grad], lr=lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(1, epochs * len(train)))
     pos = [m for m in train if m["label"] == 1]
@@ -559,7 +624,7 @@ def train_classifier(job, det, ds_dir, train, epochs, lr, weak_weight, max_patch
             if k % 200 == 0:
                 job.log(f"Epoche {ep + 1}/{epochs}: {k}/{len(order)} Gebäude")
             if m["id"] not in cache:
-                img, fp, mask = load_arrays(ds_dir, m)
+                img, fp, mask = load_arrays(ds_dir, m, getattr(det.p, "channels", 3))
                 sel = mask if mask is not None else _suggestion_mask(ds_dir, m)
                 spots = _patches_for(det, img, fp, sel, max_patches, size)
                 cache[m["id"]] = np.stack([img[y:y + size, x:x + size] for x, y in spots])
@@ -628,7 +693,7 @@ def seg_report(det, ds_dir, metas) -> dict:
     for m in metas:
         if not (m.get("has_mask") or m.get("has_neg")):
             continue
-        img, fp, mask = load_arrays(ds_dir, m)
+        img, fp, mask = load_arrays(ds_dir, m, getattr(det.p, "channels", 3))
         neg = load_neg(ds_dir, m)
         h, w = img.shape[:2]
         pred = np.zeros((h, w), bool)
@@ -668,7 +733,8 @@ def train_segmenter(job, det, ds_dir, train, epochs, lr, neg_weight: float = 3.0
     model = det.seg
     size = det.p.patch_px
     for name, prm in model.named_parameters():
-        prm.requires_grad = name.startswith(("classifier", "backbone.layer4"))
+        prm.requires_grad = name.startswith(("classifier", "backbone.layer4")) or (
+            getattr(det.p, "channels", 3) != 3 and name.startswith("backbone.conv1"))
     opt = torch.optim.AdamW([q for q in model.parameters() if q.requires_grad], lr=lr, weight_decay=1e-4)
     job.log(f"Training Segmentierung: {len(with_mask)} Gebäude mit PV-Polygonen, {epochs} Epochen")
     for ep in range(epochs):
@@ -683,7 +749,7 @@ def train_segmenter(job, det, ds_dir, train, epochs, lr, neg_weight: float = 3.0
         random.shuffle(with_mask)
         for m in with_mask:
             job.check_cancel()
-            img, fp, mask = load_arrays(ds_dir, m)
+            img, fp, mask = load_arrays(ds_dir, m, getattr(det.p, "channels", 3))
             neg = load_neg(ds_dir, m)
             known = mask is not None
             if mask is None:
@@ -832,14 +898,22 @@ def run(job, cfg: dict):
                     "Jetzt im Reiter „Masken“ bearbeiten, danach Training mit diesem Datensatz starten.")
             return
 
+    rgbn = str(p.get("channels", "rgb")).lower() in ("rgbn", "4", "nir")
+    if rgbn:                                                      # with near infrared: only images that have it
+        n0 = len(metas)
+        metas = [m for m in metas if m.get("has_nir") and os.path.isfile(os.path.join(m.get("_dir") or ds_dir, m["name"] + ".nir.png"))]
+        job.log(f"Mit Infrarot: {len(metas)} von {n0} Gebäuden haben ein Infrarotbild.")
     # fresh copies of the networks: training must not change the cached base model
     import copy
     det = inference.Detector(prof, copy.deepcopy(det.cls), copy.deepcopy(det.seg), det.device,
                              cls_threshold=det.cls_threshold, seg_threshold=det.seg_threshold,
                              batch_size=det.batch_size, overlap=det.overlap)
 
-    val = [m for m in metas if m["val"]]
-    train = [m for m in metas if not m["val"]]
+    val = [m for m in metas if m["val"] and m.get("split") != "test"]
+    test = [m for m in metas if m.get("split") == "test"]          # never trained on, never used to choose: final figures only
+    train = [m for m in metas if not m["val"] and m.get("split") != "test"]
+    if test:
+        job.log(f"Testteil: {len(test)} Gebäude (nur für die Schlusszahlen).")
     if len(val) < 10 or len({m["label"] for m in train}) < 2:
         raise RuntimeError(f"Zu wenige Beispiele (Training {len(train)}, Validierung {len(val)}) oder nur eine Klasse.")
     px_area = prof.resolution_m ** 2
@@ -853,6 +927,7 @@ def run(job, cfg: dict):
     job.total = len(val) * 2 + len(train) + epochs + (seg_epochs if do_seg else 0)
     job.done = 0
     base_scores = score_buildings(det, ds_dir, val, job, "Ausgangsmodell")
+    base_test_scores = score_buildings(det, ds_dir, test, job, "Ausgangsmodell, Testteil") if test else {}
     job.step(len(val))
     base_thr = det.cls_threshold
     base_pred = predict(base_scores, det.cls_threshold, min_px)
@@ -868,6 +943,15 @@ def run(job, cfg: dict):
         job.log(f"{len(dropped)} von {len(weak)} schwachen Negativen verworfen (Ausgangsmodell ≥ {drop_t}: "
                 "vermutlich nicht registrierte PV).")
     job.step(len(weak) if weak else 0)
+
+    if rgbn:
+        # the RGB base model gets a 4th input channel (zero weights: starts exactly as the base model) and learns to use it
+        import dataclasses
+        prof = dataclasses.replace(prof, channels=4, norm_mean=tuple(prof.norm_mean) + (0.5,), norm_std=tuple(prof.norm_std) + (0.5,))
+        det = inference.Detector(prof, models.widen_first_conv(det.cls, "cls"), models.widen_first_conv(det.seg, "seg"), det.device,
+                                 cls_threshold=det.cls_threshold, seg_threshold=det.seg_threshold,
+                                 batch_size=det.batch_size, overlap=det.overlap)
+        job.log("Netze um einen Infrarot-Kanal erweitert (Startgewichte 0 – zu Beginn gleich dem Ausgangsmodell).")
 
     def _eval_f1():
         keep = det.cls_threshold
@@ -929,6 +1013,16 @@ def run(job, cfg: dict):
     if base_tuned_thr is not None and base_tuned_thr != base_thr and (base_tuned_f1 or 0) > (base_metrics["alle"]["f1"] or 0) + 0.02:
         job.log(f"Hinweis: Schon das Ausgangsmodell wäre mit Schwelle {base_tuned_thr} statt {base_thr} hier besser "
                 f"(F1 {base_tuned_f1:.3f} statt {base_metrics['alle']['f1'] or 0:.3f}).")
+    test_report = None
+    if test:
+        new_test_scores = score_buildings(det, ds_dir, test, job, "Neues Modell, Testteil")
+        bt = base_tuned_thr if base_tuned_thr is not None else base_thr
+        tb = metrics(test, predict(base_test_scores, bt, min_px), px_area)["alle"]
+        tn = metrics(test, predict(new_test_scores, thr, min_px), px_area)["alle"]
+        test_report = {"n": len(test), "vorher": tb, "nachher": tn, "schwelle_vorher": bt, "schwelle_nachher": thr}
+        job.log(f"Testteil ({len(test)} Gebäude, Schwellen aus der Validierung): F1 vorher {tb['f1'] or 0:.3f} "
+                f"(richtig {tb['precision'] or 0:.0%}, gefunden {tb['recall'] or 0:.0%}) → nachher {tn['f1'] or 0:.3f} "
+                f"(richtig {tn['precision'] or 0:.0%}, gefunden {tn['recall'] or 0:.0%})")
     try:
         diffs = review_chips(job, ds_dir, val, base_scores, base_thr, new_scores, thr, base_pred, new_pred)
     except Exception as e:                                       # noqa: BLE001  (review images are optional)
@@ -941,7 +1035,7 @@ def run(job, cfg: dict):
               "params": {k: v for k, v in p.items() if k != "pvmap_token"},
               "sample": dict(kinds), "n_train": len(train), "n_val": len(val), "n_masks_train": n_mask,
               "segmentation_trained": do_seg, "cls_threshold": thr, "kwp_per_m2_by_size": calib,
-              "vorher": base_metrics, "nachher": new_metrics, "abweichungen": diffs, "minutes": round((time.time() - t0) / 60, 1)}
+              "vorher": base_metrics, "nachher": new_metrics, "test": test_report, "abweichungen": diffs, "minutes": round((time.time() - t0) / 60, 1)}
     with open(os.path.join(job.dir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
     better = f1 > base_f1 + float(p.get("min_gain", 0.005))      # a tie is no reason for a new model

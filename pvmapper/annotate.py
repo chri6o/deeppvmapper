@@ -7,6 +7,9 @@ A dataset is the `dataset/` folder of a training job (or of a "prepare only" job
   <name>.mask.png   PV mask (optional) — from a PV-Map layer, drawn by a user, or suggested by AI
   <name>.neg.png    "no PV" mask (optional) — confusers marked by a user (dormers, skylights, solar thermal …);
                     training weights these pixels higher and uses them as hard negative patches
+  <name>.cls.json   polygons per roof element class (optional, docs/maskieren.md): {"solarthermie": [...], "gaube": [...], …}
+  <name>.cls.png    label map of all classes (0 background, index + 1 of CLASS_KEYS; PV first, later classes on top)
+  <name>.nir.png    near infrared of the same window (optional, where the source has an infrared layer)
   <name>.json       meta: id, label, label_kind, sub, size_bin, pv_kwp, has_mask, mask_source,
                     status (open | done | skip), label_override, ai {provider, model, reviewed, …}
 
@@ -24,6 +27,50 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 MASK_SOURCES = ("pvmap", "user", "ai", "model")
+# roof element classes of the mask editor (docs/maskieren.md); "alt" = 'no PV' areas from before the classes (19.11.2026)
+CLASS_KEYS = ("pv", "solarthermie", "gaube", "fenster", "technik", "dunkel", "schatten", "gruen", "alt")
+# cause of a false hit in the verdict bar (review.CAUSES) → class of its areas
+CAUSE_CLASS = {"gaube": "gaube", "schatten": "schatten", "dachfenster": "fenster", "solarthermie": "solarthermie",
+               "dach_dunkel": "dunkel", "sonstiges": "alt"}
+
+
+def class_polygons(d, name) -> dict:
+    p = os.path.join(d, name + ".cls.json")
+    if not os.path.isfile(p):
+        return {}
+    with open(p, encoding="utf-8") as f:
+        return {k: v for k, v in json.load(f).items() if k in CLASS_KEYS and k != "pv" and v}
+
+
+def _write_classes(d, name, classes: dict, pv_polys=None) -> dict:
+    """polygons per class → <name>.cls.json and the label map <name>.cls.png; returns {class: number of polygons}"""
+    classes = {k: v for k, v in (classes or {}).items() if k in CLASS_KEYS and k != "pv" and v}
+    jp, mp = os.path.join(d, name + ".cls.json"), os.path.join(d, name + ".cls.png")
+    if not classes:
+        for q in (jp, mp):
+            if os.path.isfile(q):
+                os.remove(q)
+        return {}
+    with open(jp, "w", encoding="utf-8") as f:
+        json.dump(classes, f)
+    w, h = image_size(d, name)
+    lab = np.zeros((h, w), np.uint8)
+    if pv_polys is None:
+        pv_polys = current_polygons(d, name)
+    for i, k in enumerate(CLASS_KEYS):
+        polys = pv_polys if k == "pv" else classes.get(k)
+        if polys:
+            lab[polygons_to_mask(polys, w, h) > 0] = i + 1
+    Image.fromarray(lab).save(mp)
+    return {k: len(v) for k, v in classes.items()}
+
+
+def add_to_class(d, name, cls: str, polys) -> dict:
+    """adds areas to a class (false hit with a cause → its class); returns the class counts"""
+    c = class_polygons(d, name)
+    if polys:
+        c[cls] = (c.get(cls) or []) + list(polys)
+    return _write_classes(d, name, c)
 
 
 def ds_dir(job_dir: str) -> str:
@@ -134,9 +181,9 @@ def current_polygons(d, name, kind: str = "mask") -> list:
 
 
 def save_annotation(d, name, polygons=None, label=None, status="done", source="user", ai=None,
-                    negatives=None) -> dict:
-    """Stores a mask (polygons; empty list removes it), optional 'no PV' regions, an optional label correction
-    and the status."""
+                    negatives=None, classes=None) -> dict:
+    """Stores a mask (polygons; empty list removes it), optional 'no PV' regions, optional polygons per roof element class,
+    an optional label correction and the status."""
     meta = read_meta(d, name)
     if negatives is not None:
         w, h = image_size(d, name)
@@ -158,6 +205,8 @@ def save_annotation(d, name, polygons=None, label=None, status="done", source="u
             if os.path.isfile(path):
                 os.remove(path)
             meta["has_mask"], meta["mask_source"] = False, None
+    if classes is not None:
+        meta["classes"] = _write_classes(d, name, classes, polygons)
     if label is not None:
         meta["label_override"] = None if int(label) == int(meta.get("label", 0)) else int(label)
     if ai is not None:

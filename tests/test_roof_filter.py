@@ -197,3 +197,82 @@ def test_north_share():
     fp = np.zeros((100, 100), bool); fp[10:90, 10:90] = True
     m = np.zeros((100, 100), bool); m[15:30, 20:40] = True
     assert bm.north_share(m, fp) == 1.0 and bm.north_share(None, fp) is None and bm.north_share(np.zeros_like(m), fp) is None
+
+
+def test_widen_first_conv_keeps_rgb_result():
+    import torch
+    from torchvision.models import resnet18
+    from pvmapper import models
+    torch.manual_seed(0)
+
+    class Wrap(torch.nn.Module):                                  # same attribute path as the DeepLab backbone
+        def __init__(self):
+            super().__init__(); self.backbone = resnet18(weights=None).eval()
+        def forward(self, x):
+            return self.backbone(x)
+    m = Wrap().eval()
+    x = torch.rand(1, 3, 64, 64)
+    y3 = m(x)
+    models.widen_first_conv(m, "seg", 4)
+    assert m.backbone.conv1.in_channels == 4
+    y4 = m(torch.cat([x, torch.rand(1, 1, 64, 64)], 1))
+    assert torch.allclose(y3, y4, atol=1e-5), "zero infrared weights: same result as the RGB network"
+    st = models._widen_state({"backbone.conv1.weight": torch.ones(8, 3, 7, 7)}, "backbone.conv1.weight", 4)
+    assert st["backbone.conv1.weight"].shape == (8, 4, 7, 7) and st["backbone.conv1.weight"][:, 3].abs().sum() == 0
+
+
+def test_split_and_fresh_sample(tmp_path):
+    import sqlite3, json, collections
+    from pvmapper import training
+    c = collections.Counter(training.split_of(f"b{i}") for i in range(5000))
+    assert abs(c["test"] / 5000 - 0.2) < 0.03 and abs(c["val"] / 5000 - 0.2) < 0.03
+    assert training.split_of("x1") == training.split_of("x1")
+    db = tmp_path / "r.sqlite"; con = sqlite3.connect(db)
+    con.execute("CREATE TABLE results (id TEXT, status TEXT, has_pv INTEGER, kwp_est REAL, props TEXT)")
+    rows = [(f"r{i}", "pv", 0, None, json.dumps({"pv_kwp": 10})) for i in range(30)]
+    rows += [(f"d{i}", "pv", 1, k, "{}") for i, k in enumerate([1, 2, 5, 8, 15, 25, 40, 90] * 10)]
+    rows += [(f"n{i}", "kein_pv", 0, None, "{}") for i in range(500)]
+    con.executemany("INSERT INTO results VALUES (?,?,?,?,?)", rows); con.commit(); con.close()
+    ids = training.fresh_sample_ids(str(db), 200, seed=3, shares=(20, 40))
+    assert len(ids) == 200 and len(set(ids)) == 200
+    assert sum(i.startswith("r") for i in ids) == 20 and sum(i.startswith("d") for i in ids) == 40
+    small = [i for i in ids if i.startswith("d") and int(i[1:]) % 8 in (0, 1)]
+    assert len(small) >= 8, "the very small detections are part of the sample"
+
+
+def test_classes_saved_and_false_hit(tmp_path):
+    import json
+    import numpy as np
+    from PIL import Image
+    from pvmapper import annotate, review
+    d = str(tmp_path)
+    Image.fromarray(np.zeros((50, 50, 3), np.uint8)).save(tmp_path / "a.jpg")
+    (tmp_path / "a.json").write_text(json.dumps({"id": "a", "name": "a", "label": 1, "label_kind": "det_pv"}))
+    pv = [[[5, 5], [20, 5], [20, 20], [5, 20]]]; gaube = [[[30, 30], [40, 30], [40, 40], [30, 40]]]
+    m = annotate.save_annotation(d, "a", pv, None, "done", "user", negatives=gaube, classes={"gaube": gaube, "unbekannt": gaube})
+    assert m["classes"] == {"gaube": 1} and annotate.class_polygons(d, "a") == {"gaube": gaube}
+    lab = np.asarray(Image.open(tmp_path / "a.cls.png"))
+    assert lab[10, 10] == 1 and lab[35, 35] == annotate.CLASS_KEYS.index("gaube") + 1 and lab[45, 2] == 0
+    review.set_cause(d, "a", "solarthermie")                        # false hit: the PV areas become solar thermal
+    c = annotate.class_polygons(d, "a")
+    assert c["gaube"] == gaube and len(c["solarthermie"]) == 1
+    review.set_cause(d, "a", "richtig")                             # right after all: back to PV, out of the class
+    assert "solarthermie" not in annotate.class_polygons(d, "a") and annotate.current_polygons(d, "a")
+
+
+def test_load_arrays_nir(tmp_path):
+    import numpy as np
+    from PIL import Image
+    from pvmapper import training
+    Image.fromarray(np.full((8, 8, 3), 10, np.uint8)).save(tmp_path / "a.jpg")
+    Image.fromarray(np.zeros((8, 8), np.uint8)).save(tmp_path / "a.fp.png")
+    Image.fromarray(np.full((8, 8), 200, np.uint8)).save(tmp_path / "a.nir.png")
+    img, fp, mask = training.load_arrays(str(tmp_path), {"name": "a"}, 4)
+    assert img.shape == (8, 8, 4) and img[0, 0, 3] == 200 and mask is None
+    assert training.load_arrays(str(tmp_path), {"name": "a"})[0].shape == (8, 8, 3)
+
+
+def test_mdpage():
+    from pvmapper.web import mdpage
+    h = mdpage.render("# T\n\nText **fett**\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- x\n- y\n")
+    assert "<h1>T</h1>" in h and "<b>fett</b>" in h and "<td>1</td>" in h and h.count("<li>") == 2

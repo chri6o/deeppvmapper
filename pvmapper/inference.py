@@ -63,8 +63,8 @@ class Detector:
         # half precision on the GPU: about twice the throughput on RDNA3/Ampere, results practically unchanged
         self.fp16 = precision == "fp16" or (precision == "auto" and str(device).startswith("cuda"))
         self.stats = {"patches": 0, "segmented": 0, "gpu_s": 0.0}
-        self.mean = torch.tensor(profile.norm_mean, device=device).view(1, 3, 1, 1)
-        self.std = torch.tensor(profile.norm_std, device=device).view(1, 3, 1, 1)
+        self.mean = torch.tensor(profile.norm_mean, device=device).view(1, len(profile.norm_mean), 1, 1)
+        self.std = torch.tensor(profile.norm_std, device=device).view(1, len(profile.norm_std), 1, 1)
 
     # ------------------------------------------------------------------
 
@@ -135,13 +135,16 @@ class Detector:
 
     def run(self, items: list[tuple[object, np.ndarray]]) -> dict:
         size = self.p.patch_px
+        if getattr(self.p, "channels", 3) != 3 and any(img.ndim == 3 and img.shape[2] == 3 for _, img in items):
+            raise RuntimeError("Dieses Modell braucht zusätzlich das Infrarotbild – Luftbildläufe mit Infrarot gibt es noch nicht; "
+                               "das Modell ist nur für den Vergleich im Training.")
         index = []           # (key, x, y)
         patches = []
         results = {}
         for key, img in items:
             h, w = img.shape[:2]
             if h < size or w < size:                      # pad tiny images
-                pad = np.zeros((max(h, size), max(w, size), 3), np.uint8)
+                pad = np.zeros((max(h, size), max(w, size), img.shape[2]), np.uint8)
                 pad[:h, :w] = img
                 img = pad
             grid = patch_grid(img.shape[1], img.shape[0], size, self.overlap)

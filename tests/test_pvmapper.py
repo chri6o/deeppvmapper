@@ -1823,3 +1823,87 @@ def test_cross_check_images_for_berlin_hamburg_saxony():
         for a in src.alt:
             assert a in cat.sources and cat.sources[a].crs == src.crs and cat.sources[a].native_resolution_m <= 0.2, (sid, a)
     assert cat.sources["de-hh-2022"].extra_params == {"TIME": "2022"}
+
+
+class _Conv(nn.Module):
+    def __init__(self, cin, cout):
+        super().__init__(); self.conv = nn.Conv2d(cin, cout, 3, padding=1)
+
+    def forward(self, x):
+        return self.conv(x)
+
+
+class TinyCls4(nn.Module):
+    """stand-in with the attribute path of InceptionV3's first convolution (widened for the infrared)"""
+    def __init__(self):
+        super().__init__()
+        self.Conv2d_1a_3x3 = _Conv(3, 4)
+        self.Mixed_7a = nn.Conv2d(4, 4, 3, padding=1)
+        self.fc = nn.Linear(4, 2)
+
+    def forward(self, x):
+        return self.fc(torch.relu(self.Mixed_7a(torch.relu(self.Conv2d_1a_3x3(x)))).mean(dim=(2, 3)))
+
+
+class TinySeg4(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.backbone = nn.Module(); self.backbone.conv1 = nn.Conv2d(3, 1, 1)
+        self.classifier = nn.Conv2d(1, 1, 1)
+
+    def forward(self, x):
+        return {"out": (x[:, 2:3] > 0.8).float() * 20 - 10 + 0.01 * self.classifier(self.backbone.conv1(x))}
+
+
+def test_training_with_infrared_and_test_part(tmp_path, monkeypatch):
+    """dataset with the near infrared and a fixed test part; training with channels=rgbn widens the networks, the test part is
+    neither trained on nor used for the threshold, and the saved profile has 4 channels"""
+    from pvmapper import training
+    rng = np.random.default_rng(1)
+    feats = []
+    for i in range(80):
+        lab = i % 2
+        x0, y0 = 13.0 + i * 0.002, 52.0
+        g = box(x0, y0, x0 + 0.0002, y0 + 0.00015)
+        pv = box(x0 + 0.00005, y0 + 0.00004, x0 + 0.00012, y0 + 0.0001) if lab else None
+        feats.append({"type": "Feature", "id": f"b{i}", "geometry": g.__geo_interface__,
+                      "properties": {"label": lab, "label_kind": "pos_high" if lab else "neg_high", "sub": "Education",
+                                     "size_bin": "10-30" if lab else "none", "pv_geometry": pv.__geo_interface__ if pv is not None else None}})
+    lf = tmp_path / "labels.geojson"
+    lf.write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
+
+    class FakeSrc:
+        id = "fake"; nir_layer = "nir"
+        def fetch_nir(self, win):
+            return np.full((win.height, win.width), 30, np.uint8)
+
+    def fake_fetch(cat, geom, res, buf, sel, min_px=0, snap_px=1, max_blank=0.5):
+        win = geo.window_around(geom, "EPSG:25833", res, buf, min_px)
+        img = rng.integers(70, 110, (win.height, win.width, 3)).astype(np.uint8)
+        if int(round((geom.centroid.x - 13.0) / 0.002)) % 2:
+            h, w = img.shape[:2]
+            img[h // 3: 2 * h // 3, w // 3: 2 * w // 3] = (40, 120, 250)
+        return img, win, FakeSrc()
+
+    monkeypatch.setattr(sources, "fetch_for_geometry", fake_fetch)
+    monkeypatch.setattr(runtime, "detector", lambda cfg, profile_id=None: inference.Detector(fake_profile(), TinyCls4(), TinySeg4(), "cpu", batch_size=8, overlap=0.0))
+    cfg = dict(config.DEFAULTS, jobs_dir=str(tmp_path / "jobs"), model_dir=str(tmp_path / "models"), fetch_workers=2)
+    prep = Job(cfg["jobs_dir"], "train", {"labels_file": str(lf), "prepare_only": True, "split3": True, "val_share": 0.25, "test_share": 0.25})
+    prep.run(lambda j: training.run(j, cfg))
+    assert prep.status == "done", prep.error
+    from pvmapper import annotate
+    items = annotate.list_items(annotate.ds_dir(prep.dir))
+    assert all(m["has_nir"] for m in items) and {m["split"] for m in items} == {"train", "val", "test"}
+    assert all(m["val"] == (m["split"] == "val") for m in items)
+    tj = Job(cfg["jobs_dir"], "train", {"dataset_from": prep.id, "epochs": 2, "seg_epochs": 1, "min_seg_samples": 3, "channels": "rgbn",
+                                         "save_anyway": True, "name": "TEST rgbn", "lr": 2e-2, "auto_negatives": False})
+    tj.run(lambda j: training.run(j, cfg))
+    assert tj.status == "done", tj.error
+    rep = json.load(open(os.path.join(tj.dir, "report.json"), encoding="utf-8"))
+    n_test = sum(1 for m in items if m["split"] == "test")
+    assert rep["test"]["n"] == n_test and rep["n_val"] == sum(1 for m in items if m["split"] == "val")
+    assert rep["n_train"] == len(items) - n_test - rep["n_val"]
+    log = "\n".join(tj.log_lines if hasattr(tj, "log_lines") else [str(x) for x in tj.as_dict().get("log", [])])
+    assert "Infrarot-Kanal" in log and "Testteil" in log
+    p = models.custom_profiles(cfg["model_dir"])["custom:test_rgbn"]
+    assert p.channels == 4 and len(p.norm_mean) == 4

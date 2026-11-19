@@ -45,6 +45,7 @@ class Profile:
     cls_threshold: float
     seg_threshold: float
     licence: str
+    channels: int = 3          # 3 = RGB; 4 = RGB + near infrared (test models, 20.11.2026 – not yet usable in aerial-image runs)
 
 
 IMAGENET = ((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
@@ -90,12 +91,48 @@ def _state_dict(path):
     return obj
 
 
+FIRST_CONV = {"cls": ("Conv2d_1a_3x3", "conv"), "seg": ("backbone", "conv1")}
+
+
+def _first_conv(model, kind):
+    a, b = FIRST_CONV[kind]
+    return getattr(getattr(model, a), b)
+
+
+def widen_first_conv(model, kind: str, channels: int = 4):
+    """a 4th input channel (near infrared) with zero weights: the widened network gives exactly the results of the RGB network
+    until training teaches it to use the infrared"""
+    a, b = FIRST_CONV[kind]
+    old = _first_conv(model, kind)
+    if old.in_channels == channels:
+        return model
+    new = nn.Conv2d(channels, old.out_channels, old.kernel_size, old.stride, old.padding, bias=old.bias is not None)
+    with torch.no_grad():
+        new.weight.zero_()
+        new.weight[:, :old.in_channels] = old.weight
+        if old.bias is not None:
+            new.bias.copy_(old.bias)
+    setattr(getattr(model, a), b, new.to(old.weight.device))
+    return model
+
+
+def _widen_state(state: dict, key: str, channels: int):
+    w = state.get(key)
+    if w is not None and w.shape[1] < channels:
+        z = torch.zeros((w.shape[0], channels - w.shape[1]) + tuple(w.shape[2:]), dtype=w.dtype)
+        state[key] = torch.cat([w, z], 1)
+    return state
+
+
 def build_classifier(profile: Profile, path: str) -> nn.Module:
     from torchvision.models import inception_v3
     model = inception_v3(weights=None, aux_logits=True, init_weights=False)
     model.fc = nn.Linear(model.fc.in_features, profile.cls_outputs)
     model.AuxLogits.fc = nn.Linear(model.AuxLogits.fc.in_features, profile.cls_outputs)
     state = _state_dict(path)
+    if profile.channels != 3:
+        widen_first_conv(model, "cls", profile.channels)
+        _widen_state(state, "Conv2d_1a_3x3.conv.weight", profile.channels)
     missing, unexpected = model.load_state_dict(state, strict=False)
     real_missing = [k for k in missing if not k.startswith("AuxLogits")]
     if real_missing:
@@ -110,6 +147,9 @@ def build_segmenter(profile: Profile, path: str) -> nn.Module:
     model = deeplabv3_resnet101(weights=None, weights_backbone=None, aux_loss=False)
     model.classifier[-1] = nn.Conv2d(256, 1, kernel_size=1)
     state = {k: v for k, v in _state_dict(path).items() if not k.startswith("aux_classifier")}
+    if profile.channels != 3:
+        widen_first_conv(model, "seg", profile.channels)
+        _widen_state(state, "backbone.conv1.weight", profile.channels)
     missing, _ = model.load_state_dict(state, strict=False)
     if missing:
         raise RuntimeError(f"segmenter weights incomplete: {missing[:5]}")

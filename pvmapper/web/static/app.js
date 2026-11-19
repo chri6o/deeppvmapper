@@ -871,6 +871,14 @@ $("#jd-todataset").onclick = async () => {
     S.sel = new Set(); openJob(j.id); loadJobs(); }
   catch (e) { alert(e.message); }
 };
+$("#jd-fresh").onclick = async () => {
+  const n = prompt("Saubere Stichprobe aus diesem Lauf – wie viele Gebäude? (etwa 1/3 Register-PV, 1/4 nur erkannt, Rest ohne bekannte PV; 20 % fester Testteil)", "600"); if (n === null) return;
+  const name = prompt("Name des Datensatzes", `${new Date().toISOString().slice(0, 10)}_neu-${S.job}`); if (name === null) return;
+  try { const j = await api("/api/jobs", { json: { kind: "train", params: { from_job: S.job, fresh_sample: +n || 600, name, prepare_only: true,
+      no_suggestion: true, split3: true, nir: true, val_share: 0.2, test_share: 0.2 } } });
+    openJob(j.id); loadJobs(); }
+  catch (e) { alert(e.message); }
+};
 const ROOF_TXT = { flat: "Flachdach", pitched: "Steildach", mixed: "Flach- und Steildachteile", complex: "komplexes Dach" };
 function roofText(r) {
   if (r.usable_area_m2 == null) return "";
@@ -1061,9 +1069,24 @@ function info(sel, html, err = false) { const el = $(sel); el.innerHTML = html; 
 init().catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<div class="info err">${esc(e.message)}</div>`); });
 
 // ================================================================== datasets & mask editor
-// M.polys is always the layer being edited; M.other the other one (layer "pv" or "neg" = confusers such as dormers)
-const M = { ds: null, items: [], list: [], idx: -1, item: null, img: null, polys: [], other: [], layer: "pv", hist: [], cur: [], tool: "poly",
+// roof element classes (docs/maskieren.md): PV and the confusers; M.cls holds the polygons per class, M.polys is the class being edited
+const CLASSES = [
+  { k: "pv", t: "PV-Module", col: "#ff3b5c" },
+  { k: "solarthermie", t: "Solarthermie", col: "#ffb020" },
+  { k: "gaube", t: "Gaube", col: "#38d6ff" },
+  { k: "fenster", t: "Dachfenster / Lichtkuppel", col: "#7cf29a" },
+  { k: "technik", t: "Technik", col: "#c58bff" },
+  { k: "dunkel", t: "dunkle Dachfläche", col: "#9aa7b8" },
+  { k: "schatten", t: "Schatten", col: "#5a6cff" },
+  { k: "gruen", t: "Begrünung", col: "#3fbf3f" },
+  { k: "alt", t: "Aufbau (alte Markierung)", col: "#38d6ff", legacy: true },
+];
+const CLS = Object.fromEntries(CLASSES.map((c) => [c.k, c]));
+const M = { ds: null, items: [], list: [], idx: -1, item: null, img: null, polys: [], cls: { pv: [] }, layer: "pv", hist: [], cur: [], tool: "poly",
   sel: -1, view: { s: 1, x: 0, y: 0 }, drag: null, rect: null, label: 1, dirty: false };
+function syncCls() { M.cls[M.layer] = M.polys; }
+// polygons of all classes except the one being edited: [{ c, q }]
+function others() { syncCls(); const o = []; for (const c of CLASSES) if (c.k !== M.layer) (M.cls[c.k] || []).forEach((q) => o.push({ c: c.k, q })); return o; }
 const SRC = { user: "von Hand", ai: "KI", pvmap: "PV-Map", model: "Erkennung ?" };
 
 async function loadDatasets(keep) {
@@ -1140,7 +1163,10 @@ async function openItem(i) {
   const base = `/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`;
   const d = await api(base);
   M.item = { ...m, ...d.meta, width: d.width, height: d.height, footprint: d.footprint };
-  M.polys = d.polygons; M.other = d.negatives || []; M.layer = "pv"; setLayerButtons();
+  M.cls = { pv: d.polygons || [] };
+  if (d.classes && Object.keys(d.classes).length) Object.assign(M.cls, d.classes);
+  else if ((d.negatives || []).length) M.cls.alt = d.negatives;            // older datasets: one "no PV" layer
+  M.layer = "pv"; M.polys = M.cls.pv; setLayerButtons();
   M.hist = []; M.cur = []; M.sel = -1; M.vsel = -1; M.label = d.effective_label; M.dirty = false; M.corners = [];
   M.typo = null; M.typoKey = null;
   $("#e-label").checked = !!M.label; $("#e-usereg").checked = !!M.item.use_register;
@@ -1157,8 +1183,8 @@ function info2(extra = "") {
   const ai = m.ai ? ` · KI (${esc(m.ai.provider)}/${esc(m.ai.mode)}): ${m.ai.pv_visible ? "PV" : "keine PV"}${m.ai.confidence != null ? ", Sicherheit " + fmt(m.ai.confidence, 2) : ""}${m.ai.reviewed ? ", geprüft" : ", <b>ungeprüft</b>"}${m.ai.note ? " – " + esc(m.ai.note) : ""}` : "";
   const ty = M.typo && M.typo.installations.length ? " · " + M.typo.installations.map((i) => `${esc(LAYOUT_TXT[i.layout] || i.layout)}${i.azimuth_deg != null ? " " + Math.round(i.azimuth_deg) + "°" + (i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : "") : ""} ${fmt(i.kwp_est, 1)} kWp`).join(", ") +
     ` → <b>${fmt(M.typo.summary.kwp_est, 1)} kWp</b> (${fmt(M.typo.summary.kwp_low, 0)}–${fmt(M.typo.summary.kwp_high, 0)})` : "";
-  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty}${m.kwp_detected != null ? " · erkannt " + fmt(m.kwp_detected, 1) + " kWp" : ""}${m.install_year ? " · Baujahr ≈ " + m.install_year : ""}${regText(m)} · ${negPolys().length} Aufbauten${ai}${extra ? " · " + extra : ""}
-    <span class="hint" style="color:#8f9bb3"> · Ebene <b>${M.layer === "neg" ? "Aufbauten (kein PV)" : "PV"}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
+  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty}${m.kwp_detected != null ? " · erkannt " + fmt(m.kwp_detected, 1) + " kWp" : ""}${m.install_year ? " · Baujahr ≈ " + m.install_year : ""}${regText(m)} · ${negPolys().length} andere Elemente${ai}${extra ? " · " + extra : ""}
+    <span class="hint" style="color:#8f9bb3"> · Klasse <b style="color:${CLS[M.layer].col}">${esc(CLS[M.layer].t)}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
   const hl = $("#e-helplink"); if (hl) hl.onclick = (e) => { e.preventDefault(); toggleHelp(); };
 }
 // installation typology of the drawn mask (layout, orientation, kWp), refreshed shortly after every change
@@ -1227,7 +1253,7 @@ function snapPoint(p, skip) {
   M.snapHit = null;
   if (!M.snap || !M.img) return p;
   const R = snapRadius(); let best = null, bd = R;
-  const rings = [...M.polys.map((q, i) => ({ q, i, own: true })), ...M.other.map((q) => ({ q })), ...M.item.footprint.map((q) => ({ q }))];
+  const rings = [...M.polys.map((q, i) => ({ q, i, own: true })), ...others().map(({ q }) => ({ q })), ...M.item.footprint.map((q) => ({ q }))];
   const consider = (c, kind) => { const d = Math.hypot(c[0] - p[0], c[1] - p[1]); if (d < bd) { bd = d; best = { c, kind }; } };
   for (const { q, i, own } of rings) q.forEach((v, j) => { if (!(own && skip && skip.poly === i && skip.v === j)) consider(v, "Ecke"); });
   M.cur.forEach((v) => consider(v, "Ecke"));
@@ -1256,14 +1282,17 @@ function draw() {
     cx.strokeStyle = sel ? "#fff" : "#38d6ff"; cx.lineWidth = act ? lw * 1.3 : lw * 0.8; cx.stroke(); cx.setLineDash([]); };
   const drawPv = (p, act, sel) => { path(p); cx.fillStyle = ai ? "rgba(140,90,255,.33)" : "rgba(230,30,60,.33)"; if (act) cx.fill();
     cx.strokeStyle = sel ? "#fff" : (ai ? "#a78bfa" : "#ff3b5c"); cx.lineWidth = sel ? lw * 1.8 : act ? lw : lw * 0.8; cx.stroke(); };
-  const act = M.layer;
-  (act === "neg" ? M.other : M.polys).forEach((p, i) => drawPv(p, act === "pv", act === "pv" && i === M.sel));
-  (act === "neg" ? M.polys : M.other).forEach((p, i) => drawNeg(p, act === "neg", act === "neg" && i === M.sel));
+  // other classes thin in their colour, the class being edited filled
+  const drawCls = (p, c, act, sel) => { path(p); if (c === "pv") { cx.fillStyle = ai ? "rgba(140,90,255,.33)" : "rgba(230,30,60,.33)"; if (act) cx.fill(); }
+    else { cx.globalAlpha = act ? .28 : .16; cx.fillStyle = CLS[c].col; cx.fill(); cx.globalAlpha = 1; cx.setLineDash([5, 3]); }
+    cx.strokeStyle = sel ? "#fff" : (c === "pv" && ai ? "#a78bfa" : CLS[c].col); cx.lineWidth = sel ? lw * 1.8 : act ? lw * 1.2 : lw * 0.8; cx.stroke(); cx.setLineDash([]); };
+  others().forEach(({ c, q }) => drawCls(q, c, false, false));
+  M.polys.forEach((p, i) => drawCls(p, M.layer, true, i === M.sel));
   if (M.sel >= 0 && M.polys[M.sel] && (eff() === "select")) M.polys[M.sel].forEach((v, j) => {
     const [x, y] = toScreen(v); cx.fillStyle = j === M.vsel ? "#ffdc00" : "#fff"; cx.strokeStyle = "#000"; cx.lineWidth = 1;
     cx.fillRect(x - 4 * devicePixelRatio, y - 4 * devicePixelRatio, 8 * devicePixelRatio, 8 * devicePixelRatio);
     cx.strokeRect(x - 4 * devicePixelRatio, y - 4 * devicePixelRatio, 8 * devicePixelRatio, 8 * devicePixelRatio); });
-  const curCol = M.layer === "neg" ? "#38d6ff" : "#00e5ff";
+  const curCol = M.layer === "pv" ? "#00e5ff" : CLS[M.layer].col;
   if (M.cur.length) {
     path(M.tool === "poly" && M.hover ? [...M.cur, M.hover] : M.cur, false); cx.strokeStyle = curCol; cx.lineWidth = lw; cx.stroke();
     M.cur.forEach((q) => { const [x, y] = toScreen(q); cx.fillStyle = curCol; cx.fillRect(x - 3, y - 3, 6, 6); });
@@ -1277,15 +1306,26 @@ function draw() {
   if (M.snapHit) { const [x, y] = toScreen(M.snapHit.c); cx.strokeStyle = "#ff3df5"; cx.lineWidth = 2 * devicePixelRatio;
     cx.beginPath(); cx.arc(x, y, 7 * devicePixelRatio, 0, 7); cx.stroke(); }
 }
-function setLayerButtons() { $("#e-layer-pv").classList.toggle("on", M.layer === "pv"); $("#e-layer-neg").classList.toggle("on", M.layer === "neg"); }
-function setLayer(l) {
-  if (l === M.layer) return;
-  if (M.cur.length >= 3) closePoly();
-  [M.polys, M.other] = [M.other, M.polys]; M.layer = l; M.hist = []; M.cur = []; M.sel = -1; M.vsel = -1; setLayerButtons(); draw(); info2();
+function setLayerButtons() {
+  const box = $("#e-classes"); if (!box) return;
+  const used = new Set(Object.entries(M.cls).filter(([, v]) => (v || []).length).map(([k]) => k));
+  box.innerHTML = CLASSES.filter((c) => !c.legacy || used.has(c.k) || M.layer === c.k).map((c) =>
+    `<button data-cls="${c.k}" class="${M.layer === c.k ? "on" : ""}" title="${esc(c.t)} zeichnen (N nächste Klasse, P PV)"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${c.col};margin-right:4px"></i>${esc(c.t)}${(M.cls[c.k] || []).length ? " (" + M.cls[c.k].length + ")" : ""}</button>`).join("");
+  box.querySelectorAll("[data-cls]").forEach((b) => b.onclick = () => setLayer(b.dataset.cls));
 }
-$("#e-layer-pv").onclick = () => setLayer("pv");
-$("#e-layer-neg").onclick = () => setLayer("neg");
-const pvPolys = () => M.layer === "pv" ? M.polys : M.other, negPolys = () => M.layer === "neg" ? M.polys : M.other;
+function setLayer(l) {
+  if (l === M.layer || !CLS[l]) return;
+  if (M.cur.length >= 3) closePoly();
+  syncCls(); M.layer = l; M.polys = M.cls[l] || (M.cls[l] = []);
+  M.hist = []; M.cur = []; M.sel = -1; M.vsel = -1; setLayerButtons(); draw(); info2();
+}
+function nextLayer(step) { const ks = CLASSES.filter((c) => !c.legacy || (M.cls[c.k] || []).length).map((c) => c.k);
+  setLayer(ks[(ks.indexOf(M.layer) + step + ks.length) % ks.length]); }
+const pvPolys = () => M.layer === "pv" ? M.polys : (M.cls.pv || []);
+// everything that is not PV, as one "no PV" mask (training: hard negatives) …
+const negPolys = () => { syncCls(); return CLASSES.filter((c) => c.k !== "pv").flatMap((c) => M.cls[c.k] || []); };
+// … and per class (dataset: <name>.cls.json / .cls.png)
+const clsPolys = () => { syncCls(); return Object.fromEntries(CLASSES.filter((c) => c.k !== "pv" && (M.cls[c.k] || []).length).map((c) => [c.k, M.cls[c.k]])); };
 function push() { M.hist.push(JSON.stringify(M.polys)); if (M.hist.length > 80) M.hist.shift(); M.dirty = true; }
 function undo() { if (M.cur.length) { M.cur.pop(); } else if (M.hist.length) { M.polys = JSON.parse(M.hist.pop()); M.sel = -1; M.vsel = -1; } draw(); info2(); }
 function closePoly() { if (M.cur.length >= 3) { push(); M.polys.push(M.cur.map(([x, y]) => [r1(x), r1(y)])); } M.cur = []; draw(); info2(); }
@@ -1341,8 +1381,8 @@ cv.addEventListener("mousedown", (e) => {
     if (v) { push(); M.sel = v.i; M.vsel = v.j; M.vdrag = v; draw(); return; }
     let hit = M.polys.findIndex((q) => inside(raw, q));
     if (hit < 0) {                                              // area of the other layer → switch layer
-      const ho = M.other.findIndex((q) => inside(raw, q));
-      if (ho >= 0) { setLayer(M.layer === "pv" ? "neg" : "pv"); hit = ho; }
+      const o = others().find(({ q }) => inside(raw, q));
+      if (o) { setLayer(o.c); hit = M.polys.indexOf(o.q); }
     }
     M.sel = hit; M.vsel = -1;
     if (hit >= 0) { push(); M.pdrag = { i: hit, start: raw, orig: JSON.parse(JSON.stringify(M.polys[hit])), moved: false }; }
@@ -1456,7 +1496,7 @@ $$("#e-review [data-cause]").forEach((b) => b.onclick = async () => {
   if (M.cur.length >= 3) closePoly();
   try {
     // keep what was drawn: save the current areas first, the verdict then moves them for a false hit
-    if (M.dirty) await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), label: M.label, status: "open" } });
+    if (M.dirty) await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), classes: clsPolys(), label: M.label, status: "open" } });
     const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/review`, { json: { cause: b.dataset.cause } });
     const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
     loadReview();
@@ -1481,10 +1521,10 @@ setSnap(M.snap); $("#e-full").classList.toggle("on", !M.full);
 async function saveItem(status) {
   const m = M.item; if (!m) return;
   if (M.cur.length >= 3) closePoly();
-  if (status === "done" && M.label === 1 && M.layer === "neg" && !negPolys().length &&
-      !confirm("Die Ebene „Gaube zeichnen“ ist gewählt, aber es ist keine Gaube-Fläche gezeichnet – das Bild wird als „PV vorhanden“ gespeichert.\n\nFür einen falschen Treffer stattdessen „✗ falsch …“ klicken oder das Häkchen „PV vorhanden“ entfernen.\n\nTrotzdem als PV speichern?")) return;
+  if (status === "done" && M.label === 1 && M.layer !== "pv" && !pvPolys().length &&
+      !confirm("Gewählt ist die Klasse „" + CLS[M.layer].t + "“, aber es ist keine PV-Fläche gezeichnet – das Bild wird trotzdem als „PV vorhanden“ gespeichert.\n\nFür einen falschen Treffer stattdessen „✗ falsch …“ klicken oder das Häkchen „PV vorhanden“ entfernen.\n\nTrotzdem als PV speichern?")) return;
   try {
-    const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), label: M.label, status } });
+    const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), classes: clsPolys(), label: M.label, status } });
     const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
     const keepList = M.list; renderStats(computeStats()); M.list = keepList;
     openItem(M.idx + 1);
@@ -1530,7 +1570,8 @@ document.addEventListener("keydown", (e) => {
   else if (k === "Backspace") { undo(); e.preventDefault(); }
   else if (k === "ArrowRight") openItem(M.idx + 1);
   else if (k === "ArrowLeft") openItem(M.idx - 1);
-  else if (kl === "n" || kl === "g") setLayer(M.layer === "pv" ? "neg" : "pv");
+  else if (kl === "n" || kl === "g") nextLayer(e.shiftKey ? -1 : 1);
+  else if (kl === "p") setLayer("pv");
   else if (k === "1") setTool("poly");
   else if (k === "2") setTool("rect");
   else if (k === "3") setTool("rrect");

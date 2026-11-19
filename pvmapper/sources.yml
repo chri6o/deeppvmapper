@@ -32,6 +32,7 @@ sources:
     attribution: "© Geobasis NRW"
     priority: 10
     alt: [de-nw-2024, de-nw-2023, de-nw-2022]
+    nir_layer: nw_dop_nir         # near infrared of the current flight (training data)
     history:                      # older flights for the installation age: dates and resolution per place from the metadata layer
       kind: nrw_info
       url: https://www.wms.nrw.de/geobasis/wms_nw_hist_dop

@@ -541,7 +541,21 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         w, h = annotate.image_size(d, name)
         return {"meta": m, "width": w, "height": h, "footprint": annotate.footprint_polygons(d, name),
                 "polygons": annotate.current_polygons(d, name), "negatives": annotate.current_polygons(d, name, "neg"),
+                "classes": annotate.class_polygons(d, name),
                 "effective_label": annotate.effective_label(m)}
+
+    @app.get("/api/docs/{doc}")
+    def doc_page(doc: str):
+        """a guide from docs/ as a simple page (mask editor: docs/maskieren.md)"""
+        from fastapi.responses import HTMLResponse
+        from . import mdpage
+        if doc not in ("maskieren",):
+            raise HTTPException(404, "unbekannt")
+        path = os.path.join(os.path.dirname(__file__), "..", "..", "docs", doc + ".md")
+        if not os.path.isfile(path):
+            raise HTTPException(404, "nicht gefunden")
+        with open(path, encoding="utf-8") as f:
+            return HTMLResponse(mdpage.render(f.read()))
 
     @app.get("/api/datasets/{jid}/items/{name}/image")
     def dataset_image(jid: str, name: str):
@@ -555,7 +569,7 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         if st not in ("open", "done", "skip"):
             raise HTTPException(400, "status: open, done oder skip")
         meta = annotate.save_annotation(d, name, body.get("polygons"), body.get("label"), st, "user",
-                                        negatives=body.get("negatives"))
+                                        negatives=body.get("negatives"), classes=body.get("classes"))
         if st == "done" and cfg().get("sync_push_reviews", True) and cfg().get("pvmap_token"):
             threading.Thread(target=_push_review, args=(d, name, meta), daemon=True).start()
         return meta

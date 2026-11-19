@@ -145,6 +145,7 @@
         <div class="row">
           <select id="jd-target" title="Neuer Datensatz oder an einen bestehenden anhängen (iteratives Training)" style="flex:1"><option value="">neuer Datensatz</option></select>
           <button id="jd-todataset" class="primary" title="Ausgewählte als Trainingsdatensatz anlegen">Als Trainingsdatensatz →</button>
+          <button id="jd-fresh" class="secondary" title="Saubere, geschichtete Stichprobe dieses Laufs als neuer Datensatz: Register-PV, nur erkannte PV (alle Größen), Dächer ohne bekannte PV; ohne Vorschlagsmasken, mit Infrarot (wo vorhanden) und festem Testteil (20 %)">Neue Stichprobe …</button>
         </div>
       </details>
       <div id="jd-report"></div>
@@ -417,10 +418,7 @@
         <button data-tool="rrect" title="Gedrehtes Rechteck (3) – Kante mit zwei Klicks, dritter Klick für die Breite">◇</button>
       </div>
       <button id="e-snap" class="on" title="Fang (S): Bildecken, Ecken und Kanten der Flächen und des Umrisses">🧲 Fang</button>
-      <div class="seg" title="Ebene">
-        <button id="e-layer-pv" class="on" title="Zeichenebene: PV-Module (N/G wechselt)">PV zeichnen</button>
-        <button id="e-layer-neg" title="Zeichenebene: Aufbauten ohne PV – Gauben, Dachfenster, Lichtkuppeln, Solarthermie (N/G wechselt). Nur zum Zeichnen; das Urteil „keine PV“ setzt „✗ Falscher Treffer“ oder das Häkchen „PV vorhanden“.">Gaube zeichnen</button>
-      </div>
+      <div class="seg" id="e-classes" title="Klasse der Fläche (N nächste, Shift+N vorige, P PV). Nur zum Zeichnen; das Urteil „keine PV“ setzt „✗ Falscher Treffer“ oder das Häkchen „PV vorhanden“."></div>
       <button id="e-model" title="Modellvorschlag (M)">Modell</button>
       <button id="e-ai" title="KI-Vorschlag (K)">KI</button>
       <button id="e-reg" title="Registerdaten (MaStR) für dieses Bild bei PV-Map abfragen (R) – Ergebnis in der Infozeile">Register</button>
@@ -445,7 +443,7 @@
       <b>Werkzeuge</b> V Zeiger · H Hand · Z Lupe · 1 Polygon · 2 Rechteck · 3 gedrehtes Rechteck<br>
       <b>Halten</b> Shift oder Leertaste = Hand · Cmd/Strg = Zeiger · Alt = Lupe (Klick vergrößert, Rechtsklick verkleinert, Rahmen ziehen)<br>
       <b>Zeiger</b> Fläche anklicken und ziehen · Ecke ziehen · Doppelklick auf Kante = neue Ecke · Entf löscht Ecke bzw. Fläche<br>
-      <b>Ebenen</b> N oder G wechselt PV ↔ Gaube/kein PV · Klick mit dem Zeiger auf eine Fläche der anderen Ebene wechselt dorthin<br>
+      <b>Klassen</b> N nächste Klasse · Shift+N vorige · P PV-Module · Klick mit dem Zeiger auf eine Fläche einer anderen Klasse wechselt dorthin · <a href="/api/docs/maskieren" target="_blank">Anleitung: sauber maskieren</a><br>
       <b>Ansicht</b> Mausrad / Trackpad zoomt · + / − · F oder 0 ganzes Bild · B Liste ein/aus · S Fang ein/aus<br>
       <b>Ablauf</b> Enter speichert und öffnet das nächste Bild · ← → blättern · X überspringen · L Label · W falscher Treffer (Flächen → „keine PV“) · M Modell · K KI · R Registerdaten · Cmd/Strg+Z rückgängig · Esc abbrechen
     </div>

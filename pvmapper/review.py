@@ -51,6 +51,8 @@ def set_cause(d: str, name: str, cause: str, note: str | None = None) -> dict:
         if prev.get("moved") is not None:   # a false hit called right after all: the areas go back to the PV layer
             meta = annotate.save_annotation(d, name, prev["moved"], 1, "done" if cause == "richtig" else "open", "user",
                                             negatives=prev.get("neg_before") or [])
+            cl = annotate.class_polygons(d, name)
+            meta["classes"] = annotate._write_classes(d, name, {k: [q for q in v if q not in prev["moved"]] for k, v in cl.items()})
         else:
             meta = annotate.save_annotation(d, name, None, 1, "done" if cause == "richtig" else "open", "user")
         moved = neg_before = None
@@ -61,6 +63,7 @@ def set_cause(d: str, name: str, cause: str, note: str | None = None) -> dict:
         moved = annotate.current_polygons(d, name) or []
         neg_before = annotate.current_polygons(d, name, "neg") or []
         meta = annotate.save_annotation(d, name, [], 0, "done", "user", negatives=neg_before + moved)
+        meta["classes"] = annotate.add_to_class(d, name, annotate.CAUSE_CLASS.get(cause, "alt"), moved)
     meta["review"] = {"cause": cause, "ok": ok, "note": (note or "")[:300] or None, "at": time.strftime("%Y-%m-%d %H:%M:%S"),
                       **({"moved": moved, "neg_before": neg_before} if moved is not None else {})}
     annotate.write_meta(d, meta)
