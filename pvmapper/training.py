@@ -798,8 +798,14 @@ def run(job, cfg: dict):
     det.cls_threshold = thr
     new_pred = predict(new_scores, thr, min_px)
     new_metrics = metrics(val, new_pred, px_area)
-    base_f1 = (metrics([m for m in val if m["label_kind"] != "neg_weak"] or val, base_pred, px_area)["alle"]["f1"]) or 0
-    job.log(f"F1 (sichere Labels) vorher {base_f1:.3f} → nachher {f1:.3f}, Schwelle {thr}")
+    # fair comparison: the base model gets its best threshold on the same buildings too (before 19.11.2026 it kept its old
+    # threshold, so a new model 'won' by its tuned threshold alone)
+    base_tuned_thr, base_tuned_f1 = tune_threshold(val, base_scores, min_px)
+    base_f1 = max(base_tuned_f1 or 0, (metrics([m for m in val if m["label_kind"] != "neg_weak"] or val, base_pred, px_area)["alle"]["f1"]) or 0)
+    job.log(f"F1 (sichere Labels) vorher {base_f1:.3f} (beste Schwelle {base_tuned_thr}) → nachher {f1:.3f}, Schwelle {thr}")
+    if base_tuned_thr is not None and base_tuned_thr != base_thr and (base_tuned_f1 or 0) > (base_metrics["alle"]["f1"] or 0) + 0.02:
+        job.log(f"Hinweis: Schon das Ausgangsmodell wäre mit Schwelle {base_tuned_thr} statt {base_thr} hier besser "
+                f"(F1 {base_tuned_f1:.3f} statt {base_metrics['alle']['f1'] or 0:.3f}).")
     try:
         diffs = review_chips(job, ds_dir, val, base_scores, base_thr, new_scores, thr, base_pred, new_pred)
     except Exception as e:                                       # noqa: BLE001  (review images are optional)
@@ -815,7 +821,7 @@ def run(job, cfg: dict):
               "vorher": base_metrics, "nachher": new_metrics, "abweichungen": diffs, "minutes": round((time.time() - t0) / 60, 1)}
     with open(os.path.join(job.dir, "report.json"), "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=1)
-    better = f1 >= base_f1
+    better = f1 > base_f1 + 0.005                                # a tie is no reason for a new model
     if p.get("calibrate_kwp"):                                   # register capacities → fill factors (optional, see calibration.py)
         from . import calibration
         n_reg = calibration.ensure_register(ds_dir, cfg, p["calibrate_kwp"])
