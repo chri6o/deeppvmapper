@@ -410,27 +410,66 @@ def register_lookup(d: str, client, names: list | None = None, radius_m: float =
 # "find outline" tool of the mask editor (20.11.2026): a click into a module field, a shadow, a dormer …
 # ---------------------------------------------------------------------------
 
-def outline_at(d, name, x: float, y: float, tol: float = 18.0, max_share: float = 0.35) -> dict:
+def _flood(smooth, sx, sy, t):
+    h, w = smooth.shape[:2]
+    mask = np.zeros((h + 2, w + 2), np.uint8)
+    flags = 8 | cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE | (255 << 8)
+    cv2.floodFill(smooth, mask, (sx, sy), (0, 0, 0), (t, t, t), (t, t, t), flags)
+    return mask[1:-1, 1:-1] > 0
+
+
+def _smooth(img):
+    return cv2.bilateralFilter(cv2.medianBlur(img, 5), 9, 30, 7)
+
+
+TOL_STEPS = (5, 7, 9, 12, 15, 18, 22, 27, 33, 40, 48, 58)
+
+
+def auto_tolerance(smooth, sx, sy, max_share: float = 0.35, min_px: int = 30):
+    """tolerance at which the filled area stops growing (a plateau = the object's boundary), before it runs out into the roof:
+    the area for each tolerance step, then the step after which it grows least; [(tol, area)] for the editor"""
+    h, w = smooth.shape[:2]
+    curve = []
+    for t in TOL_STEPS:
+        a = int(_flood(smooth, sx, sy, t).sum())
+        curve.append((t, a))
+        if a > max_share * h * w:
+            break
+    ok = [(t, a) for t, a in curve if min_px <= a <= max_share * h * w]
+    if not ok:
+        return (curve[0][0] if curve else 18), curve
+    best, best_g = ok[-1][0], None
+    for i, (t, a) in enumerate(curve):
+        if (t, a) not in ok or i + 1 >= len(curve):
+            continue
+        g = curve[i + 1][1] / max(a, 1)                 # growth to the next step
+        if best_g is None or g < best_g:
+            best, best_g = t, g
+    return best, curve
+
+
+def outline_at(d, name, x: float, y: float, tol: float | None = 18.0, max_share: float = 0.35) -> dict:
     """outer boundary of the uniform area around a clicked point: flood fill on a smoothed image (the module grid and roof tile
     texture disappear), closed and with holes filled; a nearly rectangular result becomes a (rotated) rectangle. If the fill
     runs out into the roof (more than max_share of the image), the tolerance is reduced step by step."""
     img = np.asarray(Image.open(os.path.join(d, name + ".jpg")).convert("RGB"))
     h, w = img.shape[:2]
     sx, sy = int(round(min(max(x, 0), w - 1))), int(round(min(max(y, 0), h - 1)))
-    smooth = cv2.bilateralFilter(cv2.medianBlur(img, 5), 9, 30, 7)
+    smooth = _smooth(img)
+    auto = tol is None or str(tol).lower() == "auto"
+    curve = None
+    if auto:
+        tol, curve = auto_tolerance(smooth, sx, sy, max_share)
     t = float(tol)
     region = None
     for _ in range(6):
-        mask = np.zeros((h + 2, w + 2), np.uint8)
-        flags = 8 | cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE | (255 << 8)
-        cv2.floodFill(smooth.copy(), mask, (sx, sy), (0, 0, 0), (t, t, t), (t, t, t), flags)
-        r = mask[1:-1, 1:-1] > 0
+        r = _flood(smooth, sx, sy, t)
         if r.sum() <= max_share * h * w:
             region = r
             break
         t *= 0.65
     if region is None or region.sum() < 6:
-        return {"polygon": None, "tol": round(t, 1), "hint": "keine einheitliche Fläche gefunden"}
+        return {"polygon": None, "tol": round(t, 1), "auto": auto, "hint": "keine einheitliche Fläche gefunden"}
     k = np.ones((5, 5), np.uint8)
     m = cv2.morphologyEx(region.astype(np.uint8), cv2.MORPH_CLOSE, k)
     m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
@@ -447,4 +486,22 @@ def outline_at(d, name, x: float, y: float, tol: float = 18.0, max_share: float 
     else:
         poly = cv2.approxPolyDP(c, max(1.0, 0.008 * cv2.arcLength(c, True)), True).reshape(-1, 2)
     return {"polygon": [[round(float(px), 1), round(float(py), 1)] for px, py in poly], "rect": bool(rect),
-            "area_px": int(area), "tol": round(t, 1)}
+            "area_px": int(area), "tol": round(t, 1), "auto": auto, **({"curve": curve} if curve else {})}
+
+
+def suggest_tolerance(d, name) -> int:
+    """a starting tolerance for an image (wand): from the texture of the roof – the median brightness step between neighbouring
+    pixels of the smoothed image inside the footprint, times a factor; flat, uniform images get a small one"""
+    img = np.asarray(Image.open(os.path.join(d, name + ".jpg")).convert("RGB"))
+    sm = _smooth(img).astype(np.int16)
+    g = np.abs(np.diff(sm, axis=1)).max(axis=2)
+    fpp = os.path.join(d, name + ".fp.png")
+    if os.path.isfile(fpp):
+        fp = np.asarray(Image.open(fpp)) > 0
+        vals = g[fp[:, 1:]]
+        if vals.size < 100:
+            vals = g.ravel()
+    else:
+        vals = g.ravel()
+    noise = float(np.percentile(vals, 75))
+    return int(min(40, max(6, round(4 + 3 * noise))))

@@ -879,7 +879,15 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
     def dataset_outline(jid: str, name: str, body: dict = Body(...)):
         """editor tool "find outline": boundary of the uniform area around the clicked point"""
         d, name = _item(jid, name)
-        return annotate.outline_at(d, name, float(body.get("x", 0)), float(body.get("y", 0)), float(body.get("tol", 18)))
+        tol = body.get("tol", "auto")
+        return annotate.outline_at(d, name, float(body.get("x", 0)), float(body.get("y", 0)),
+                                   None if tol in (None, "auto") else float(tol))
+
+    @app.get("/api/datasets/{jid}/items/{name}/wandtol")
+    def dataset_wandtol(jid: str, name: str):
+        """starting tolerance of the wand for this image (texture of the roof)"""
+        d, name = _item(jid, name)
+        return {"tol": annotate.suggest_tolerance(d, name)}
 
     @app.get("/api/datasets/{jid}/items/{name}/corners")
     def dataset_corners(jid: str, name: str):

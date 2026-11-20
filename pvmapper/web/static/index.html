@@ -419,30 +419,35 @@
       <button id="e-close" title="Editor schließen">✕</button>
     </div>
     <div id="e-wrap"><canvas id="e-canvas"></canvas>
-      <div id="e-tools" class="etools">
-        <div class="seg">
+      <div id="e-tools" class="etbox">
+        <div class="tb-grid">
           <button data-tool="select" data-tip="Zeiger · V (halten: Cmd/Strg)" aria-label="Zeiger"><svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.5-7.5L21 10z"/></svg></button>
           <button data-tool="pan" data-tip="Hand · H (halten: Shift/Leertaste)" aria-label="Hand"><svg viewBox="0 0 24 24"><path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V5.5a1.5 1.5 0 013 0V14c0 4-2.5 7-6.5 7S5 18 4 15l-1-3a1.5 1.5 0 012.6-1.4L8 13"/></svg></button>
           <button data-tool="zoom" data-tip="Lupe · Z (halten: Alt)" aria-label="Lupe"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg></button>
-        </div>
-        <div class="seg">
+          <button id="e-fit" data-tip="Ganzes Bild · F oder 0" aria-label="Ganzes Bild"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
           <button data-tool="poly" class="on" data-tip="Polygon · 1" aria-label="Polygon"><svg viewBox="0 0 24 24"><path d="M12 3l8 6-3 11H7L4 9z"/></svg></button>
           <button data-tool="rect" data-tip="Rechteck ziehen · 2" aria-label="Rechteck"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
-          <button data-tool="rrect" data-tip="Gedrehtes Rechteck (Kante, Breite) · 3 – für Modulreihen" aria-label="Gedrehtes Rechteck"><svg viewBox="0 0 24 24"><path d="M5 14l9-9 5 5-9 9z"/></svg></button>
-          <button data-tool="wand" data-tip="Umriss suchen: in die Fläche klicken · 4 · [ ] Toleranz" aria-label="Umriss suchen"><svg viewBox="0 0 24 24"><path d="M4 20L15 9M14 4v3M19 9h-3M17.5 5.5l-2 2M10 5.5l1.5 1.5"/><path d="M15 9l1.5 1.5" /></svg></button>
+          <button data-tool="rrect" data-tip="Gedrehtes Rechteck (Kante, Breite) · 3 – Modulreihen" aria-label="Gedrehtes Rechteck"><svg viewBox="0 0 24 24"><path d="M5 14l9-9 5 5-9 9z"/></svg></button>
+          <button data-tool="wand" data-tip="Umriss suchen: in die Fläche klicken · 4" aria-label="Umriss suchen"><svg viewBox="0 0 24 24"><path d="M4 20L15 9M14 4v3M19 9h-3M17.5 5.5l-2 2M10 5.5l1.5 1.5"/></svg></button>
         </div>
-        <button id="e-snap" class="on" data-tip="Fang ein/aus · S" aria-label="Fang"><svg viewBox="0 0 24 24"><path d="M6 4v8a6 6 0 0012 0V4M6 8h4M14 8h4"/></svg></button>
-        <div class="seg" id="e-classes"></div>
-        <button id="e-model" data-tip="Modellvorschlag · M" aria-label="Modell"><svg viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg></button>
-        <button id="e-ai" data-tip="KI-Vorschlag · K" aria-label="KI"><svg viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01"/></svg></button>
-        <button id="e-undo" data-tip="Rückgängig · Cmd/Strg+Z" aria-label="Rückgängig"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
-        <button id="e-clear" data-tip="Alle Flächen der gewählten Klasse löschen" aria-label="Leeren"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
-        <button id="e-fit" data-tip="Ganzes Bild · F oder 0" aria-label="Ganzes Bild"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-        <button id="e-helpbtn" data-tip="Tasten und Anleitung · ?" aria-label="Hilfe"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 014.5 1.5c0 2-2 2-2 4M12 17h.01"/></svg></button>
+        <div class="tb-wand" data-tip="Toleranz der Umriss-Suche · [ kleiner ] größer · A automatisch je Klick">
+          <button id="e-wauto" class="on" aria-label="Toleranz automatisch">A</button><input id="e-wtol" type="range" min="4" max="60" step="1" value="18"><span id="e-wtolv">18</span>
+        </div>
+        <div class="tb-grid">
+          <button id="e-snap" class="on" data-tip="Fang ein/aus · S" aria-label="Fang"><svg viewBox="0 0 24 24"><path d="M6 4v8a6 6 0 0012 0V4M6 8h4M14 8h4"/></svg></button>
+          <button id="e-undo" data-tip="Rückgängig · Cmd/Strg+Z" aria-label="Rückgängig"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
+          <button id="e-clear" data-tip="Alle Flächen der gewählten Klasse löschen" aria-label="Leeren"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+          <button id="e-helpbtn" data-tip="Tasten und Anleitung · ?" aria-label="Hilfe"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 014.5 1.5c0 2-2 2-2 4M12 17h.01"/></svg></button>
+          <button id="e-model" data-tip="Modellvorschlag · M" aria-label="Modell"><svg viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg></button>
+          <button id="e-ai" data-tip="KI-Vorschlag · K" aria-label="KI"><svg viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01"/></svg></button>
+        </div>
+        <div class="tb-h">Klasse <span id="e-clsname"></span></div>
+        <div class="tb-cls" id="e-classes"></div>
+        <div class="tb-h">Schnellurteil</div>
+        <div id="e-review" class="tb-rev">
+          <button data-cause="richtig" class="ok" data-tip="Gezeichnete PV stimmt – speichern und weiter">✓</button><button data-cause="teilweise" data-tip="PV, aber Fläche korrigieren (bleibt offen)">≈</button><button data-cause="gaube" data-tip="PV-Flächen → Gaube, speichern">Ga</button><button data-cause="dachfenster" data-tip="PV-Flächen → Dachfenster/Lichtkuppel, speichern">Fe</button><button data-cause="solarthermie" data-tip="PV-Flächen → Solarthermie, speichern">ST</button><button data-cause="schatten" data-tip="PV-Flächen → Schatten, speichern">Sch</button><button data-cause="dach_dunkel" data-tip="PV-Flächen → dunkle Dachfläche, speichern">Du</button><button data-cause="sonstiges" class="bad" data-tip="Falscher Treffer, sonstiges: PV-Flächen → Aufbau ohne Klasse · W">✗</button>
+        </div>
       </div>
-    </div>
-    <div id="e-review" class="etool ereview" title="Urteil für dieses Bild – ein Klick speichert und geht weiter">
-      <span class="hint" style="margin-right:6px">Schnellurteil:</span><button data-cause="richtig" class="primary" data-tip="Gezeichnete PV stimmt – speichern">✓ richtig</button><button data-cause="teilweise" data-tip="PV, aber Fläche korrigieren (bleibt offen)">≈ teilweise</button><button data-cause="gaube" data-tip="Alle PV-Flächen → Klasse Gaube, speichern">Gaube</button><button data-cause="schatten" data-tip="Alle PV-Flächen → Klasse Schatten, speichern">Schatten</button><button data-cause="dachfenster" data-tip="Alle PV-Flächen → Klasse Dachfenster/Lichtkuppel, speichern">Dachfenster / Lichtkuppel</button><button data-cause="solarthermie" data-tip="Alle PV-Flächen → Klasse Solarthermie, speichern">Solarthermie</button><button data-cause="dach_dunkel" data-tip="Alle PV-Flächen → Klasse dunkle Dachfläche, speichern">dunkle Dachfläche</button><button data-cause="sonstiges" data-tip="Alle PV-Flächen → „Aufbau ohne Klasse“, speichern · W">✗ falsch, sonstiges</button>
     </div>
     <div id="e-info" class="einfo"></div>
     <div id="e-help" class="ehelp hidden">

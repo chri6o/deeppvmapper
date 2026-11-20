@@ -298,3 +298,20 @@ def test_outline_at(tmp_path):
     assert iou > 0.75, iou
     flat = annotate.outline_at(str(tmp_path), "a", 5, 5)                     # click on the roof: too large → tolerance shrinks
     assert flat["tol"] < 18 or flat["polygon"] is None or len(flat["polygon"]) >= 3
+
+
+def test_outline_auto_tolerance(tmp_path):
+    import numpy as np, cv2
+    from PIL import Image
+    from pvmapper import annotate
+    rng = np.random.default_rng(2)
+    img = np.clip(np.full((200, 200, 3), (150, 120, 100), np.int16) + rng.integers(-14, 14, (200, 200, 3)), 0, 255).astype(np.uint8)
+    box = cv2.boxPoints(((100, 100), (90, 50), -10)).astype(np.int32); cv2.fillPoly(img, [box], (40, 45, 75))
+    Image.fromarray(img).save(tmp_path / "a.jpg")
+    r = annotate.outline_at(str(tmp_path), "a", 100, 100, None)
+    assert r["auto"] and r["polygon"] and r["curve"], r
+    got = np.zeros((200, 200), np.uint8); cv2.fillPoly(got, [np.array(r["polygon"], np.int32)], 1)
+    want = np.zeros((200, 200), np.uint8); cv2.fillPoly(want, [box], 1)
+    assert (got & want).sum() / (got | want).sum() > 0.75
+    t = annotate.suggest_tolerance(str(tmp_path), "a")
+    assert 6 <= t <= 40

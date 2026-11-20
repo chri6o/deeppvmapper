@@ -1173,6 +1173,7 @@ async function openItem(i) {
   M.img = new Image();
   M.img.onload = () => { showEditor(true); fitView(); draw(); };
   M.img.src = base + "/image";
+  api(base + "/wandtol").then((r) => { if (M.item && M.item.name === m.name) { M.wandTol = r.tol; wandUi(); } }).catch(() => {});
   api(base + "/corners").then((c) => { if (M.item && M.item.name === m.name) M.corners = c.points; }).catch(() => {});
   info2(); renderList();
   const tr = $(`#m-list tr[data-i="${i}"]`); if (tr) tr.scrollIntoView({ block: "nearest" });
@@ -1184,7 +1185,7 @@ function info2(extra = "") {
   const ty = M.typo && M.typo.installations.length ? " · " + M.typo.installations.map((i) => `${esc(LAYOUT_TXT[i.layout] || i.layout)}${i.azimuth_deg != null ? " " + Math.round(i.azimuth_deg) + "°" + (i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : "") : ""} ${fmt(i.kwp_est, 1)} kWp`).join(", ") +
     ` → <b>${fmt(M.typo.summary.kwp_est, 1)} kWp</b> (${fmt(M.typo.summary.kwp_low, 0)}–${fmt(M.typo.summary.kwp_high, 0)})` : "";
   $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty}${m.kwp_detected != null ? " · erkannt " + fmt(m.kwp_detected, 1) + " kWp" : ""}${m.install_year ? " · Baujahr ≈ " + m.install_year : ""}${regText(m)} · ${negPolys().length} andere Elemente${ai}${extra ? " · " + extra : ""}
-    <span class="hint" style="color:#8f9bb3"> · Klasse <b style="color:${CLS[M.layer].col}">${esc(CLS[M.layer].t)}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.tool === "wand" ? " · Toleranz " + M.wandTol : ""}${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
+    <span class="hint" style="color:#8f9bb3"> · Klasse <b style="color:${CLS[M.layer].col}">${esc(CLS[M.layer].t)}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.tool === "wand" ? " · Toleranz " + (M.wandAuto ? "automatisch" : M.wandTol) : ""}${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
   const hl = $("#e-helplink"); if (hl) hl.onclick = (e) => { e.preventDefault(); toggleHelp(); };
 }
 // installation typology of the drawn mask (layout, orientation, kWp), refreshed shortly after every change
@@ -1230,7 +1231,9 @@ function areaM2() {
   return a * res * res;
 }
 function fitCanvas() { const r = cv.getBoundingClientRect(); cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio; }
-function fitView() { fitCanvas(); const s = Math.min(cv.width / M.img.width, cv.height / M.img.height) * 0.97; M.view = { s, x: (cv.width - M.img.width * s) / 2, y: (cv.height - M.img.height * s) / 2 }; }
+function fitView() { fitCanvas(); const tb = $("#e-tools"), res = tb ? (tb.offsetWidth + 16) * devicePixelRatio : 0;   // room for the toolbox left of the image
+  const s = Math.min((cv.width - res) / M.img.width, cv.height / M.img.height) * 0.97;
+  M.view = { s, x: res + (cv.width - res - M.img.width * s) / 2, y: (cv.height - M.img.height * s) / 2 }; }
 window.addEventListener("resize", () => { if (!$("#editor").classList.contains("hidden") && M.img) { fitView(); draw(); } });
 const toScreen = ([x, y]) => [M.view.x + x * M.view.s, M.view.y + y * M.view.s];
 function evPx(e) { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * devicePixelRatio, (e.clientY - r.top) * devicePixelRatio]; }
@@ -1267,8 +1270,18 @@ function snapPoint(p, skip) {
 }
 
 // ---------------------------------------------------------------- drawing
+// the toolbox sits beside the image (left of it if there is room, else on it), so mouse ways stay short
+function placeToolbox() {
+  const tb = $("#e-tools"), wrap = $("#e-wrap"); if (!tb || !wrap || !M.img) return;
+  const dpr = devicePixelRatio, W = wrap.clientWidth, H = wrap.clientHeight, bw = tb.offsetWidth, bh = tb.offsetHeight;
+  const x0 = M.view.x / dpr, y0 = M.view.y / dpr, x1 = x0 + M.img.width * M.view.s / dpr;
+  let left = x0 - bw - 8, right = false;
+  if (left < 4) { if (x1 + 8 + bw <= W - 4) { left = x1 + 8; right = false; } else left = Math.max(4, Math.min(x0 + 6, W - bw - 4)); }
+  tb.classList.toggle("right", left >= x1);
+  tb.style.left = left + "px"; tb.style.top = Math.max(4, Math.min(y0, H - bh - 4)) + "px";
+}
 function draw() {
-  pvState();
+  pvState(); placeToolbox();
   if (!M.img) return;
   cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = "#1b2232"; cx.fillRect(0, 0, cv.width, cv.height);
   cx.imageSmoothingEnabled = M.view.s < 2;
@@ -1310,8 +1323,9 @@ function draw() {
 function setLayerButtons() {
   const box = $("#e-classes"); if (!box) return;
   const used = new Set(Object.entries(M.cls).filter(([, v]) => (v || []).length).map(([k]) => k));
-  box.innerHTML = CLASSES.filter((c) => !c.legacy || used.has(c.k) || M.layer === c.k).map((c) =>
-    `<button data-cls="${c.k}" class="${M.layer === c.k ? "on" : ""}" title="${esc(c.t)} zeichnen (N nächste Klasse, P PV)"><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:${c.col};margin-right:4px"></i>${esc(c.t)}${(M.cls[c.k] || []).length ? " (" + M.cls[c.k].length + ")" : ""}</button>`).join("");
+  box.innerHTML = CLASSES.filter((c) => !c.legacy || used.has(c.k) || M.layer === c.k).map((c) => { const n = (M.cls[c.k] || []).length;
+    return `<button data-cls="${c.k}" class="${M.layer === c.k ? "on" : ""}" data-tip="${esc(c.t)}${c.k === "pv" ? " · P" : " · N/Shift+N"}${n ? " – " + n + " Fläche(n)" : ""}"><i style="background:${c.col}"></i>${n ? "&nbsp;" + n : ""}</button>`; }).join("");
+  const nm = $("#e-clsname"); if (nm) { nm.textContent = CLS[M.layer].t; nm.style.color = CLS[M.layer].col; }
   box.querySelectorAll("[data-cls]").forEach((b) => b.onclick = () => setLayer(b.dataset.cls));
 }
 function setLayer(l) {
@@ -1448,16 +1462,21 @@ cv.addEventListener("wheel", (e) => { e.preventDefault(); const [px, py] = evPx(
   zoomAt(px, py, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
 
 // tool "find outline": the server floods the uniform area around the click and returns its outer boundary (annotate.outline_at)
-M.wandTol = +(store.get("wandtol") || 18);
+M.wandTol = 18; M.wandAuto = store.get("wandauto", true);
+function wandUi() { const r = $("#e-wtol"), v = $("#e-wtolv"), a = $("#e-wauto"); if (!r) return;
+  r.value = M.wandTol; v.textContent = M.wandAuto ? "A" : M.wandTol; a.classList.toggle("on", M.wandAuto); }
+$("#e-wauto").onclick = () => { M.wandAuto = !M.wandAuto; store.set("wandauto", M.wandAuto); wandUi(); info2(); };
+$("#e-wtol").oninput = () => { M.wandAuto = false; store.set("wandauto", false); M.wandTol = +$("#e-wtol").value; wandUi(); info2(); };
 async function wandAt(p) {
   const m = M.item; if (!m) return; info2("sucht Umriss …");
-  try { const r = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/outline`, { json: { x: p[0], y: p[1], tol: M.wandTol } });
+  try { const r = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/outline`, { json: { x: p[0], y: p[1], tol: M.wandAuto ? "auto" : M.wandTol } });
     if (!r.polygon) { info2(esc(r.hint || "kein Umriss gefunden") + " – Toleranz mit ] erhöhen oder von Hand zeichnen"); return; }
+    if (r.auto) { M.wandTol = Math.round(r.tol); wandUi(); }
     push(); M.polys.push(r.polygon); M.sel = M.polys.length - 1; M.vsel = -1; setLayerButtons(); draw();
-    info2(`Umriss als ${esc(CLS[M.layer].t)} übernommen${r.rect ? " (Rechteck)" : ""}${r.tol < M.wandTol ? ", Toleranz auf " + r.tol + " gesenkt" : ""} – mit dem Zeiger (V) nachbessern, Entf löscht`);
+    info2(`Umriss als ${esc(CLS[M.layer].t)} übernommen${r.rect ? " (Rechteck)" : ""}, Toleranz ${r.tol}${r.auto ? " (automatisch)" : ""} – mit dem Zeiger (V) nachbessern, Entf löscht`);
   } catch (e) { info2(esc(e.message)); }
 }
-function setWandTol(v) { M.wandTol = Math.max(4, Math.min(60, Math.round(v))); store.set("wandtol", M.wandTol); info2(); }
+function setWandTol(v) { M.wandAuto = false; store.set("wandauto", false); M.wandTol = Math.max(4, Math.min(60, Math.round(v))); wandUi(); info2(); }
 function setTool(t) { M.tool = t; M.cur = []; M.rect = null; if (t !== "select") M.vsel = -1;
   $$("#editor [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t)); setCursor(); draw(); info2(); }
 function setSnap(on) { M.snap = on; store.set("snap", on); $("#e-snap").classList.toggle("on", on); M.snapHit = null; if (M.img) { draw(); info2(); } }
