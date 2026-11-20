@@ -149,3 +149,19 @@ details > summary { cursor: pointer; margin: 8px 0; font-weight: 500; }
 .g-review .row { gap: 6px; margin: 4px 0; }
 .g-review select { font-size: 12px; padding: 3px 4px; }
 #g-list tr.sel td { background: #fff3c4; }
+
+/* mask editor: tools on the top edge of the image (20.11.2026) */
+.etools { position: absolute; top: 6px; left: 6px; right: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; pointer-events: none; font-size: 11.5px; z-index: 2; }
+.etools > *, .etools .seg { pointer-events: auto; }
+.etools .seg { display: flex; gap: 0; background: rgba(15,21,36,.82); border-radius: 6px; overflow: visible; }
+.etools button { position: relative; background: rgba(15,21,36,.82); color: #fff; border: 0; border-radius: 6px; padding: 4px 6px; cursor: pointer; font: inherit; line-height: 1; display: inline-flex; align-items: center; gap: 4px; }
+.etools .seg button { border-radius: 0; background: transparent; }
+.etools .seg button:first-child { border-radius: 6px 0 0 6px; } .etools .seg button:last-child { border-radius: 0 6px 6px 0; }
+.etools button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.etools button.on, .etools .seg button.on { background: var(--accent); color: var(--accent-ink); }
+.etools button:hover:not(.on) { background: rgba(60,75,110,.95); }
+[data-tip]:hover::after { content: attr(data-tip); position: absolute; top: calc(100% + 4px); left: 0; white-space: nowrap; background: #0b1020; color: #fff;
+  font-size: 11px; padding: 3px 6px; border-radius: 4px; pointer-events: none; z-index: 5; box-shadow: 0 2px 6px rgba(0,0,0,.4); }
+.ereview { font-size: 12px; padding: 4px 10px; } .ereview button { padding: 4px 8px; position: relative; } .ereview [data-tip]:hover::after { top: auto; bottom: calc(100% + 4px); }
+.pvstate { font-size: 12px; padding: 3px 8px; border-radius: 10px; background: #26304a; color: #dfe5f1; }
+.pvstate.yes { background: #7a1f2e; color: #fff; } .pvstate.no { background: #24404a; }

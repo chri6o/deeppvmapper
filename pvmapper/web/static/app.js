@@ -1169,7 +1169,7 @@ async function openItem(i) {
   M.layer = "pv"; M.polys = M.cls.pv; setLayerButtons();
   M.hist = []; M.cur = []; M.sel = -1; M.vsel = -1; M.label = d.effective_label; M.dirty = false; M.corners = [];
   M.typo = null; M.typoKey = null;
-  $("#e-label").checked = !!M.label; $("#e-usereg").checked = !!M.item.use_register;
+  M.label0 = M.label; M.hadMask = !!(d.polygons || []).length; $("#e-usereg").checked = !!M.item.use_register;
   M.img = new Image();
   M.img.onload = () => { showEditor(true); fitView(); draw(); };
   M.img.src = base + "/image";
@@ -1177,14 +1177,14 @@ async function openItem(i) {
   info2(); renderList();
   const tr = $(`#m-list tr[data-i="${i}"]`); if (tr) tr.scrollIntoView({ block: "nearest" });
 }
-const TOOL_TXT = { poly: "Polygon", rect: "Rechteck", rrect: "gedrehtes Rechteck", select: "Zeiger", pan: "Hand", zoom: "Lupe" };
+const TOOL_TXT = { poly: "Polygon", rect: "Rechteck", rrect: "gedrehtes Rechteck", wand: "Umriss suchen", select: "Zeiger", pan: "Hand", zoom: "Lupe" };
 function info2(extra = "") {
-  const m = M.item; if (!m) return;
+  const m = M.item; if (!m) return; pvState();
   const ai = m.ai ? ` · KI (${esc(m.ai.provider)}/${esc(m.ai.mode)}): ${m.ai.pv_visible ? "PV" : "keine PV"}${m.ai.confidence != null ? ", Sicherheit " + fmt(m.ai.confidence, 2) : ""}${m.ai.reviewed ? ", geprüft" : ", <b>ungeprüft</b>"}${m.ai.note ? " – " + esc(m.ai.note) : ""}` : "";
   const ty = M.typo && M.typo.installations.length ? " · " + M.typo.installations.map((i) => `${esc(LAYOUT_TXT[i.layout] || i.layout)}${i.azimuth_deg != null ? " " + Math.round(i.azimuth_deg) + "°" + (i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : "") : ""} ${fmt(i.kwp_est, 1)} kWp`).join(", ") +
     ` → <b>${fmt(M.typo.summary.kwp_est, 1)} kWp</b> (${fmt(M.typo.summary.kwp_low, 0)}–${fmt(M.typo.summary.kwp_high, 0)})` : "";
   $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty}${m.kwp_detected != null ? " · erkannt " + fmt(m.kwp_detected, 1) + " kWp" : ""}${m.install_year ? " · Baujahr ≈ " + m.install_year : ""}${regText(m)} · ${negPolys().length} andere Elemente${ai}${extra ? " · " + extra : ""}
-    <span class="hint" style="color:#8f9bb3"> · Klasse <b style="color:${CLS[M.layer].col}">${esc(CLS[M.layer].t)}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
+    <span class="hint" style="color:#8f9bb3"> · Klasse <b style="color:${CLS[M.layer].col}">${esc(CLS[M.layer].t)}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.tool === "wand" ? " · Toleranz " + M.wandTol : ""}${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
   const hl = $("#e-helplink"); if (hl) hl.onclick = (e) => { e.preventDefault(); toggleHelp(); };
 }
 // installation typology of the drawn mask (layout, orientation, kWp), refreshed shortly after every change
@@ -1268,6 +1268,7 @@ function snapPoint(p, skip) {
 
 // ---------------------------------------------------------------- drawing
 function draw() {
+  pvState();
   if (!M.img) return;
   cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = "#1b2232"; cx.fillRect(0, 0, cv.width, cv.height);
   cx.imageSmoothingEnabled = M.view.s < 2;
@@ -1375,6 +1376,7 @@ cv.addEventListener("mousedown", (e) => {
     M.zrect = [toImgRaw(e), toImgRaw(e)]; M.zstart = [px, py]; return;
   }
   if (e.button === 2) { M.drag = { x: e.clientX, y: e.clientY, vx: M.view.x, vy: M.view.y }; setCursor(); return; }
+  if (t === "wand") { wandAt(toImgRaw(e)); return; }
   const raw = toImg(e);
   if (t === "select") {
     const v = hitVertex(raw);
@@ -1445,16 +1447,31 @@ cv.addEventListener("wheel", (e) => { e.preventDefault(); const [px, py] = evPx(
   if (e.ctrlKey && !mods.meta) { zoomAt(px, py, Math.exp(-e.deltaY * 0.01)); return; }   // pinch on trackpads
   zoomAt(px, py, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
 
+// tool "find outline": the server floods the uniform area around the click and returns its outer boundary (annotate.outline_at)
+M.wandTol = +(store.get("wandtol") || 18);
+async function wandAt(p) {
+  const m = M.item; if (!m) return; info2("sucht Umriss …");
+  try { const r = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/outline`, { json: { x: p[0], y: p[1], tol: M.wandTol } });
+    if (!r.polygon) { info2(esc(r.hint || "kein Umriss gefunden") + " – Toleranz mit ] erhöhen oder von Hand zeichnen"); return; }
+    push(); M.polys.push(r.polygon); M.sel = M.polys.length - 1; M.vsel = -1; setLayerButtons(); draw();
+    info2(`Umriss als ${esc(CLS[M.layer].t)} übernommen${r.rect ? " (Rechteck)" : ""}${r.tol < M.wandTol ? ", Toleranz auf " + r.tol + " gesenkt" : ""} – mit dem Zeiger (V) nachbessern, Entf löscht`);
+  } catch (e) { info2(esc(e.message)); }
+}
+function setWandTol(v) { M.wandTol = Math.max(4, Math.min(60, Math.round(v))); store.set("wandtol", M.wandTol); info2(); }
 function setTool(t) { M.tool = t; M.cur = []; M.rect = null; if (t !== "select") M.vsel = -1;
-  $$(".etool [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t)); setCursor(); draw(); info2(); }
+  $$("#editor [data-tool]").forEach((b) => b.classList.toggle("on", b.dataset.tool === t)); setCursor(); draw(); info2(); }
 function setSnap(on) { M.snap = on; store.set("snap", on); $("#e-snap").classList.toggle("on", on); M.snapHit = null; if (M.img) { draw(); info2(); } }
-$$(".etool [data-tool]").forEach((b) => b.onclick = () => setTool(b.dataset.tool));
+$$("#editor [data-tool]").forEach((b) => b.onclick = () => setTool(b.dataset.tool));
 $("#e-snap").onclick = () => setSnap(!M.snap);
 $("#e-full").onclick = () => setFull(!M.full);
 $("#e-fit").onclick = () => { fitView(); draw(); };
 $("#e-undo").onclick = undo;
 $("#e-clear").onclick = () => { if (M.polys.length) { push(); M.polys = []; M.sel = -1; draw(); info2(); } };
-$("#e-label").onchange = () => { M.label = $("#e-label").checked ? 1 : 0; M.dirty = true; };
+// "PV present" follows from the areas: at least one area of the class PV modules (20.11.2026)
+function autoLabel() { return pvPolys().length ? 1 : 0; }
+function pvState() { const el = $("#e-pvstate"); if (!el || !M.item) return; const n = pvPolys().length;
+  el.textContent = n ? `PV vorhanden (${n} ${n === 1 ? "Fläche" : "Flächen"})` : "kein PV"; el.className = "pvstate " + (n ? "yes" : "no"); }
+$("#e-helpbtn").onclick = () => toggleHelp();
 $("#e-prev").onclick = () => openItem(M.idx - 1);
 
 /* sample review (pvmapper/review.py): verdict per image, summary per dataset */
@@ -1496,7 +1513,7 @@ $$("#e-review [data-cause]").forEach((b) => b.onclick = async () => {
   if (M.cur.length >= 3) closePoly();
   try {
     // keep what was drawn: save the current areas first, the verdict then moves them for a false hit
-    if (M.dirty) await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), classes: clsPolys(), label: M.label, status: "open" } });
+    if (M.dirty) await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), classes: clsPolys(), label: autoLabel(), status: "open" } });
     const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/review`, { json: { cause: b.dataset.cause } });
     const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
     loadReview();
@@ -1521,10 +1538,11 @@ setSnap(M.snap); $("#e-full").classList.toggle("on", !M.full);
 async function saveItem(status) {
   const m = M.item; if (!m) return;
   if (M.cur.length >= 3) closePoly();
-  if (status === "done" && M.label === 1 && M.layer !== "pv" && !pvPolys().length &&
-      !confirm("Gewählt ist die Klasse „" + CLS[M.layer].t + "“, aber es ist keine PV-Fläche gezeichnet – das Bild wird trotzdem als „PV vorhanden“ gespeichert.\n\nFür einen falschen Treffer stattdessen „✗ falsch …“ klicken oder das Häkchen „PV vorhanden“ entfernen.\n\nTrotzdem als PV speichern?")) return;
+  // an image that was "PV" without a drawn area (register, older dataset) becomes "no PV" only on purpose
+  if (status === "done" && M.label0 === 1 && !M.hadMask && !pvPolys().length &&
+      !confirm("Dieses Bild galt bisher als „PV vorhanden“, es ist aber keine Fläche der Klasse PV-Module gezeichnet.\n\n„PV vorhanden“ ergibt sich jetzt aus den Flächen. Ohne PV-Fläche wird es als „kein PV“ gespeichert.\n\nAls „kein PV“ speichern? (Abbrechen = erst die Module zeichnen)")) return;
   try {
-    const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), classes: clsPolys(), label: M.label, status } });
+    const meta = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`, { json: { polygons: pvPolys(), negatives: negPolys(), classes: clsPolys(), label: autoLabel(), status } });
     const it = M.items.find((x) => x.name === m.name); Object.assign(it, meta);
     const keepList = M.list; renderStats(computeStats()); M.list = keepList;
     openItem(M.idx + 1);
@@ -1575,6 +1593,9 @@ document.addEventListener("keydown", (e) => {
   else if (k === "1") setTool("poly");
   else if (k === "2") setTool("rect");
   else if (k === "3") setTool("rrect");
+  else if (k === "4") setTool("wand");
+  else if (k === "[") setWandTol(M.wandTol * 0.8);
+  else if (k === "]") setWandTol(M.wandTol * 1.25);
   else if (kl === "v") setTool("select");
   else if (kl === "h") setTool("pan");
   else if (kl === "z") setTool("zoom");
@@ -1587,7 +1608,6 @@ document.addEventListener("keydown", (e) => {
   else if (kl === "k") suggest($("#m-provider").value);
   else if (kl === "r" && M.item) regLookup([M.item.name]);
   else if (kl === "x") saveItem("skip");
-  else if (kl === "l") { $("#e-label").checked = !$("#e-label").checked; $("#e-label").onchange(); }
   else if (kl === "w") { e.preventDefault(); document.querySelector('#e-review [data-cause="sonstiges"]').click(); }
   else if (kl === "f" || k === "0") { fitView(); draw(); }
 });

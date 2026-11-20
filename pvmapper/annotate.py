@@ -404,3 +404,47 @@ def register_lookup(d: str, client, names: list | None = None, radius_m: float =
         out["images"] += 1
         out["with_register"] += any(b.get("register") for b in res)
     return out
+
+
+# ---------------------------------------------------------------------------
+# "find outline" tool of the mask editor (20.11.2026): a click into a module field, a shadow, a dormer …
+# ---------------------------------------------------------------------------
+
+def outline_at(d, name, x: float, y: float, tol: float = 18.0, max_share: float = 0.35) -> dict:
+    """outer boundary of the uniform area around a clicked point: flood fill on a smoothed image (the module grid and roof tile
+    texture disappear), closed and with holes filled; a nearly rectangular result becomes a (rotated) rectangle. If the fill
+    runs out into the roof (more than max_share of the image), the tolerance is reduced step by step."""
+    img = np.asarray(Image.open(os.path.join(d, name + ".jpg")).convert("RGB"))
+    h, w = img.shape[:2]
+    sx, sy = int(round(min(max(x, 0), w - 1))), int(round(min(max(y, 0), h - 1)))
+    smooth = cv2.bilateralFilter(cv2.medianBlur(img, 5), 9, 30, 7)
+    t = float(tol)
+    region = None
+    for _ in range(6):
+        mask = np.zeros((h + 2, w + 2), np.uint8)
+        flags = 8 | cv2.FLOODFILL_MASK_ONLY | cv2.FLOODFILL_FIXED_RANGE | (255 << 8)
+        cv2.floodFill(smooth.copy(), mask, (sx, sy), (0, 0, 0), (t, t, t), (t, t, t), flags)
+        r = mask[1:-1, 1:-1] > 0
+        if r.sum() <= max_share * h * w:
+            region = r
+            break
+        t *= 0.65
+    if region is None or region.sum() < 6:
+        return {"polygon": None, "tol": round(t, 1), "hint": "keine einheitliche Fläche gefunden"}
+    k = np.ones((5, 5), np.uint8)
+    m = cv2.morphologyEx(region.astype(np.uint8), cv2.MORPH_CLOSE, k)
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return {"polygon": None, "tol": round(t, 1), "hint": "keine einheitliche Fläche gefunden"}
+    inside = [c for c in cnts if cv2.pointPolygonTest(c, (sx, sy), False) >= 0]
+    c = max(inside or cnts, key=cv2.contourArea)
+    area = float(cv2.contourArea(c))
+    (cx, cy), (rw, rh), ang = cv2.minAreaRect(c)
+    rect = rw * rh > 0 and area / (rw * rh) >= 0.85
+    if rect:
+        poly = cv2.boxPoints(((cx, cy), (rw, rh), ang))
+    else:
+        poly = cv2.approxPolyDP(c, max(1.0, 0.008 * cv2.arcLength(c, True)), True).reshape(-1, 2)
+    return {"polygon": [[round(float(px), 1), round(float(py), 1)] for px, py in poly], "rect": bool(rect),
+            "area_px": int(area), "tol": round(t, 1)}

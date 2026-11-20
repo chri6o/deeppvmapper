@@ -408,45 +408,50 @@
   <div id="editor" class="hidden">
     <div class="etool">
       <button id="e-full" title="Liste einblenden / Vollbild (B)">☰</button>
-      <div class="seg" title="Werkzeuge">
-        <button data-tool="select" title="Zeiger (V) – Fläche wählen, verschieben, Ecken ziehen; Doppelklick auf Kante fügt Ecke ein. Halten: Cmd/Strg">➤</button>
-        <button data-tool="pan" title="Hand (H) – Bild verschieben. Halten: Shift oder Leertaste">✋</button>
-        <button data-tool="zoom" title="Lupe (Z) – Klick vergrößert, Rechtsklick verkleinert, Rahmen ziehen zoomt darauf. Halten: Alt">🔍</button>
-      </div>
-      <div class="seg" title="Zeichnen">
-        <button data-tool="poly" class="on" title="Polygon (1) – Klicks setzen Ecken, Doppelklick/Enter oder Klick auf den Startpunkt schließt">⬠</button>
-        <button data-tool="rect" title="Rechteck (2) – ziehen">▭</button>
-        <button data-tool="rrect" title="Gedrehtes Rechteck (3) – Kante mit zwei Klicks, dritter Klick für die Breite">◇</button>
-      </div>
-      <button id="e-snap" class="on" title="Fang (S): Bildecken, Ecken und Kanten der Flächen und des Umrisses">🧲 Fang</button>
-      <div class="seg" id="e-classes" title="Klasse der Fläche (N nächste, Shift+N vorige, P PV). Nur zum Zeichnen; das Urteil „keine PV“ setzt „✗ Falscher Treffer“ oder das Häkchen „PV vorhanden“."></div>
-      <button id="e-model" title="Modellvorschlag (M)">Modell</button>
-      <button id="e-ai" title="KI-Vorschlag (K)">KI</button>
-      <button id="e-reg" title="Registerdaten (MaStR) für dieses Bild bei PV-Map abfragen (R) – Ergebnis in der Infozeile">Register</button>
-      <button id="e-undo" title="Rückgängig (Cmd/Strg+Z)">↶</button>
-      <button id="e-clear" title="Alle Flächen der aktiven Ebene löschen">Leeren</button>
-      <button id="e-fit" title="Ganzes Bild (F oder 0)">⤢</button>
+      <span id="e-pvstate" class="pvstate" title="Ergibt sich aus den Flächen: mindestens eine Fläche der Klasse PV-Module = „PV vorhanden“"></span>
       <span class="sp"></span>
+      <button id="e-reg" title="Registerdaten (MaStR) für dieses Bild bei PV-Map abfragen (R) – Ergebnis in der Infozeile">Register</button>
       <label class="check" title="Registerleistung dieses Bilds für die Kalibrierung der Leistungsschätzung verwenden"><input type="checkbox" id="e-usereg"> Register kalibriert</label>
-      <label class="check" title="Label umschalten (L)"><input type="checkbox" id="e-label"> PV vorhanden</label>
       <button id="e-prev" title="Zurück (←)">←</button>
-      <button id="e-skip" title="Überspringen (X)">Überspringen</button>
+      <button id="e-skip" title="Überspringen (X) – unklare Bilder nicht raten">Überspringen</button>
       <button id="e-save" class="primary" title="Speichern und weiter (Enter)">Speichern ↵</button>
       <button id="e-next" title="Weiter ohne Speichern (→)">→</button>
       <button id="e-close" title="Editor schließen">✕</button>
     </div>
-    <div id="e-review" class="etool" title="Urteil für dieses Bild – ein Klick speichert und geht weiter">
-      <span class="hint" style="margin-right:6px">Urteil:</span><button data-cause="richtig" class="primary" title="PV, Fläche passt">✓ richtig</button><button data-cause="teilweise" class="" title="PV, aber Fläche korrigieren (bleibt offen)">≈ teilweise</button><button data-cause="gaube" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Gaube</button><button data-cause="schatten" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Schatten</button><button data-cause="dachfenster" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Dachfenster / Lichtkuppel</button><button data-cause="solarthermie" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">Solarthermie</button><button data-cause="dach_dunkel" class="" title="Falscher Treffer: Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">dunkle Dachfläche</button><button data-cause="sonstiges" class="" title="Falscher Treffer (W): Flächen werden zu „keine PV“ (hartes Gegenbeispiel)">✗ falsch, sonstiges</button>
+    <div id="e-wrap"><canvas id="e-canvas"></canvas>
+      <div id="e-tools" class="etools">
+        <div class="seg">
+          <button data-tool="select" data-tip="Zeiger · V (halten: Cmd/Strg)" aria-label="Zeiger"><svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.5-7.5L21 10z"/></svg></button>
+          <button data-tool="pan" data-tip="Hand · H (halten: Shift/Leertaste)" aria-label="Hand"><svg viewBox="0 0 24 24"><path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V5.5a1.5 1.5 0 013 0V14c0 4-2.5 7-6.5 7S5 18 4 15l-1-3a1.5 1.5 0 012.6-1.4L8 13"/></svg></button>
+          <button data-tool="zoom" data-tip="Lupe · Z (halten: Alt)" aria-label="Lupe"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg></button>
+        </div>
+        <div class="seg">
+          <button data-tool="poly" class="on" data-tip="Polygon · 1" aria-label="Polygon"><svg viewBox="0 0 24 24"><path d="M12 3l8 6-3 11H7L4 9z"/></svg></button>
+          <button data-tool="rect" data-tip="Rechteck ziehen · 2" aria-label="Rechteck"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="1"/></svg></button>
+          <button data-tool="rrect" data-tip="Gedrehtes Rechteck (Kante, Breite) · 3 – für Modulreihen" aria-label="Gedrehtes Rechteck"><svg viewBox="0 0 24 24"><path d="M5 14l9-9 5 5-9 9z"/></svg></button>
+          <button data-tool="wand" data-tip="Umriss suchen: in die Fläche klicken · 4 · [ ] Toleranz" aria-label="Umriss suchen"><svg viewBox="0 0 24 24"><path d="M4 20L15 9M14 4v3M19 9h-3M17.5 5.5l-2 2M10 5.5l1.5 1.5"/><path d="M15 9l1.5 1.5" /></svg></button>
+        </div>
+        <button id="e-snap" class="on" data-tip="Fang ein/aus · S" aria-label="Fang"><svg viewBox="0 0 24 24"><path d="M6 4v8a6 6 0 0012 0V4M6 8h4M14 8h4"/></svg></button>
+        <div class="seg" id="e-classes"></div>
+        <button id="e-model" data-tip="Modellvorschlag · M" aria-label="Modell"><svg viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg></button>
+        <button id="e-ai" data-tip="KI-Vorschlag · K" aria-label="KI"><svg viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01"/></svg></button>
+        <button id="e-undo" data-tip="Rückgängig · Cmd/Strg+Z" aria-label="Rückgängig"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
+        <button id="e-clear" data-tip="Alle Flächen der gewählten Klasse löschen" aria-label="Leeren"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
+        <button id="e-fit" data-tip="Ganzes Bild · F oder 0" aria-label="Ganzes Bild"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+        <button id="e-helpbtn" data-tip="Tasten und Anleitung · ?" aria-label="Hilfe"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 014.5 1.5c0 2-2 2-2 4M12 17h.01"/></svg></button>
+      </div>
     </div>
-    <div id="e-wrap"><canvas id="e-canvas"></canvas></div>
+    <div id="e-review" class="etool ereview" title="Urteil für dieses Bild – ein Klick speichert und geht weiter">
+      <span class="hint" style="margin-right:6px">Schnellurteil:</span><button data-cause="richtig" class="primary" data-tip="Gezeichnete PV stimmt – speichern">✓ richtig</button><button data-cause="teilweise" data-tip="PV, aber Fläche korrigieren (bleibt offen)">≈ teilweise</button><button data-cause="gaube" data-tip="Alle PV-Flächen → Klasse Gaube, speichern">Gaube</button><button data-cause="schatten" data-tip="Alle PV-Flächen → Klasse Schatten, speichern">Schatten</button><button data-cause="dachfenster" data-tip="Alle PV-Flächen → Klasse Dachfenster/Lichtkuppel, speichern">Dachfenster / Lichtkuppel</button><button data-cause="solarthermie" data-tip="Alle PV-Flächen → Klasse Solarthermie, speichern">Solarthermie</button><button data-cause="dach_dunkel" data-tip="Alle PV-Flächen → Klasse dunkle Dachfläche, speichern">dunkle Dachfläche</button><button data-cause="sonstiges" data-tip="Alle PV-Flächen → „Aufbau ohne Klasse“, speichern · W">✗ falsch, sonstiges</button>
+    </div>
     <div id="e-info" class="einfo"></div>
     <div id="e-help" class="ehelp hidden">
-      <b>Werkzeuge</b> V Zeiger · H Hand · Z Lupe · 1 Polygon · 2 Rechteck · 3 gedrehtes Rechteck<br>
+      <b>Werkzeuge</b> V Zeiger · H Hand · Z Lupe · 1 Polygon · 2 Rechteck · 3 gedrehtes Rechteck · 4 Umriss suchen (in die Fläche klicken; [ ] kleinere/größere Toleranz)<br>
       <b>Halten</b> Shift oder Leertaste = Hand · Cmd/Strg = Zeiger · Alt = Lupe (Klick vergrößert, Rechtsklick verkleinert, Rahmen ziehen)<br>
       <b>Zeiger</b> Fläche anklicken und ziehen · Ecke ziehen · Doppelklick auf Kante = neue Ecke · Entf löscht Ecke bzw. Fläche<br>
       <b>Klassen</b> N nächste Klasse · Shift+N vorige · P PV-Module · Klick mit dem Zeiger auf eine Fläche einer anderen Klasse wechselt dorthin · <a href="/api/docs/maskieren" target="_blank">Anleitung: sauber maskieren</a><br>
       <b>Ansicht</b> Mausrad / Trackpad zoomt · + / − · F oder 0 ganzes Bild · B Liste ein/aus · S Fang ein/aus<br>
-      <b>Ablauf</b> Enter speichert und öffnet das nächste Bild · ← → blättern · X überspringen · L Label · W falscher Treffer (Flächen → „keine PV“) · M Modell · K KI · R Registerdaten · Cmd/Strg+Z rückgängig · Esc abbrechen
+      <b>Ablauf</b> Enter speichert und öffnet das nächste Bild · ← → blättern · X überspringen · W falscher Treffer (PV-Flächen → „Aufbau ohne Klasse“) · „PV vorhanden“ ergibt sich aus den Flächen der Klasse PV-Module · M Modell · K KI · R Registerdaten · Cmd/Strg+Z rückgängig · Esc abbrechen
     </div>
   </div>
   <div id="maphint" class="maphint hidden"></div>

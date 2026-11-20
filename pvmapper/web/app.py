@@ -875,6 +875,12 @@ def create_app(config_path: str = "pvmapper.yml") -> FastAPI:
         t = annotate.typology_of(d, name, annotate.read_meta(d, name), body.get("polygons"), cfg())
         return {"summary": t["summary"], "installations": t["installations"]}
 
+    @app.post("/api/datasets/{jid}/items/{name}/outline")
+    def dataset_outline(jid: str, name: str, body: dict = Body(...)):
+        """editor tool "find outline": boundary of the uniform area around the clicked point"""
+        d, name = _item(jid, name)
+        return annotate.outline_at(d, name, float(body.get("x", 0)), float(body.get("y", 0)), float(body.get("tol", 18)))
+
     @app.get("/api/datasets/{jid}/items/{name}/corners")
     def dataset_corners(jid: str, name: str):
         d, name = _item(jid, name)

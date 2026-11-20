@@ -276,3 +276,25 @@ def test_mdpage():
     from pvmapper.web import mdpage
     h = mdpage.render("# T\n\nText **fett**\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n- x\n- y\n")
     assert "<h1>T</h1>" in h and "<b>fett</b>" in h and "<td>1</td>" in h and h.count("<li>") == 2
+
+
+def test_outline_at(tmp_path):
+    import numpy as np, cv2
+    from PIL import Image
+    from pvmapper import annotate
+    img = np.full((200, 200, 3), (150, 120, 100), np.uint8)                 # tiled roof
+    rng = np.random.default_rng(0); img = np.clip(img + rng.integers(-8, 8, img.shape), 0, 255).astype(np.uint8)
+    box = cv2.boxPoints(((100, 90), (80, 40), 20)).astype(np.int32)
+    cv2.fillPoly(img, [box], (35, 40, 70))                                    # module field, rotated
+    for i in range(-40, 40, 9):                                               # module grid lines
+        cv2.line(img, (100 + i, 60), (100 + i, 120), (60, 65, 90), 1)
+    cv2.fillPoly(img, [box], (35, 40, 70)) if False else None
+    Image.fromarray(img).save(tmp_path / "a.jpg")
+    r = annotate.outline_at(str(tmp_path), "a", 100, 90)
+    assert r["polygon"] and r["rect"], r
+    got = np.zeros((200, 200), np.uint8); cv2.fillPoly(got, [np.array(r["polygon"], np.int32)], 1)
+    want = np.zeros((200, 200), np.uint8); cv2.fillPoly(want, [box], 1)
+    iou = (got & want).sum() / (got | want).sum()
+    assert iou > 0.75, iou
+    flat = annotate.outline_at(str(tmp_path), "a", 5, 5)                     # click on the roof: too large → tolerance shrinks
+    assert flat["tol"] < 18 or flat["polygon"] is None or len(flat["polygon"]) >= 3
