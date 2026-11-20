@@ -1098,7 +1098,7 @@ async function loadDatasets(keep) {
   if (sel.value) openDataset(sel.value);
 }
 $("#m-ds").onchange = () => openDataset($("#m-ds").value);
-["#m-filter", "#m-sub", "#m-size"].forEach((s) => $(s).onchange = () => renderList());
+["#m-filter", "#m-sub", "#m-size"].forEach((s) => $(s).onchange = () => renderList(true));
 
 async function openDataset(id) {
   M.ds = id; M.dsProfile = ((M.dsList || []).find((d) => d.id === id) || {}).profile;
@@ -1114,8 +1114,8 @@ async function openDataset(id) {
   $("#m-sub").innerHTML = `<option value="">alle Arten</option>` + subs.map((x) => `<option>${esc(x)}</option>`).join("");
   $("#m-size").innerHTML = `<option value="">alle Größen</option>` + sizes.map((x) => `<option>${esc(x)}</option>`).join("");
   if (d.items.some((x) => String(x.label_kind || "").startsWith("det_") && x.status === "open")) $("#m-filter").value = "det";
-  renderStats(d.stats); renderList();
-  if (M.list.length && (!M.item || !M.items.some((x) => x.name === M.item.name))) openItem(0);   // straight into the editor
+  renderStats(d.stats); renderList(true);
+  if (M.nav.length && (!M.item || !M.items.some((x) => x.name === M.item.name))) openItem(0);   // straight into the editor
 }
 function renderStats(s) {
   $("#m-stats").innerHTML = [[s.total, "Bilder"], [s.positive, "mit PV (Label)"], [s.positive_without_mask, "PV ohne Maske"],
@@ -1132,14 +1132,18 @@ function matches(m) {
     || (f === "ai" && m.mask_source === "ai" && !(m.ai && m.ai.reviewed)) || (f === "mask" && m.has_mask)
     || (f === "neg" && !pos) || (["open", "done", "skip"].includes(f) && m.status === f);
 }
-function renderList() {
+// M.list: the images of the current filter (table); M.nav: the order ← → walk through – fixed when the dataset or the filter is chosen,
+// so a saved image that leaves the filter (e.g. "open") does not shift its neighbours (20.11.2026: ← → jumped to random images)
+function renderList(resetNav) {
   M.list = M.items.filter(matches);
+  if (resetNav || !M.nav) M.nav = M.list.map((m) => m.name);
   $("#m-list").innerHTML = `<tr><th>Gebäude</th><th>Label</th><th>Art</th><th>Größe</th><th>Maske</th></tr>` +
-    M.list.map((m, i) => `<tr class="click ${M.item && M.item.name === m.name ? "cur" : ""}" data-i="${i}"><td>${esc(m.id)}${m.val ? ' <span class="tag">Val</span>' : ""}</td>
+    M.list.map((m) => `<tr class="click ${M.item && M.item.name === m.name ? "cur" : ""}" data-name="${esc(m.name)}"><td>${esc(m.id)}${m.val ? ' <span class="tag">Val</span>' : ""}</td>
       <td>${m.effective_label ? "PV" : "–"}${m.effective_label !== m.label ? ' <span class="tag">korr.</span>' : ""}</td><td>${esc(m.sub)}</td><td>${esc(m.size_bin)}</td>
       <td>${m.has_mask ? `<span class="tag ${m.mask_source}">${SRC[m.mask_source] || m.mask_source}${m.mask_source === "ai" && !(m.ai && m.ai.reviewed) ? " ?" : ""}</span>` : ""}${m.status === "skip" ? '<span class="tag skip">übersprungen</span>' : m.status === "done" ? " ✓" : ""}</td></tr>`).join("") +
     (M.list.length ? "" : `<tr><td colspan="5" class="hint">Nichts in diesem Filter.</td></tr>`);
-  $$("#m-list tr.click").forEach((tr) => tr.onclick = () => openItem(+tr.dataset.i));
+  $$("#m-list tr.click").forEach((tr) => tr.onclick = () => { let i = M.nav.indexOf(tr.dataset.name);
+    if (i < 0) { M.nav = M.list.map((m) => m.name); i = M.nav.indexOf(tr.dataset.name); } openItem(i); });
 }
 
 // ------------------------------------------------------------------ editor
@@ -1158,8 +1162,9 @@ function showEditor(on) {
 function setFull(f) { M.full = f; store.set("full", f); document.body.classList.toggle("e-full", f && !$("#editor").classList.contains("hidden"));
   $("#e-full").classList.toggle("on", !f); if (M.img) { fitView(); draw(); } }
 async function openItem(i) {
-  if (i < 0 || i >= M.list.length) { $("#e-info").innerHTML = "Ende der Liste."; return; }
-  M.idx = i; const m = M.list[i];
+  if (i < 0 || i >= M.nav.length) { $("#e-info").innerHTML = i < 0 ? "Anfang der Liste." : "Ende der Liste."; return; }
+  const m = M.items.find((x) => x.name === M.nav[i]); if (!m) return;
+  M.idx = i;
   const base = `/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}`;
   const d = await api(base);
   M.item = { ...m, ...d.meta, width: d.width, height: d.height, footprint: d.footprint };
@@ -1177,7 +1182,7 @@ async function openItem(i) {
   api(base + "/wandtol").then((r) => { if (M.item && M.item.name === m.name) { M.wandTol = r.tol; wandUi(); } }).catch(() => {});
   api(base + "/corners").then((c) => { if (M.item && M.item.name === m.name) M.corners = c.points; }).catch(() => {});
   info2(); renderList();
-  const tr = $(`#m-list tr[data-i="${i}"]`); if (tr) tr.scrollIntoView({ block: "nearest" });
+  const tr = [...$$("#m-list tr.click")].find((r) => r.dataset.name === m.name); if (tr) tr.scrollIntoView({ block: "nearest" });
 }
 const TOOL_TXT = { poly: "Polygon", rect: "Rechteck", rrect: "gedrehtes Rechteck", wand: "Umriss suchen", select: "Zeiger", pan: "Hand", zoom: "Lupe" };
 function info2(extra = "") {
@@ -1185,7 +1190,7 @@ function info2(extra = "") {
   const ai = m.ai ? ` · KI (${esc(m.ai.provider)}/${esc(m.ai.mode)}): ${m.ai.pv_visible ? "PV" : "keine PV"}${m.ai.confidence != null ? ", Sicherheit " + fmt(m.ai.confidence, 2) : ""}${m.ai.reviewed ? ", geprüft" : ", <b>ungeprüft</b>"}${m.ai.note ? " – " + esc(m.ai.note) : ""}` : "";
   const ty = M.typo && M.typo.installations.length ? " · " + M.typo.installations.map((i) => `${esc(LAYOUT_TXT[i.layout] || i.layout)}${i.azimuth_deg != null ? " " + Math.round(i.azimuth_deg) + "°" + (i.azimuth2_deg != null ? "/" + Math.round(i.azimuth2_deg) + "°" : "") : ""} ${fmt(i.kwp_est, 1)} kWp`).join(", ") +
     ` → <b>${fmt(M.typo.summary.kwp_est, 1)} kWp</b> (${fmt(M.typo.summary.kwp_low, 0)}–${fmt(M.typo.summary.kwp_high, 0)})` : "";
-  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.list.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty}${m.kwp_detected != null ? " · erkannt " + fmt(m.kwp_detected, 1) + " kWp" : ""}${m.install_year ? " · Baujahr ≈ " + m.install_year : ""}${regText(m)} · ${negPolys().length} andere Elemente${ai}${extra ? " · " + extra : ""}
+  $("#e-info").innerHTML = `<b>${esc(m.id)}</b> · ${M.idx + 1}/${M.nav.length} · ${esc(LBL[m.label_kind] || m.label_kind)} · ${esc(m.sub)} · ${esc(m.size_bin)}${m.pv_kwp ? " · Register " + fmt(m.pv_kwp, 1) + " kWp" : ""} · PV-Fläche ${fmt(areaM2(), 1)} m²${ty}${m.kwp_detected != null ? " · erkannt " + fmt(m.kwp_detected, 1) + " kWp" : ""}${m.install_year ? " · Baujahr ≈ " + m.install_year : ""}${regText(m)} · ${negPolys().length} andere Elemente${ai}${extra ? " · " + extra : ""}
     <span class="hint" style="color:#8f9bb3"> · Klasse <b style="color:${CLS[M.layer].col}">${esc(CLS[M.layer].t)}</b> · Werkzeug <b>${TOOL_TXT[M.tool]}</b>${M.tool === "wand" ? " · Toleranz " + (M.wandAuto ? "automatisch" : M.wandTol) : ""}${M.snap ? " · Fang an" : ""} · <a href="#" id="e-helplink">Tasten (?)</a></span>`;
   const hl = $("#e-helplink"); if (hl) hl.onclick = (e) => { e.preventDefault(); toggleHelp(); };
 }
