@@ -438,7 +438,8 @@
           <button id="e-undo" data-tip="Rückgängig · Cmd/Strg+Z" aria-label="Rückgängig"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/></svg></button>
           <button id="e-clear" data-tip="Alle Flächen der gewählten Klasse löschen" aria-label="Leeren"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button>
           <button id="e-helpbtn" data-tip="Tasten und Anleitung · ?" aria-label="Hilfe"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 014.5 1.5c0 2-2 2-2 4M12 17h.01"/></svg></button>
-          <button id="e-model" data-tip="Modellvorschlag · M" aria-label="Modell"><svg viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg></button>
+          <button id="e-ghost" class="on" data-tip="Modellvorschlag einblenden (gestrichelt) · O" aria-label="Vorschlag einblenden"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12z"/><circle cx="12" cy="12" r="2.5"/></svg></button>
+          <button id="e-model" data-tip="Modellvorschlag übernehmen · M" aria-label="Modell"><svg viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg></button>
           <button id="e-ai" data-tip="KI-Vorschlag · K" aria-label="KI"><svg viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01"/></svg></button>
         </div>
         <div class="tb-h">Klasse <span id="e-clsname"></span></div>
@@ -456,6 +457,7 @@
       <b>Zeiger</b> Fläche anklicken und ziehen · Ecke ziehen · Doppelklick auf Kante = neue Ecke · Entf löscht Ecke bzw. Fläche<br>
       <b>Klassen</b> N nächste Klasse · Shift+N vorige · P PV-Module · Klick mit dem Zeiger auf eine Fläche einer anderen Klasse wechselt dorthin · <a href="/api/docs/maskieren" target="_blank">Anleitung: sauber maskieren</a><br>
       <b>Ansicht</b> Mausrad / Trackpad zoomt · + / − · F oder 0 ganzes Bild · B Liste ein/aus · S Fang ein/aus<br>
+      <b>Vorschlag</b> O Modellvorschlag gestrichelt ein/aus · M übernimmt ihn als PV-Module<br>
       <b>Ablauf</b> Enter speichert und öffnet das nächste Bild · ← → blättern · X überspringen · W falscher Treffer (PV-Flächen → „Aufbau ohne Klasse“) · „PV vorhanden“ ergibt sich aus den Flächen der Klasse PV-Module · M Modell · K KI · R Registerdaten · Cmd/Strg+Z rückgängig · Esc abbrechen
     </div>
   </div>

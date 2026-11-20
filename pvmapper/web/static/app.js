@@ -1071,15 +1071,15 @@ init().catch((e) => { document.body.insertAdjacentHTML("afterbegin", `<div class
 // ================================================================== datasets & mask editor
 // roof element classes (docs/maskieren.md): PV and the confusers; M.cls holds the polygons per class, M.polys is the class being edited
 const CLASSES = [
-  { k: "pv", t: "PV-Module", col: "#ff3b5c" },
-  { k: "solarthermie", t: "Solarthermie", col: "#ffb020" },
-  { k: "gaube", t: "Gaube", col: "#38d6ff" },
-  { k: "fenster", t: "Dachfenster / Lichtkuppel", col: "#7cf29a" },
-  { k: "technik", t: "Technik", col: "#c58bff" },
-  { k: "dunkel", t: "dunkle Dachfläche", col: "#9aa7b8" },
-  { k: "schatten", t: "Schatten", col: "#5a6cff" },
-  { k: "gruen", t: "Begrünung", col: "#3fbf3f" },
-  { k: "alt", t: "Aufbau (alte Markierung)", col: "#38d6ff", legacy: true },
+  { k: "pv", t: "PV-Module", col: "#ff3b5c", ic: '<rect x="3" y="6" width="18" height="12" rx="1"/><path d="M3 12h18M9 6v12M15 6v12"/>' },
+  { k: "solarthermie", t: "Solarthermie", col: "#ffb020", ic: '<rect x="4" y="5" width="16" height="11" rx="1"/><path d="M8 5v11M12 5v11M16 5v11M4 19h16M7 16v3M17 16v3"/>' },
+  { k: "gaube", t: "Gaube", col: "#38d6ff", ic: '<path d="M2 20l10-9 10 9"/><path d="M8 15l4-4 4 4v5H8z"/><path d="M11 17h2"/>' },
+  { k: "fenster", t: "Dachfenster / Lichtkuppel", col: "#7cf29a", ic: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M12 4v16M4 12h16"/>' },
+  { k: "technik", t: "Technik (Lüfter, Klima, Antenne)", col: "#c58bff", ic: '<rect x="3" y="7" width="18" height="12" rx="2"/><circle cx="12" cy="13" r="3.5"/><path d="M12 9.5v7M8.5 13h7M7 4l2 3M17 4l-2 3"/>' },
+  { k: "dunkel", t: "dunkle Dachfläche", col: "#9aa7b8", ic: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 10l6-6M4 16L16 4M8 20L20 8M14 20l6-6"/>' },
+  { k: "schatten", t: "Schatten", col: "#5a6cff", ic: '<circle cx="9" cy="9" r="4"/><path d="M9 2v1.5M9 14.5V16M2 9h1.5M14.5 9H16"/><path d="M13 21h8l-3-7h-8z" fill="currentColor" stroke="none" opacity=".7"/>' },
+  { k: "gruen", t: "Begrünung", col: "#3fbf3f", ic: '<path d="M5 20c0-9 6-15 15-15 0 9-6 15-15 15z"/><path d="M5 20L14 11"/>' },
+  { k: "alt", t: "Aufbau ohne Klasse (alte Markierung)", col: "#38d6ff", legacy: true, ic: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9.5 9.5a2.5 2.5 0 014.5 1.5c0 1.5-2 2-2 3.5M12 17h.01"/>' },
 ];
 const CLS = Object.fromEntries(CLASSES.map((c) => [c.k, c]));
 const M = { ds: null, items: [], list: [], idx: -1, item: null, img: null, polys: [], cls: { pv: [] }, layer: "pv", hist: [], cur: [], tool: "poly",
@@ -1173,6 +1173,7 @@ async function openItem(i) {
   M.img = new Image();
   M.img.onload = () => { showEditor(true); fitView(); draw(); };
   M.img.src = base + "/image";
+  M.ghost = null; if (M.showGhost && !(d.polygons || []).length) loadGhost();
   api(base + "/wandtol").then((r) => { if (M.item && M.item.name === m.name) { M.wandTol = r.tol; wandUi(); } }).catch(() => {});
   api(base + "/corners").then((c) => { if (M.item && M.item.name === m.name) M.corners = c.points; }).catch(() => {});
   info2(); renderList();
@@ -1301,6 +1302,7 @@ function draw() {
     else { cx.globalAlpha = act ? .28 : .16; cx.fillStyle = CLS[c].col; cx.fill(); cx.globalAlpha = 1; cx.setLineDash([5, 3]); }
     cx.strokeStyle = sel ? "#fff" : (c === "pv" && ai ? "#a78bfa" : CLS[c].col); cx.lineWidth = sel ? lw * 1.8 : act ? lw * 1.2 : lw * 0.8; cx.stroke(); cx.setLineDash([]); };
   others().forEach(({ c, q }) => drawCls(q, c, false, false));
+  (M.ghost || []).forEach((q) => { path(q); cx.setLineDash([6, 4]); cx.strokeStyle = "#e9e3ff"; cx.lineWidth = lw * 1.1; cx.stroke(); cx.setLineDash([]); });
   M.polys.forEach((p, i) => drawCls(p, M.layer, true, i === M.sel));
   if (M.sel >= 0 && M.polys[M.sel] && (eff() === "select")) M.polys[M.sel].forEach((v, j) => {
     const [x, y] = toScreen(v); cx.fillStyle = j === M.vsel ? "#ffdc00" : "#fff"; cx.strokeStyle = "#000"; cx.lineWidth = 1;
@@ -1324,7 +1326,7 @@ function setLayerButtons() {
   const box = $("#e-classes"); if (!box) return;
   const used = new Set(Object.entries(M.cls).filter(([, v]) => (v || []).length).map(([k]) => k));
   box.innerHTML = CLASSES.filter((c) => !c.legacy || used.has(c.k) || M.layer === c.k).map((c) => { const n = (M.cls[c.k] || []).length;
-    return `<button data-cls="${c.k}" class="${M.layer === c.k ? "on" : ""}" data-tip="${esc(c.t)}${c.k === "pv" ? " · P" : " · N/Shift+N"}${n ? " – " + n + " Fläche(n)" : ""}"><i style="background:${c.col}"></i>${n ? "&nbsp;" + n : ""}</button>`; }).join("");
+    return `<button data-cls="${c.k}" class="${M.layer === c.k ? "on" : ""}" style="--c:${c.col}" data-tip="${esc(c.t)}${c.k === "pv" ? " · P" : " · N/Shift+N"}${n ? " – " + n + " Fläche(n)" : ""}"><svg viewBox="0 0 24 24">${c.ic}</svg>${n ? `<b>${n}</b>` : ""}</button>`; }).join("");
   const nm = $("#e-clsname"); if (nm) { nm.textContent = CLS[M.layer].t; nm.style.color = CLS[M.layer].col; }
   box.querySelectorAll("[data-cls]").forEach((b) => b.onclick = () => setLayer(b.dataset.cls));
 }
@@ -1574,12 +1576,28 @@ function computeStats() {
     if (pos && !m.has_mask && m.status !== "skip") s.positive_without_mask++; }
   return s;
 }
+// the model's suggestion as a thin dashed outline (not part of the masks); M or ✦ takes it over into the class PV modules
+M.showGhost = store.get("ghost", true); M.ghost = null;
+async function loadGhost() {
+  const m = M.item; M.ghost = null; if (!m || !M.showGhost) { draw(); return; }
+  try { const d = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/suggest`, { json: { cls_threshold: 0.3 } });
+    if (M.item && M.item.name === m.name) { M.ghost = d.polygons || []; M.ghostProb = d.max_prob; draw();
+      info2(M.ghost.length ? `Modellvorschlag eingeblendet (gestrichelt, Score ${fmt(d.max_prob, 2)}) – M übernimmt ihn` : "Modell sieht hier keine PV"); } }
+  catch (e) { /* the suggestion is optional */ }
+}
+function setGhost(on) { M.showGhost = on; store.set("ghost", on); $("#e-ghost").classList.toggle("on", on); if (on) loadGhost(); else { M.ghost = null; draw(); } }
+$("#e-ghost").onclick = () => setGhost(!M.showGhost);
+$("#e-ghost").classList.toggle("on", M.showGhost);
 async function suggest(provider) {
   const m = M.item; if (!m) return;
+  if (!provider && M.ghost && M.ghost.length) {                 // take over the suggestion that is shown already
+    setLayer("pv"); push(); M.polys.push(...JSON.parse(JSON.stringify(M.ghost))); M.ghost = null; setLayerButtons(); draw();
+    info2("Modellvorschlag übernommen – prüfen, nachbessern, speichern"); return;
+  }
   info2(provider ? "frage KI …" : "Modell rechnet …");
   try {
     const d = await api(`/api/datasets/${M.ds}/items/${encodeURIComponent(m.name)}/suggest`, { json: provider ? { provider, mode: $("#m-mode").value } : { cls_threshold: 0.3 } });
-    setLayer("pv"); push(); M.polys = d.polygons;
+    setLayer("pv"); push(); M.polys = d.polygons; M.ghost = null; setLayerButtons();
     draw();
     info2(provider ? `KI: ${d.pv_visible ? "PV sichtbar" : "keine PV"} (${fmt(d.confidence, 2)}) ${esc(d.note || "")} – prüfen und speichern` : `Modellvorschlag (Score ${fmt(d.max_prob, 2)}) – prüfen und speichern`);
   } catch (e) { info2(`<span style="color:#ff8a8a">${esc(e.message)}</span>`); }
@@ -1624,6 +1642,7 @@ document.addEventListener("keydown", (e) => {
   else if (k === "+" || k === "=") zoomAt(cv.width / 2, cv.height / 2, 1.5);
   else if (k === "-") zoomAt(cv.width / 2, cv.height / 2, 1 / 1.5);
   else if (kl === "m") suggest(null);
+  else if (kl === "o") setGhost(!M.showGhost);
   else if (kl === "k") suggest($("#m-provider").value);
   else if (kl === "r" && M.item) regLookup([M.item.name]);
   else if (kl === "x") saveItem("skip");
